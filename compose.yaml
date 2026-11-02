@@ -1,7 +1,7 @@
 name: ${COMPOSE_PROJECT_NAME:-veltra}
 
 x-backend: &backend
-  image: veltra-backend:stage1e-candidate-db767dd
+  image: veltra-backend:stage1f-polish-localization
   build:
     context: ./backend
   # Bound DNS failure latency when a dependency container is stopped.
@@ -74,6 +74,7 @@ services:
     stop_grace_period: 70s
 
   frontend:
+    image: veltra-frontend:stage1f-polish-localization
     build:
       context: ./frontend
     environment:

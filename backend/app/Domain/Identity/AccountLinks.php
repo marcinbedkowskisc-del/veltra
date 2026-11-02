@@ -80,7 +80,7 @@ class AccountLinks
                 throw new AuthorizationException;
             }
             if (! app()->environment('testing') && config('mail.default') !== 'smtp') {
-                throw new BusinessRuleViolation('Identity links require an SMTP transport; logging tokens is forbidden.');
+                throw new BusinessRuleViolation(__('messages.identity_links_smtp_required'));
             }
             $ipHash = hash('sha256', $ip);
             $sent = DB::table('account_email_deliveries')->where('user_id', $target->id)->where('sent_at', '>', now()->subHour());
@@ -100,7 +100,7 @@ class AccountLinks
             return ['email' => $target->email, 'token' => $token];
         });
         if ($delivery === null) {
-            throw new BusinessRuleViolation('Identity email is temporarily rate limited.');
+            throw new BusinessRuleViolation(__('messages.identity_rate_limited'));
         }
         // Synchronous delivery: no plaintext token is serialized into a queue or application log.
         try {
@@ -108,7 +108,7 @@ class AccountLinks
         } catch (TransportExceptionInterface) {
             Log::error('Identity email SMTP delivery failed; retry requires a new link.');
             $this->mutations->record($actor, $target, $context, 'email.delivery', 'rejected');
-            throw new BusinessRuleViolation('Identity email could not be delivered. Check SMTP configuration and request a new link after the cooldown.');
+            throw new BusinessRuleViolation(__('messages.identity_smtp_delivery_failed'));
         }
         unset($delivery);
     }
@@ -118,7 +118,7 @@ class AccountLinks
         $repository = $this->repository($kind);
         Validator::make(['password' => $password], ['password' => [
             'required', 'string', Password::min(12)->mixedCase()->numbers()->symbols(),
-            fn ($attribute, $value, $fail) => strlen($value) > 72 ? $fail('The password must not exceed 72 bytes.') : null,
+            fn ($attribute, $value, $fail) => strlen($value) > 72 ? $fail(__('messages.password_must_not_exceed_72_bytes')) : null,
         ]])->validate();
         $email = User::normalizeEmail($email);
         $consumed = DB::transaction(function () use ($kind, $email, $token, $password, $repository): bool {
@@ -144,7 +144,7 @@ class AccountLinks
             return true;
         });
         if (! $consumed) {
-            throw ValidationException::withMessages(['link' => 'This link cannot be used. Request a new link from your authorized supervisor.']);
+            throw ValidationException::withMessages(['link' => __('messages.account_link_invalid')]);
         }
     }
 }

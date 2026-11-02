@@ -19,7 +19,7 @@ class ValidateIdentityContext
             Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
-            abort(401, 'Unauthenticated.');
+            abort(401, __('messages.unauthenticated'));
         }
         Auth::guard('web')->setUser($user);
         $request->setUserResolver(fn () => $user);
@@ -28,7 +28,7 @@ class ValidateIdentityContext
             $membership = app(MembershipService::class)->available($user)->with('location')->find($membershipId);
             if (! $membership) {
                 $request->session()->forget('operating_membership_id');
-                abort(403, 'The operating location is no longer available. Select an assigned active location.');
+                abort(403, __('messages.operating_location_unavailable'));
             }
             $request->attributes->set('operating_location', $membership->location);
         }

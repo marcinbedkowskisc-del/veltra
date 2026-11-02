@@ -70,7 +70,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
     public function test_production_api_cannot_enable_not_ready_modules_and_records_rejection(): void
     {
         $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertConflict()
-            ->assertJsonPath('message', 'Temperatures is NOT_READY and cannot be enabled.');
+            ->assertJsonPath('message', __('messages.module_not_ready', ['module' => 'Rejestr temperatur']));
 
         $this->assertSame(0, DB::table('location_module_states')->count());
         $this->assertSame(1, DB::table('security_events')->where('event_kind', 'module_attempt')
@@ -85,9 +85,11 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         for ($attempt = 0; $attempt < 5; $attempt++) {
             $this->postJson('/api/v1/security/modules/configuration', $body)->assertForbidden();
         }
-        $this->postJson('/api/v1/security/modules/configuration', $body)->assertTooManyRequests();
+        $this->postJson('/api/v1/security/modules/configuration', $body)->assertTooManyRequests()
+            ->assertJsonPath('message', __('messages.fresh_password_confirmation_rate_limited'));
 
-        $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertTooManyRequests();
+        $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertTooManyRequests()
+            ->assertJsonPath('message', __('messages.fresh_password_confirmation_rate_limited'));
         $this->assertSame(0, DB::table('location_module_states')->count());
         $this->assertSame(7, DB::table('security_events')->where('event_kind', 'module_attempt')
             ->where('outcome', 'rejected')->where('module_key', 'TEMPERATURES')->count());
@@ -152,7 +154,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
         $response = $this->configure('RESTAURANT_ONLY', [$this->restaurant->id, $this->kitchen->id], true)
             ->assertConflict();
-        $this->assertStringContainsString('not compatible', $response->json('message'));
+        $this->assertStringContainsString('nie jest zgodny', $response->json('message'));
         $this->assertSame(0, DB::table('location_module_states')->count());
         $this->assertSame(2, DB::table('security_events')->where('event_kind', 'module_attempt')
             ->where('outcome', 'rejected')->where('module_key', 'RESTAURANT_ONLY')->count());
@@ -186,7 +188,10 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
 
         $this->configure('READY_CHILD', [$this->restaurant->id], true)->assertConflict()
-            ->assertJsonPath('message', 'Ready Child requires Ready Parent to be READY and ENABLED in this location.');
+            ->assertJsonPath('message', __('messages.module_dependency_missing', [
+                'module' => 'Ready Child',
+                'dependency' => 'Ready Parent',
+            ]));
         $this->configure(['READY_PARENT', 'READY_CHILD'], [$this->restaurant->id], true)->assertConflict();
         $this->assertSame(0, DB::table('location_module_states')->count());
 
@@ -194,7 +199,10 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $this->configure('READY_CHILD', [$this->restaurant->id], true)->assertOk();
         $this->configure('READY_GRANDCHILD', [$this->restaurant->id], true)->assertOk();
         $this->configure('READY_PARENT', [$this->restaurant->id], false)->assertConflict()
-            ->assertJsonPath('message', 'READY_PARENT cannot be disabled while Ready Child is enabled in this location.');
+            ->assertJsonPath('message', __('messages.cannot_disable_module', [
+                'module' => 'READY_PARENT',
+                'dependent' => 'Ready Child',
+            ]));
         $this->configure('READY_CHILD', [$this->restaurant->id], false)->assertConflict();
 
         $this->configure('READY_GRANDCHILD', [$this->restaurant->id], false)->assertOk();

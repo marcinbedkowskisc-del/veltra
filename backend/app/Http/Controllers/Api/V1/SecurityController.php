@@ -179,6 +179,6 @@ class SecurityController extends Controller
 
     private function accepted(): JsonResponse
     {
-        return response()->json(['data' => null, 'message' => 'The request was received. Eligible users receive instructions by email; existing-user membership requests require approval.'], 202);
+        return response()->json(['data' => null, 'message' => __('messages.request_received')], 202);
     }
 }

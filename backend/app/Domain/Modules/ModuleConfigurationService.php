@@ -93,7 +93,7 @@ final class ModuleConfigurationService
                 $organization = Organization::whereKey($actor->organization_id)->lockForUpdate()->first();
                 if (! $organization) {
                     $failureCode = 'organization_unavailable';
-                    throw new BusinessRuleViolation('The operating organization is unavailable.');
+                    throw new BusinessRuleViolation(__('messages.module_configuration_organization_unavailable'));
                 }
 
                 $freshActor = User::with('organization')->find($actor->id);
@@ -153,18 +153,18 @@ final class ModuleConfigurationService
                 if ($unknownModules !== []) {
                     $failureCode = 'unknown_module';
                     throw ValidationException::withMessages(['module_ids' => array_map(
-                        fn (string $key): string => "Unknown module: {$key}.",
+                        fn (string $key): string => __('messages.module_unknown', ['module' => $key]),
                         $unknownModules,
                     )]);
                 }
                 if (! $selectionResolved) {
                     $failureCode = 'target_location_not_found';
-                    throw new BusinessRuleViolation('One or more selected locations are not active or do not belong to this organization.');
+                    throw new BusinessRuleViolation(__('messages.module_targets_invalid'));
                 }
                 foreach ($moduleHasTargets as $key => $hasTargets) {
                     if (! $hasTargets) {
                         $failureCode = 'no_compatible_locations';
-                        throw new BusinessRuleViolation("No active compatible locations were selected for {$definitions[$key]->name}.");
+                        throw new BusinessRuleViolation(__('messages.module_no_compatible_locations', ['module' => $definitions[$key]->name]));
                     }
                 }
 
@@ -175,15 +175,15 @@ final class ModuleConfigurationService
                     $definition = $definitions[$pair['module']];
                     if (! $this->authorization->eligible($freshActor, $freshContext, $location)) {
                         $failureCode = 'target_location_unauthorized';
-                        throw new AuthorizationException('The target location is not authorized.');
+                        throw new AuthorizationException(__('messages.module_target_authorization_required'));
                     }
                     if (! $definition->supports($location->type)) {
                         $failureCode = 'incompatible_location';
-                        throw new BusinessRuleViolation("{$definition->name} is not compatible with {$location->type->value}.");
+                        throw new BusinessRuleViolation(__('messages.module_incompatible_location', ['module' => $definition->name]));
                     }
                     if ($enabled && ! $definition->ready) {
                         $failureCode = 'module_not_ready';
-                        throw new BusinessRuleViolation("{$definition->name} is NOT_READY and cannot be enabled.");
+                        throw new BusinessRuleViolation(__('messages.module_not_ready', ['module' => $definition->name]));
                     }
                 }
 
@@ -196,7 +196,10 @@ final class ModuleConfigurationService
                                 || ! $this->configuredEnabled($pair['location'], $dependencyKey, $stateByKey)) {
                                 $failureCode = 'dependency_missing';
                                 $dependencyName = $dependency?->name ?? $dependencyKey;
-                                throw new BusinessRuleViolation("{$definition->name} requires {$dependencyName} to be READY and ENABLED in this location.");
+                                throw new BusinessRuleViolation(__('messages.module_dependency_missing', [
+                                    'module' => $definition->name,
+                                    'dependency' => $dependencyName,
+                                ]));
                             }
                         }
                     }
@@ -206,7 +209,10 @@ final class ModuleConfigurationService
                             if ($this->dependsTransitivelyOn($dependent, $pair['module'])
                                 && $this->configuredEnabled($pair['location'], $dependent->key, $stateByKey)) {
                                 $failureCode = 'enabled_dependent';
-                                throw new BusinessRuleViolation("{$pair['module']} cannot be disabled while {$dependent->name} is enabled in this location.");
+                                throw new BusinessRuleViolation(__('messages.cannot_disable_module', [
+                                    'module' => $pair['module'],
+                                    'dependent' => $dependent->name,
+                                ]));
                             }
                         }
                     }
@@ -309,12 +315,12 @@ final class ModuleConfigurationService
         $key = 'module-administrator-confirm:'.$actor->id.'|'.request()->ip();
         if (RateLimiter::tooManyAttempts($key, 5)) {
             $failureCode = 'password_confirmation_rate_limited';
-            throw new TooManyRequestsHttpException(60, 'Fresh password confirmation is temporarily rate limited.');
+            throw new TooManyRequestsHttpException(60, __('messages.fresh_password_confirmation_rate_limited'));
         }
         if (! Hash::check($password, $actor->password)) {
             RateLimiter::hit($key, 60);
             $failureCode = 'password_confirmation_failed';
-            throw new AuthorizationException('Fresh password confirmation is required.');
+            throw new AuthorizationException(__('messages.fresh_password_confirmation_required'));
         }
         RateLimiter::clear($key);
     }

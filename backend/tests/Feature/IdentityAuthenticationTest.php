@@ -28,7 +28,8 @@ class IdentityAuthenticationTest extends IdentityTestCase
     public function test_unauthenticated_api_returns_json_without_an_accept_header(): void
     {
         $this->get('/api/v1/auth/me')->assertUnauthorized()
-            ->assertExactJson(['message' => 'Unauthenticated.']);
+            ->assertExactJson(['message' => __('messages.unauthenticated')])
+            ->assertHeader('Content-Language', 'pl');
     }
 
     public function test_email_password_login_regenerates_session_and_logout_invalidates_it(): void
@@ -47,7 +48,9 @@ class IdentityAuthenticationTest extends IdentityTestCase
             ->assertJsonMissingPath('data.is_initial_identity')->assertJsonMissingPath('data.organization');
         $authenticatedId = session()->getId();
         $token = session()->token();
-        $this->postJson('/api/v1/auth/logout')->assertOk()->assertExactJson(['data' => null, 'message' => 'Logged out.']);
+        $this->postJson('/api/v1/auth/logout')->assertOk()
+            ->assertExactJson(['data' => null, 'message' => __('messages.logged_out')])
+            ->assertHeader('Content-Language', 'pl');
         $this->assertNotSame($authenticatedId, session()->getId());
         $this->assertNotSame($token, session()->token());
         $this->assertGuest('web');
@@ -63,11 +66,11 @@ class IdentityAuthenticationTest extends IdentityTestCase
             ['unknown@example.test', self::PASSWORD],
         ] as [$email, $password]) {
             $this->postJson('/api/v1/auth/login', compact('email', 'password'))
-                ->assertUnauthorized()->assertExactJson(['message' => 'Invalid email or password.']);
+                ->assertUnauthorized()->assertExactJson(['message' => __('messages.invalid_credentials')]);
         }
         app(IdentityService::class)->disable($user);
         $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])
-            ->assertUnauthorized()->assertExactJson(['message' => 'Invalid email or password.']);
+            ->assertUnauthorized()->assertExactJson(['message' => __('messages.invalid_credentials')]);
     }
 
     public function test_disabled_account_loses_access_on_the_next_protected_request(): void
@@ -93,7 +96,9 @@ class IdentityAuthenticationTest extends IdentityTestCase
             $this->postJson('/api/v1/auth/login', ['email' => "other{$i}@example.test", 'password' => 'wrong'])
                 ->assertUnauthorized();
         }
-        $this->postJson('/api/v1/auth/login', ['email' => 'another@example.test', 'password' => 'wrong'])->assertStatus(429);
+        $this->postJson('/api/v1/auth/login', ['email' => 'another@example.test', 'password' => 'wrong'])
+            ->assertStatus(429)->assertJsonPath('message', __('messages.too_many_requests'))
+            ->assertHeader('Content-Language', 'pl');
     }
 
     public function test_csrf_is_enforced_with_the_real_middleware_for_login_selection_and_logout(): void
@@ -103,18 +108,23 @@ class IdentityAuthenticationTest extends IdentityTestCase
         $location = $this->kitchen();
         app(MembershipService::class)->assign($user, $location);
         $this->get('/sanctum/csrf-cookie')->assertNoContent()->assertCookie('XSRF-TOKEN');
-        $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])->assertStatus(419);
+        $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])
+            ->assertStatus(419)->assertJsonPath('message', __('messages.session_expired'))
+            ->assertHeader('Content-Language', 'pl');
         $this->withSession(['_token' => 'valid-csrf-token'])
             ->withHeader('X-CSRF-TOKEN', 'wrong')
-            ->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])->assertStatus(419);
+            ->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])
+            ->assertStatus(419)->assertJsonPath('message', __('messages.session_expired'));
         $this->withHeader('X-CSRF-TOKEN', 'valid-csrf-token')
             ->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])->assertOk();
         $csrf = session()->token();
         $this->withHeader('X-CSRF-TOKEN', '')
-            ->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])->assertStatus(419);
+            ->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])
+            ->assertStatus(419)->assertJsonPath('message', __('messages.session_expired'));
         $this->withHeader('X-CSRF-TOKEN', $csrf)
             ->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])->assertOk();
-        $this->withHeader('X-CSRF-TOKEN', '')->postJson('/api/v1/auth/logout')->assertStatus(419);
+        $this->withHeader('X-CSRF-TOKEN', '')->postJson('/api/v1/auth/logout')
+            ->assertStatus(419)->assertJsonPath('message', __('messages.session_expired'));
         $this->withHeader('X-CSRF-TOKEN', $csrf)->postJson('/api/v1/auth/logout')->assertOk();
     }
 

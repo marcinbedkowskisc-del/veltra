@@ -99,7 +99,7 @@ export default function AuthPanel() {
       {!user ? (
         <form onSubmit={login}>
           <p>Nie jesteś zalogowany. Konta nie można zarejestrować publicznie.</p>
-          <label>Email<input type="email" name="email" autoComplete="username" required maxLength={254}
+          <label>Adres e-mail<input type="email" name="email" autoComplete="username" required maxLength={254}
             value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} /></label>
           <label>Hasło<input type="password" name="password" autoComplete="current-password" required
             value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} /></label>

@@ -25,6 +25,6 @@ class AccountLinkController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return response()->json(['data' => null, 'message' => 'Account security operation completed. Sign in with your password.']);
+        return response()->json(['data' => null, 'message' => __('messages.account_link_completed')]);
     }
 }

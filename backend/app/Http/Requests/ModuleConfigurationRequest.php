@@ -24,7 +24,7 @@ class ModuleConfigurationRequest extends InstallationRequest
         return [
             function (Validator $validator): void {
                 if ($this->boolean('all_compatible_locations') === array_key_exists('location_ids', $this->all())) {
-                    $validator->errors()->add('location_ids', 'Select explicit locations or all compatible locations, but not both.');
+                    $validator->errors()->add('location_ids', __('messages.select_locations_or_all'));
                 }
             },
         ];

@@ -19,7 +19,7 @@ class InstallationService
             // Also serializes initialization before an organization row exists.
             DB::select('SELECT pg_advisory_xact_lock(8612001)');
             if (Organization::exists()) {
-                throw new BusinessRuleViolation('The installation organization has already been initialized.');
+                throw new BusinessRuleViolation(__('messages.already_initialized'));
             }
 
             return Organization::create($attributes);
@@ -32,7 +32,7 @@ class InstallationService
             $organization = $this->lockOrganization();
             $attributes['is_active'] ??= $attributes['type'] === LocationType::CentralKitchen->value;
             if ($attributes['type'] === LocationType::Restaurant->value && $attributes['is_active']) {
-                throw new BusinessRuleViolation('Create the restaurant inactive, assign a managing kitchen, then activate it.');
+                throw new BusinessRuleViolation(__('messages.create_restaurant_inactive'));
             }
             $this->ensureCodeAvailable($organization, $attributes['code']);
 
@@ -53,12 +53,12 @@ class InstallationService
             if ($location->type === LocationType::Restaurant && $active) {
                 $assignment = $location->managementAssignments()->current()->with('managingKitchen')->first();
                 if (! $assignment || ! $assignment->managingKitchen->is_active) {
-                    throw new BusinessRuleViolation('An active restaurant requires a current active managing kitchen.');
+                    throw new BusinessRuleViolation(__('messages.restaurant_active_manager_required'));
                 }
             }
             if ($location->type === LocationType::CentralKitchen && ! $active
                 && $location->managedAssignments()->current()->whereHas('restaurant', fn (Builder $q) => $q->where('is_active', true))->exists()) {
-                throw new BusinessRuleViolation('Reassign or deactivate managed active restaurants before disabling this kitchen.');
+                throw new BusinessRuleViolation(__('messages.cannot_disable_kitchen'));
             }
             $location->update($attributes);
 
@@ -74,17 +74,17 @@ class InstallationService
             $kitchen = Location::findOrFail($kitchen->id);
             $this->validatePair($organization, $restaurant, $kitchen);
             if (! $kitchen->is_active) {
-                throw new BusinessRuleViolation('The managing kitchen must be active.');
+                throw new BusinessRuleViolation(__('messages.restaurant_managing_kitchen_required'));
             }
             $current = $restaurant->managementAssignments()->current()->first();
             if ($replace && ! $current) {
-                throw new BusinessRuleViolation('There is no current managing kitchen to change.');
+                throw new BusinessRuleViolation(__('messages.cannot_reassign_missing_kitchen'));
             }
             if (! $replace && $current) {
-                throw new BusinessRuleViolation('The restaurant already has a managing kitchen. Use the change operation.');
+                throw new BusinessRuleViolation(__('messages.restaurant_manager_already_assigned'));
             }
             if ($current && $current->managing_kitchen_id === $kitchen->id) {
-                throw new BusinessRuleViolation('This kitchen already manages the restaurant.');
+                throw new BusinessRuleViolation(__('messages.already_manages_restaurant'));
             }
             // Generate the boundary after acquiring the lock; preserve sub-second precision.
             $boundary = DB::scalar('SELECT clock_timestamp()');
@@ -109,7 +109,7 @@ class InstallationService
             $kitchen = Location::findOrFail($kitchen->id);
             $this->validatePair($organization, $restaurant, $kitchen);
             if ($restaurant->supplyRelationships()->where('supplier_kitchen_id', $kitchen->id)->where('is_active', true)->exists()) {
-                throw new BusinessRuleViolation('This supply relationship is already active.');
+                throw new BusinessRuleViolation(__('messages.already_supply_relationship'));
             }
 
             return LocationSupplyRelationship::create([
@@ -127,7 +127,7 @@ class InstallationService
             $organization = $this->lockOrganization();
             $relationship = LocationSupplyRelationship::findOrFail($relationship->id);
             if ($relationship->organization_id !== $organization->id) {
-                throw new BusinessRuleViolation('The supply relationship belongs to another organization.');
+                throw new BusinessRuleViolation(__('messages.supply_belongs_to_another_organization'));
             }
             $relationship->update(['is_active' => false]);
 
@@ -176,7 +176,7 @@ class InstallationService
     {
         $organization = Organization::lockForUpdate()->first();
         if (! $organization) {
-            throw new BusinessRuleViolation('Initialize the installation organization first.');
+            throw new BusinessRuleViolation(__('messages.installation_organization_required'));
         }
 
         return $organization;
@@ -193,21 +193,25 @@ class InstallationService
     private function ensureOwned(Organization $organization, Location $location): void
     {
         if ($location->organization_id !== $organization->id) {
-            throw new BusinessRuleViolation('Locations must belong to the installation organization.');
+            throw new BusinessRuleViolation(__('messages.location_must_belong_to_organization'));
         }
     }
 
     private function requireType(Location $location, LocationType $type): void
     {
         if ($location->type !== $type) {
-            throw new BusinessRuleViolation("Location must have type {$type->value}.");
+            $typeName = match ($type) {
+                LocationType::CentralKitchen => 'kuchnia centralna',
+                LocationType::Restaurant => 'restauracja',
+            };
+            throw new BusinessRuleViolation(__('messages.location_type_required', ['type' => $typeName]));
         }
     }
 
     private function ensureCodeAvailable(Organization $organization, string $code, ?Location $except = null): void
     {
         if ($organization->locations()->where('code', $code)->when($except, fn (Builder $query) => $query->whereKeyNot($except->id))->exists()) {
-            throw ValidationException::withMessages(['code' => ['This location code is already in use.']]);
+            throw ValidationException::withMessages(['code' => [__('messages.location_code_in_use')]]);
         }
     }
 }

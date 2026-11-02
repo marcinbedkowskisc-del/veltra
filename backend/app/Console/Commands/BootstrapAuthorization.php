@@ -64,7 +64,7 @@ class BootstrapAuthorization extends Command
             DB::transaction(function () use ($user, &$location, $profile): void {
                 $organization = Organization::whereKey($user->organization_id)->lockForUpdate()->firstOrFail();
                 if ($organization->authorization_initialized || ! $user->fresh()->is_active || $user->fresh()->email_verified_at !== null) {
-                    throw new BusinessRuleViolation('Initial authorization provisioning is unavailable.');
+                    throw new BusinessRuleViolation(__('messages.initial_authorization_unavailable'));
                 }
                 if (! $location) {
                     $location = app(InstallationService::class)->createLocation([...$profile, 'type' => 'CENTRAL_KITCHEN']);

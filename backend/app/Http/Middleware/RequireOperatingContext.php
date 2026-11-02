@@ -10,7 +10,7 @@ class RequireOperatingContext
 {
     public function handle(Request $request, Closure $next): Response
     {
-        abort_unless($request->attributes->get('operating_location'), 403, 'Select an active operating location first.');
+        abort_unless($request->attributes->get('operating_location'), 403, __('messages.operating_location_required'));
 
         return $next($request);
     }

@@ -52,14 +52,14 @@ class RoleAdministration
         return $this->mutations->run($actor, $target, $location, 'role.grant.'.$role->value, function () use ($actor, $context, $target, $role, $location, $password): RoleAssignment {
             $this->authorize($actor, $context, $target, $role, $location, $password);
             if (! $target->fresh()->is_active) {
-                throw new BusinessRuleViolation('An active target account is required.');
+                throw new BusinessRuleViolation(__('messages.active_target_account_required'));
             }
             $membership = $location ? app(MembershipService::class)->available($target)->where('location_id', $location->id)->first() : null;
             if ($location && ! $membership) {
-                throw new BusinessRuleViolation('An active target membership is required.');
+                throw new BusinessRuleViolation(__('messages.active_target_membership_required'));
             }
             if (RoleAssignment::where('user_id', $target->id)->where('role', $role)->where('location_id', $location?->id)->whereNull('revoked_at')->exists()) {
-                throw new BusinessRuleViolation('This role assignment already exists.');
+                throw new BusinessRuleViolation(__('messages.already_role_assigned'));
             }
 
             return RoleAssignment::create([
@@ -77,7 +77,7 @@ class RoleAdministration
             $this->authorize($actor, $context, $target, $assignment->role, $location, $password);
             $assignment = $assignment->fresh();
             if ($assignment->revoked_at !== null) {
-                throw new BusinessRuleViolation('This assignment has already been revoked.');
+                throw new BusinessRuleViolation(__('messages.already_revoked'));
             }
             if ($assignment->role === BusinessRole::Administrator) {
                 $this->requireOtherAdministrator($target);
@@ -107,7 +107,7 @@ class RoleAdministration
         $this->mutations->run($actor, $target, null, 'account.email_change', function () use ($actor, $context, $target, $email): void {
             if (! $this->authorization->eligible($actor, $context) || ! $this->authorization->hasRole($actor, BusinessRole::Administrator)
                 || $actor->organization_id !== $target->organization_id || $actor->is($target)) {
-                throw new AuthorizationException('Another administrator must approve an account email change.');
+                throw new AuthorizationException(__('messages.account_email_change_approval'));
             }
             if ($target->fresh()->email !== $email) {
                 $this->requireOtherAdministrator($target);
@@ -122,7 +122,7 @@ class RoleAdministration
             $organization = Organization::whereKey($user->organization_id)->lockForUpdate()->firstOrFail();
             if (! $user->is_initial_identity || ! $user->is_active || $organization->authorization_initialized
                 || RoleAssignment::where('role', BusinessRole::Administrator)->exists()) {
-                throw new BusinessRuleViolation('Initial authorization provisioning is unavailable.');
+                throw new BusinessRuleViolation(__('messages.initial_authorization_unavailable'));
             }
             $role = RoleAssignment::create(['organization_id' => $user->organization_id, 'user_id' => $user->id, 'role' => BusinessRole::Administrator]);
             if ($user->email_verified_at !== null) {
@@ -142,7 +142,7 @@ class RoleAdministration
                 ->whereExists(fn ($q) => $q->selectRaw('1')->from('location_memberships as m')->join('locations as l', 'l.id', '=', 'm.location_id')
                     ->whereColumn('m.user_id', 'role_assignments.user_id')->where('m.is_active', true)->where('l.is_active', true))
                 ->whereExists(fn ($q) => $q->selectRaw('1')->from('users')->whereColumn('users.id', 'role_assignments.user_id')->where('is_active', true)->whereNotNull('email_verified_at'))->exists()) {
-            throw new BusinessRuleViolation('An active verified administrator must remain.');
+            throw new BusinessRuleViolation(__('messages.administrator_must_remain'));
         }
     }
 
@@ -162,7 +162,7 @@ class RoleAdministration
             $query->where('l.id', '<>', $disabledLocation);
         }
         if (! $query->exists()) {
-            throw new BusinessRuleViolation('An active verified administrator with an operating membership must remain.');
+            throw new BusinessRuleViolation(__('messages.administrator_operating_membership_must_remain'));
         }
     }
 
@@ -174,11 +174,11 @@ class RoleAdministration
         if ($role === BusinessRole::Administrator) {
             $key = 'administrator-confirm:'.$actor->id.'|'.request()->ip();
             if (RateLimiter::tooManyAttempts($key, 5)) {
-                throw new AuthorizationException('Fresh password confirmation is temporarily rate limited.');
+                throw new AuthorizationException(__('messages.fresh_password_confirmation_rate_limited'));
             }
             RateLimiter::hit($key, 60);
             if (! is_string($password) || ! Hash::check($password, $actor->fresh()->password)) {
-                throw new AuthorizationException('Fresh password confirmation is required.');
+                throw new AuthorizationException(__('messages.fresh_password_confirmation_required'));
             }
         }
     }

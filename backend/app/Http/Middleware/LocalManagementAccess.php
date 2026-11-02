@@ -14,12 +14,12 @@ class LocalManagementAccess
         if (! app()->environment('local')
             || config('development.management_enabled') !== true
             || ! is_string($token) || strlen($token) < 32) {
-            abort(404, 'Development management API is unavailable.');
+            abort(404, __('messages.development_api_unavailable'));
         }
 
         $provided = $request->header('X-Veltra-Development-Token');
         if (! is_string($provided) || ! hash_equals($token, $provided)) {
-            abort(403, 'A valid local development token is required.');
+            abort(403, __('messages.development_token_required'));
         }
 
         return $next($request);

@@ -22,7 +22,7 @@ abstract class InstallationRequest extends FormRequest
         $unknown = array_diff(array_keys($this->all()), array_keys($this->rules()));
         if ($unknown !== []) {
             throw ValidationException::withMessages([
-                'request' => ['Unknown fields: '.implode(', ', $unknown).'.'],
+                'request' => [__('messages.unknown_request_fields', ['fields' => implode(', ', $unknown)])],
             ]);
         }
     }

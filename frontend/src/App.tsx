@@ -54,7 +54,12 @@ function App() {
         if (response.status !== 200 && response.status !== 503) {
           throw new Error(`Backend zwrócił HTTP ${response.status}.`)
         }
-        const result: unknown = await response.json()
+        let result: unknown
+        try {
+          result = await response.json()
+        } catch {
+          throw new Error('Backend zwrócił nieprawidłową odpowiedź.')
+        }
         if (!isHealth(result) || (response.ok !== (result.status === 'ok'))) {
           throw new Error('Backend zwrócił nieprawidłowy status.')
         }
@@ -63,7 +68,9 @@ function App() {
         if (active) {
           setError(controller.signal.aborted
             ? 'Przekroczono czas oczekiwania na backend.'
-            : cause instanceof Error ? cause.message : 'Nie można połączyć się z backendem.')
+            : cause instanceof Error && cause.message === 'Backend zwrócił nieprawidłową odpowiedź.'
+              ? cause.message
+              : 'Nie można połączyć się z backendem.')
         }
       } finally {
         window.clearTimeout(timeout)

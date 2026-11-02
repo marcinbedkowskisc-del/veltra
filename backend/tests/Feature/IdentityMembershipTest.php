@@ -167,7 +167,7 @@ class IdentityMembershipTest extends IdentityTestCase
             app(MembershipService::class)->assign($user, $foreign);
             $this->fail('Cross-organization membership accepted.');
         } catch (BusinessRuleViolation $exception) {
-            $this->assertStringContainsString('installation organization', $exception->getMessage());
+            $this->assertSame(__('messages.membership_must_belong_to_organization'), $exception->getMessage());
         }
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $foreign->id])->assertForbidden();
     }

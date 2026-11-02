@@ -266,7 +266,7 @@ class InstallationDomainTest extends InstallationTestCase
                 $this->service->$method($restaurant, $foreignKitchen);
                 $this->fail('Cross-organization relationship was accepted.');
             } catch (BusinessRuleViolation $exception) {
-                $this->assertSame('Locations must belong to the installation organization.', $exception->getMessage());
+                $this->assertSame(__('messages.location_must_belong_to_organization'), $exception->getMessage());
             }
         }
     }

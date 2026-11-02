@@ -22,11 +22,11 @@ class PermissionAdministration
             $this->authorize($actor, $context, $target, $location, $permission);
             $membership = app(MembershipService::class)->available($target)->where('location_id', $location->id)->first();
             if (! $membership || ! $target->fresh()->is_active) {
-                throw new BusinessRuleViolation('An active target membership is required.');
+                throw new BusinessRuleViolation(__('messages.active_target_membership_required'));
             }
             $from ??= CarbonImmutable::parse(DB::scalar('SELECT clock_timestamp()'));
             if ($until !== null && $until->lessThanOrEqualTo($from)) {
-                throw new BusinessRuleViolation('The end must be later than the beginning.');
+                throw new BusinessRuleViolation(__('messages.business_end_after_start'));
             }
             $grant = PermissionGrant::create([
                 'organization_id' => $actor->organization_id, 'user_id' => $target->id,
@@ -80,7 +80,7 @@ class PermissionAdministration
         }
         if (! $this->authorization->hasRole($target, BusinessRole::Employee, $location)
             || ! app(ModuleAvailability::class)->enabled($location, $permission->module())) {
-            throw new AuthorizationException('An employee role and an available operational module are required.');
+            throw new AuthorizationException(__('messages.employee_role_module_required'));
         }
     }
 }

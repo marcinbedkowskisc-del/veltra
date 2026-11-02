@@ -23,7 +23,7 @@ class IdentityService
                 'required', 'string', Password::min(12)->mixedCase()->numbers()->symbols(),
                 function (string $attribute, mixed $value, \Closure $fail): void {
                     if (strlen($value) > 72) {
-                        $fail('The password must not exceed 72 bytes.');
+                        $fail(__('messages.password_must_not_exceed_72_bytes'));
                     }
                 },
             ],
@@ -33,10 +33,10 @@ class IdentityService
             DB::select('SELECT pg_advisory_xact_lock(8612002)');
             $organization = Organization::lockForUpdate()->first();
             if (! $organization || ! $organization->is_active) {
-                throw new BusinessRuleViolation('Initialize an active installation organization first.');
+                throw new BusinessRuleViolation(__('messages.identity_provisioning_organization_required'));
             }
             if (User::exists()) {
-                throw new BusinessRuleViolation('Initial identity provisioning is already complete.');
+                throw new BusinessRuleViolation(__('messages.identity_initialization_complete'));
             }
 
             return User::create([

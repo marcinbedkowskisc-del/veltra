@@ -79,7 +79,7 @@ class PersonnelAdministration
             }
             $request = $request->fresh();
             if ($request->decision !== null) {
-                throw new BusinessRuleViolation('This membership request has already been decided.');
+                throw new BusinessRuleViolation(__('messages.membership_already_decided'));
             }
             if ($approve) {
                 if ($location->type === LocationType::Restaurant && ! $this->roles->canAdminister($actor, $context, $target, BusinessRole::Employee, $location)) {
@@ -131,7 +131,7 @@ class PersonnelAdministration
             $this->roles->requireUsableAdministrator($membership->id);
             $at = DB::scalar('SELECT clock_timestamp()');
             RoleAssignment::where('membership_id', $membership->id)->whereNull('revoked_at')->update(['revoked_at' => $at, 'revoked_by' => $actor->id]);
-            app(MembershipService::class)->deactivate($membership, 'Access removed by an authorized supervisor.');
+            app(MembershipService::class)->deactivate($membership, 'Dostęp cofnięty przez uprawnionego przełożonego.');
         });
     }
 

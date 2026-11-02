@@ -24,7 +24,8 @@ class InstallationApiTest extends InstallationTestCase
             ->assertCreated()->assertJsonPath('data.name', 'Example')->assertJsonMissingPath('data.installation');
         $this->getJson('/api/v1/organization')->assertOk()->assertJsonPath('data.code', 'EXAMPLE');
         $this->postJson('/api/v1/organization', ['name' => 'Second', 'code' => 'SECOND'])
-            ->assertStatus(409)->assertJsonPath('message', 'The installation organization has already been initialized.');
+            ->assertStatus(409)->assertJsonPath('message', __('messages.already_initialized'))
+            ->assertHeader('Content-Language', 'pl');
     }
 
     public function test_location_validation_pagination_filters_retrieval_and_update(): void
@@ -115,7 +116,8 @@ class InstallationApiTest extends InstallationTestCase
         config(['development.management_enabled' => $enabled, 'development.management_token' => $token]);
         $this->getJson('/api/v1/organization')->assertNotFound();
         $this->postJson('/api/v1/organization', ['name' => 'Denied', 'code' => 'DENIED'])->assertNotFound();
-        $this->getJson('/api/v1/locations/'.Str::uuid())->assertNotFound()->assertJsonPath('message', 'Development management API is unavailable.');
+        $this->getJson('/api/v1/locations/'.Str::uuid())->assertNotFound()
+            ->assertJsonPath('message', __('messages.development_api_unavailable'));
     }
 
     public static function unavailableEnvironments(): array

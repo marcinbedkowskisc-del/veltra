@@ -59,7 +59,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         app(RoleAdministration::class)->bootstrapInitial($user);
         app(MembershipService::class)->assign($user, $this->kitchen());
         $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => self::PASSWORD])
-            ->assertUnauthorized()->assertExactJson(['message' => 'Invalid email or password.']);
+            ->assertUnauthorized()->assertExactJson(['message' => __('messages.invalid_credentials')]);
         $links = app(AccountLinks::class);
         $links->issue($user, 'activation', 'cli-bootstrap', bootstrap: true);
         $token = $this->sentToken();

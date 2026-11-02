@@ -20,13 +20,13 @@ class MembershipService
             $location = $location->fresh();
             if (! $user || ! $location || $user->organization_id !== $organization->id
                 || $location->organization_id !== $organization->id) {
-                throw new BusinessRuleViolation('Membership must belong to the installation organization.');
+                throw new BusinessRuleViolation(__('messages.membership_must_belong_to_organization'));
             }
             if (! $user->is_active || ! $location->is_active || ! $organization->is_active) {
-                throw new BusinessRuleViolation('An active membership requires an active user, location and organization.');
+                throw new BusinessRuleViolation(__('messages.membership_requires_active_entities'));
             }
             if ($user->memberships()->where('location_id', $location->id)->where('is_active', true)->exists()) {
-                throw new BusinessRuleViolation('This user already has an active membership at this location.');
+                throw new BusinessRuleViolation(__('messages.active_membership_already_exists'));
             }
 
             return LocationMembership::create([

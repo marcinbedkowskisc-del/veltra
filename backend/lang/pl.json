@@ -1,0 +1,8 @@
+{
+    "This action is unauthorized.": "Nie masz uprawnień do wykonania tej czynności.",
+    "Unauthenticated.": "Sesja wygasła lub użytkownik nie jest zalogowany.",
+    "The given data was invalid.": "Podane dane są nieprawidłowe.",
+    "Not Found": "Nie znaleziono żądanego zasobu.",
+    "Server Error": "Wystąpił błąd serwera.",
+    "Too Many Requests": "Wysłano zbyt wiele żądań. Spróbuj ponownie później."
+}

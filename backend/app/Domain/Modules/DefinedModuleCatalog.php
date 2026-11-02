@@ -62,10 +62,10 @@ final class DefinedModuleCatalog implements ModuleCatalog
         $types = [LocationType::CentralKitchen, LocationType::Restaurant];
 
         return [
-            new ModuleDefinition('TEMPERATURES', 'Temperatures', 'TEMPERATURE_REGISTER', $types),
-            new ModuleDefinition('CLEANING', 'Cleaning', 'CLEANING_ENTRY_CREATE', $types),
-            new ModuleDefinition('LOSSES', 'Losses', 'LOSS_REPORT_CREATE', $types),
-            new ModuleDefinition('INVENTORY', 'Inventory', 'INVENTORY_COUNT_ENTRY', $types),
+            new ModuleDefinition('TEMPERATURES', 'Rejestr temperatur', 'TEMPERATURE_REGISTER', $types),
+            new ModuleDefinition('CLEANING', 'Higiena i czyszczenie', 'CLEANING_ENTRY_CREATE', $types),
+            new ModuleDefinition('LOSSES', 'Straty', 'LOSS_REPORT_CREATE', $types),
+            new ModuleDefinition('INVENTORY', 'Inwentaryzacja', 'INVENTORY_COUNT_ENTRY', $types),
         ];
     }
 

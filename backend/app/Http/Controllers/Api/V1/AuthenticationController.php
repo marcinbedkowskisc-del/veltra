@@ -23,7 +23,7 @@ class AuthenticationController extends Controller
             $request->session()->invalidate();
             $request->session()->regenerateToken();
 
-            return response()->json(['message' => 'Invalid email or password.'], 401);
+            return response()->json(['message' => __('messages.invalid_credentials')], 401);
         }
         $request->session()->regenerate();
         $request->session()->forget('operating_membership_id');
@@ -38,7 +38,7 @@ class AuthenticationController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return response()->json(['data' => null, 'message' => 'Logged out.']);
+        return response()->json(['data' => null, 'message' => __('messages.logged_out')]);
     }
 
     public function me(Request $request): JsonResponse
@@ -58,7 +58,7 @@ class AuthenticationController extends Controller
     {
         $membership = $service->available($request->user())
             ->where('location_id', $request->validated('location_id'))->with('location')->first();
-        abort_unless($membership, 403, 'This operating location is not available.');
+        abort_unless($membership, 403, __('messages.location_not_available'));
         // Store the assignment identity, not just the location: regranting never revives a revoked context.
         $request->session()->put('operating_membership_id', $membership->id);
 

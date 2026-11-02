@@ -1,7 +1,7 @@
 name: ${COMPOSE_PROJECT_NAME:-veltra}
 
 x-backend: &backend
-  image: veltra-backend:stage1a
+  image: veltra-backend:stage1e-candidate-db767dd
   build:
     context: ./backend
   # Bound DNS failure latency when a dependency container is stopped.

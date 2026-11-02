@@ -1,0 +1,17 @@
+main {
+  width: min(36rem, calc(100% - 3rem));
+  margin: 12vh auto;
+}
+
+.eyebrow { color: #94a3b8; font-size: 0.8rem; letter-spacing: 0.12em; }
+h1 { font-size: clamp(2.5rem, 8vw, 4rem); margin: 1rem 0 2rem; }
+h2 { font-size: 1.2rem; margin-top: 0; }
+section { background: #182237; border: 1px solid #334155; border-radius: 1rem; padding: 1.5rem; }
+.success { color: #86efac; }
+.error { color: #fda4af; overflow-wrap: anywhere; }
+dl { margin-bottom: 0; }
+dl div { display: flex; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+dd { margin: 0; }
+button { margin-top: 1.5rem; background: #bfdbfe; color: #101827; border: 0; border-radius: 0.5rem; padding: 0.8rem 1.2rem; font: inherit; cursor: pointer; }
+button:disabled { opacity: 0.6; cursor: wait; }
+button:focus-visible { outline: 3px solid #f8fafc; outline-offset: 4px; }

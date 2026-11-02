@@ -1,0 +1,30 @@
+<?php
+
+declare(strict_types=1);
+
+$root = dirname(__DIR__);
+$path = $root.'/.env';
+
+if (file_exists($path)) {
+    fwrite(STDERR, ".env already exists; refusing to overwrite it.\n");
+    exit(1);
+}
+
+$template = file_get_contents($root.'/.env.example');
+if ($template === false) {
+    throw new RuntimeException('Cannot read .env.example.');
+}
+
+$contents = str_replace(
+    ['POSTGRES_PASSWORD=', 'APP_KEY='],
+    ['POSTGRES_PASSWORD='.bin2hex(random_bytes(32)), 'APP_KEY=base64:'.base64_encode(random_bytes(32))],
+    $template,
+);
+
+umask(0077);
+$file = fopen($path, 'x');
+if ($file === false || fwrite($file, $contents) !== strlen($contents)) {
+    throw new RuntimeException('Cannot write .env.');
+}
+fclose($file);
+fwrite(STDOUT, "Created local .env with generated credentials (not tracked by Git).\n");

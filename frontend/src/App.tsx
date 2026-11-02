@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import './App.css'
+import AuthPanel from './AuthPanel'
 
 type Health = {
   app: string
@@ -100,6 +101,7 @@ function App() {
       <button disabled={loading} onClick={() => setAttempt((value) => value + 1)}>
         Sprawdź ponownie
       </button>
+      <AuthPanel />
     </main>
   )
 }

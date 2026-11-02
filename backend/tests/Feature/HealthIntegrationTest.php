@@ -19,7 +19,7 @@ class HealthIntegrationTest extends TestCase
         ]);
     }
 
-    public function test_redis_cache_and_queue_are_available_without_database_tables(): void
+    public function test_redis_cache_and_queue_are_available_without_infrastructure_tables(): void
     {
         $key = 'health-integration:'.bin2hex(random_bytes(8));
 
@@ -29,7 +29,7 @@ class HealthIntegrationTest extends TestCase
             $this->assertSame(0, Queue::connection('redis')->size($key));
             $this->assertContains(Redis::connection('default')->ping(), [true, 'PONG', '+PONG']);
             $tables = DB::connection('pgsql')->select(
-                "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('cache', 'jobs', 'sessions')",
             );
             $this->assertSame([], $tables);
         } finally {

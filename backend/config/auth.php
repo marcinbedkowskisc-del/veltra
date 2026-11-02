@@ -1,8 +1,10 @@
 <?php
 
+use App\Models\User;
+
 return [
-    'defaults' => ['guard' => null, 'passwords' => null],
-    'guards' => [],
-    'providers' => [],
+    'defaults' => ['guard' => 'web', 'passwords' => null],
+    'guards' => ['web' => ['driver' => 'session', 'provider' => 'users']],
+    'providers' => ['users' => ['driver' => 'eloquent', 'model' => User::class]],
     'passwords' => [],
 ];

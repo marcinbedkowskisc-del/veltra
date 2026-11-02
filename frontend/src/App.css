@@ -15,3 +15,13 @@ dd { margin: 0; }
 button { margin-top: 1.5rem; background: #bfdbfe; color: #101827; border: 0; border-radius: 0.5rem; padding: 0.8rem 1.2rem; font: inherit; cursor: pointer; }
 button:disabled { opacity: 0.6; cursor: wait; }
 button:focus-visible { outline: 3px solid #f8fafc; outline-offset: 4px; }
+
+.auth-panel { margin-top: 2rem; }
+.auth-panel label { display: block; margin-top: 1rem; }
+.auth-panel input, .auth-panel select {
+  display: block; width: 100%; margin-top: 0.4rem; padding: 0.7rem;
+  border: 1px solid #64748b; border-radius: 0.4rem; font: inherit;
+  background: #0f172a; color: #f1f5f9;
+}
+.auth-panel button { margin-right: 0.6rem; }
+.notice { color: #cbd5e1; font-size: 0.9rem; margin-top: 1.5rem; }

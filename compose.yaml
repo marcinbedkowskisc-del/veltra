@@ -12,6 +12,8 @@ x-backend: &backend
     APP_NAME: VELTRA 2.0
     APP_ENV: local
     APP_DEBUG: "false"
+    DEV_MANAGEMENT_ENABLED: ${DEV_MANAGEMENT_ENABLED:-false}
+    DEV_MANAGEMENT_TOKEN: ${DEV_MANAGEMENT_TOKEN:-}
     PHP_CLI_SERVER_WORKERS: "4"
     APP_KEY: ${APP_KEY:?Run the environment initialization command from README}
     APP_URL: http://localhost:${BACKEND_PORT:-8000}
@@ -25,6 +27,8 @@ x-backend: &backend
     DB_PASSWORD: ${POSTGRES_PASSWORD:?Run the environment initialization command from README}
     CACHE_STORE: redis
     SESSION_DRIVER: redis
+    SESSION_LIFETIME: "120"
+    SANCTUM_STATEFUL_DOMAINS: localhost:${FRONTEND_PORT:-5173},localhost:${BACKEND_PORT:-8000},127.0.0.1:${FRONTEND_PORT:-5173},127.0.0.1:${BACKEND_PORT:-8000}
     QUEUE_CONNECTION: redis
     QUEUE_FAILED_DRIVER: file
     REDIS_CLIENT: phpredis

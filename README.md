@@ -1,8 +1,15 @@
-# VELTRA 2.0 — Stage 1A
+# VELTRA 2.0 — Stage 1A + Stage 1B + Stage 1C
 
 Uruchamialny fundament modularnego monolitu: Laravel REST API, osobny frontend
 React + TypeScript + Vite, PostgreSQL oraz Redis jako cache i kolejka.
-Bez uzytkownikow, logowania, rol, modulow biznesowych i tabel aplikacyjnych.
+Stage 1B dodaje jedna organizacje instalacji, lokalizacje, historie zarzadzania
+i uprawnienie do zaopatrywania restauracji. Stage 1C dodaje konta, sesje
+logowania i niezalezne przypisania do lokalizacji. Bez rol biznesowych,
+dostaw, magazynu, zamowien ani ekranow administracyjnych.
+
+Architektura **single-tenant**: jeden klient komercyjny = osobna instalacja
+i osobna baza PostgreSQL. Organizacja nie jest tenantem wspoldzielonej platformy.
+Nie ma wyboru organizacji ani dostepu miedzy instalacjami.
 
 ## Wymagania
 
@@ -29,6 +36,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD:/app" -w /app composer:2 php scripts/init-env.php
 
 docker compose up -d --build
+docker compose exec -T backend php artisan migrate --force
 docker compose ps
 ```
 
@@ -45,9 +53,13 @@ tylko na `127.0.0.1`. Worker korzysta z Redis; nie potrzebuje tabeli `jobs`.
 Nieudane zadania sa zapisywane przez sterownik `file` Laravela w kontenerze
 workera (dane diagnostyczne nietrwale; Stage 1A nie dodaje zadan biznesowych).
 
-Nie uruchamiaj migracji: ten etap celowo nie zawiera zadnych tabel ani migracji.
-Usunieto tylko niepotrzebne elementy wygenerowanych szkieletow, m.in. model
-uzytkownika, fabryke i przykladowe migracje Laravel.
+Migracja Stage 1B tworzy cztery tabele domenowe oraz wymaga rozszerzenia
+PostgreSQL `btree_gist`. Uzytkownik z lokalnego obrazu PostgreSQL ma wymagane
+uprawnienia; poza tym srodowiskiem rozszerzenie powinien przygotowac administrator.
+Migracje sa jawne, a nie wykonywane automatycznie przy kazdym starcie kontenera.
+Nie sa dodawane przykladowe dane ani organizacja.
+Migracja Stage 1C dodaje `users` i `location_memberships`, zachowujac
+ograniczenia oraz historie zarzadzania Stage 1B.
 
 ## Konfiguracja
 
@@ -101,7 +113,22 @@ nie jest potrzebny w tym srodowisku.
 
 ## Testowanie
 
-Po uruchomieniu kontenerow:
+Po uruchomieniu kontenerow przygotuj **osobna baze testowa**:
+
+```bash
+# Jednorazowo; przy ponownym wykonaniu sprawdz, czy baza juz istnieje.
+docker compose exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" veltra_testing'
+docker compose exec -T -e DB_DATABASE=veltra_testing backend php artisan migrate --force
+```
+
+PHPUnit wymusza `veltra_testing` zarowno w zmiennych srodowiskowych, jak i
+serwerowych PHP. Testy domenowe sprawdzaja nazwe bazy przed zapisem. Nie uzywaj
+tej nazwy dla bazy z rzeczywistymi danymi. Testy wspolbieznosci wykonuja
+`TRUNCATE organizations CASCADE` **wylacznie w tej bazie**; uruchamiaj suite
+sekwencyjnie, nie przez `--parallel`. Pozostale testy domenowe i API sa wycofywane
+transakcjami. Baza instalacji `veltra` nie jest czyszczona przez testy.
+
+Nastepnie:
 
 ```bash
 # Izolowane przypadki health oraz testy z prawdziwym PostgreSQL i Redis.
@@ -109,6 +136,12 @@ docker compose exec -T backend php artisan test --filter=Health
 
 # Cala podstawowa suita Laravel.
 docker compose exec -T backend composer test
+
+# Testy Stage 1B: domena, API, rzeczywiste ograniczenia PostgreSQL i wspolbieznosc.
+docker compose exec -T backend php artisan test --filter='Installation|ManagementConcurrency'
+
+# Testy Stage 1C: sesje, CSRF, konta, przypisania i interaktywne CLI.
+docker compose exec -T backend php artisan test --filter='Identity|Membership'
 
 # Format PHP oraz walidacja metadanych zaleznosci.
 docker compose exec -T backend vendor/bin/pint --test
@@ -128,8 +161,15 @@ curl --fail-with-body http://localhost:5173/api/health
 `HealthTest` sprawdza poprawna odpowiedz, awarie PostgreSQL, Redis, obu zaleznosci,
 nieprawidlowy PING oraz logowanie bledow i brak szczegolow wyjatkow w JSON.
 `HealthIntegrationTest` wymaga uruchomionych uslug Compose: sprawdza prawdziwe
-polaczenia, cache Redis, dostepnosc kolejki oraz brak tabel w schemacie `public`.
+polaczenia, cache Redis, dostepnosc kolejki oraz brak tabel infrastrukturalnych
+`sessions`, `cache`, `jobs`. Tabela `users` nalezy od Stage 1C do domeny
+tozsamosci. Test nie wymaga pustego schematu `public`.
 Testy nie uruchamiaja migracji i usuwaja swoj losowy klucz cache.
+
+Testy wspolbieznosci uruchamiaja osobny proces PHP z niezaleznym polaczeniem
+PostgreSQL. Sprawdzaja rzeczywisty stan oczekiwania `Lock` w `pg_stat_activity`,
+a nastepnie rezultat po COMMIT i ROLLBACK pierwszej transakcji: zarowno pierwsze
+przypisanie, jak i zmiane zarzadzajacej kuchni z zachowaniem historii.
 
 Opcjonalny rzeczywisty test awarii lokalnego Redis:
 
@@ -175,13 +215,225 @@ Przy konflikcie portow zmien porty w `.env`, a nie zatrzymuj cudzych procesow.
 
 ```text
 backend/                 Laravel REST API i testy PHPUnit
-  app/Http/Controllers/  HealthController
+  app/Domain/Installation/ serwis aplikacyjny, typ lokalizacji i bledy domenowe
+  app/Models/            organizacja, lokalizacje i obie relacje
+  app/Http/              kontrolery API, walidacja i lokalna granica dostepu
   config/                PostgreSQL, Redis, cache i kolejki
-  routes/api.php         GET /api/health
-  tests/Feature/         izolowane i integracyjne testy health
+  database/migrations/   cztery tabele i ograniczenia PostgreSQL
+  routes/api.php         GET /api/health oraz chronione /api/v1
+  tests/Feature/         health, domena, API i wspolbieznosc PostgreSQL
 frontend/                React + TypeScript + Vite
   src/                   strona startowa i prezentacja statusu API
 scripts/init-env.php     bezpieczne tworzenie lokalnej konfiguracji
+scripts/configure-management.php jawne wlaczanie/wylaczanie API developerskiego
 compose.yaml             piec uslug oraz dwa trwale wolumeny
 .env.example             szablon konfiguracji Compose bez sekretow
 ```
+
+## Stage 1B: granica dostepu developerskiego
+
+**To nie jest autoryzacja produkcyjna.** Wszystkie endpointy Stage 1B, takze odczyty,
+sa domyslnie wylaczone. Wymagaja jednoczesnie:
+
+1. Rzeczywistego srodowiska aplikacji `local`.
+2. Jawnego `DEV_MANAGEMENT_ENABLED=true`.
+3. Skonfigurowanego `DEV_MANAGEMENT_TOKEN` dlugosci co najmniej 32 znakow.
+4. Poprawnego naglowka `X-Veltra-Development-Token`.
+
+Poza `local`, przy wylaczeniu lub braku poprawnej konfiguracji odpowiedz to
+HTTP 404. Brak/bledny naglowek w poprawnie wlaczonym srodowisku daje HTTP 403.
+Sprawdzenie dziala przed pobieraniem modeli z bazy. Sesja uzytkownika Stage 1C
+nie zastepuje zadnego z tych warunkow. Nie ma RBAC ani uprawnien
+wynikajacych z relacji dostaw lub zarzadzania.
+Publiczny `/api/health` nie wymaga tego naglowka.
+
+Jawne wlaczenie lokalnie (skrypt zachowuje pozostale sekrety i nie wypisuje tokenu):
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/app" -w /app composer:2 php scripts/configure-management.php --enable
+docker compose up -d
+```
+
+Skrypt generuje brakujacy losowy token w glownym `.env` i ustawia uprawnienia
+`0600`. Ustaw wartosc tego tokenu w naglowku swojego lokalnego klienta REST.
+Nie umieszczaj tokenu w URL, kodzie frontendu, plikach przykladowych ani raportach.
+Frontend nie korzysta z endpointow zarzadzania Stage 1B.
+
+Wylaczenie:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:/app" -w /app composer:2 php scripts/configure-management.php --disable
+docker compose up -d
+```
+
+Nie wystawiaj serwerow developerskich ani tego mechanizmu przez publiczny tunel.
+Compose nadal publikuje porty API/frontendu tylko na `127.0.0.1`; PostgreSQL
+i Redis nie publikuja portow hosta.
+
+## Stage 1B: kontrakt API
+
+Prefiks wszystkich ponizszych endpointow: `/api/v1`.
+
+| Metoda | Sciezka | Operacja |
+|---|---|---|
+| GET | `/organization` | Organizacja instalacji; 404 przed inicjalizacja |
+| POST | `/organization` | Inicjalizacja: `name`, `code`; 201, ponowna proba 409 |
+| GET | `/locations` | Lista z filtrami `type`, `is_active` |
+| POST | `/locations` | Utworzenie: `name`, `code`, `type`, opcjonalne `is_active` |
+| GET | `/locations/{id}` | Lokalizacja |
+| PATCH | `/locations/{id}` | Zmiana `name`, `code`, `is_active` |
+| GET | `/locations/{id}/management-assignments` | Historia zarzadzania restauracja |
+| GET | `/locations/{id}/managing-kitchen` | Biezaca kuchnia zarzadzajaca lub `data: null` |
+| POST | `/locations/{id}/managing-kitchen` | Pierwsze/biezace przypisanie: `managing_kitchen_id` |
+| PUT | `/locations/{id}/managing-kitchen` | Zmiana kuchni: `managing_kitchen_id` |
+| GET | `/locations/{id}/managed-restaurants` | Restauracje obecnie zarzadzane przez kuchnie |
+| GET | `/locations/{id}/supply-relationships` | Wszystkie relacje zaopatrywania, rowniez wylaczone |
+| POST | `/locations/{id}/supply-relationships` | Dodanie: `supplier_kitchen_id` |
+| GET | `/locations/{id}/suppliers` | Kuchnie z aktywna relacja zaopatrywania |
+| DELETE | `/supply-relationships/{id}` | Idempotentne wylaczenie; 200 z `is_active: false`, bez usuwania rekordu |
+
+Odpowiedzi pojedynczych zasobow maja `data`, listy `data`, `links`, `meta`.
+Listy przyjmuja `page` (od 1) i `per_page` (1–100, domyslnie 20).
+Utworzenie zasobu zwraca 201, zmiana/odczyt 200, brak 404, walidacja 422
+z `message`/`errors`, konflikt reguly biznesowej 409 z `message`.
+Nieznane pola sa odrzucane. Kody musza pasowac do `[A-Z0-9_-]+`, maks. 50 znakow;
+nazwy maja maks. 200 znakow. Typy to tylko `CENTRAL_KITCHEN` i `RESTAURANT`.
+
+## Stage 1B: reguly i integralnosc
+
+- Jedna organizacja lacznie, nie tylko jedna aktywna: blokada doradcza przy
+  inicjalizacji oraz unikalna stala `installation=true` w PostgreSQL.
+- UUID jako klucze glowne, referencje z `ON DELETE RESTRICT`, unikalny kod
+  lokalizacji w organizacji. Typ i organizacja lokalizacji sa niezmienne.
+- Kuchnia domyslnie aktywna; restauracja domyslnie nieaktywna. Nowej restauracji
+  nie mozna od razu aktywowac: najpierw przypisanie, potem `PATCH is_active`.
+- Zarzadzanie dopuszcza tylko kuchnia -> restauracja w tej samej organizacji.
+  PostgreSQL sprawdza typy triggerami i organizacje zlozonymi kluczami obcymi.
+- Okresy maja granice `[effective_from, effective_until)`, z koncem `null`
+  oznaczajacym brak konca. GiST EXCLUDE blokuje nakladanie sie dowolnych okresow,
+  nie tylko dwoch rekordow bez konca. Puste/odwrocone/nieskonczone okresy sa zabronione.
+- Serwis wykonuje zmiany **natychmiast**, z czasem pobranym z PostgreSQL i
+  precyzja mikrosekund; API nie planuje przyszlych zmian ani nie cofa historii.
+  Zmiana zamyka stary okres i tworzy nowy w jednej transakcji.
+- Historia zarzadzania nie moze byc usuwana ani przepisywana. Dozwolone jest
+  tylko jednokrotne ustawienie konca otwartego okresu; zamkniete okresy sa niezmienne.
+- Odroczone triggery sprawdzaja na koncu transakcji, czy aktywna restauracja ma
+  aktualne przypisanie do aktywnej kuchni. Nie mozna wylaczyc takiej kuchni bez
+  uprzedniego przepisania lub dezaktywacji restauracji.
+- Modyfikacje sa serializowane blokada wiersza organizacji (rowniez przez
+  triggery dla bezposrednich zapisow SQL). Jest to swiadomie prosta granica
+  wspolbieznosci jednej instalacji, a nie mechanizm obslugi wielu tenantow.
+- Dostawcy i zarzadzanie sa niezalezne. Wiele kuchni moze zaopatrywac wiele
+  restauracji. Czesciowy indeks UNIQUE blokuje zduplikowana aktywna pare.
+  Wylaczenie pozostawia rekord, ponowne wlaczenie tworzy nowy.
+- Relacja zaopatrywania oznacza wylacznie kwalifikowalnosc dostawcy. Nie tworzy
+  zarzadzania, nie daje dostepu do danych i nie realizuje zamowien ani dostaw.
+
+Ograniczenia: nie ma automatyzacji opartej na uplywie czasu ani planowania
+przyszlych zmian. Gdy administrator ominie serwis i zapisze okres z przyszlym
+koncem bezposrednio w SQL, sam uplyw czasu nie uruchomi triggera dezaktywacji.
+Konto wlasciciela PostgreSQL moze oczywiscie zmieniac/omijac schemat; nie jest to
+granica autoryzacji produkcyjnej. Dobor uprawnien produkcyjnych nie nalezy do Stage 1B.
+
+Test przekroczenia granicy organizacji tworzy wycofywany, adversarialny fixture:
+usuwa **tylko w transakcji testowej** ograniczenie singletonu, zachowujac
+ograniczenia relacji, i potwierdza odrzucenie przez serwis oraz zlozone FK.
+Normalna instalacja nigdy nie moze utworzyc drugiej organizacji.
+
+## Stage 1C: pierwsza tozsamosc i przypisania
+
+Po migracji i jawnej inicjalizacji organizacji zgodnie z kontraktem Stage 1B
+uruchom **w interaktywnym terminalu**, bez `-T`:
+
+```bash
+docker compose exec backend php artisan veltra:provision-initial-identity
+```
+
+Komenda pyta o imie, nazwisko i email; haslo oraz potwierdzenie sa ukryte.
+Haslo wymaga co najmniej 12 znakow, malych i wielkich liter, cyfry i symbolu,
+oraz najwyzej 72 bajtow (bcrypt). Nie przekazuj hasla w argumentach, zmiennych
+powloczki ani historii terminala. Komenda odrzuca tryb nieinteraktywny i ponowne
+provisionowanie; blokada transakcyjna i unikalny znacznik chronia przed wyscigiem.
+Nie wypisuje hasla ani nie tworzy domyslnych kont.
+
+Jest to **tozsamosc poczatkowa, nie rola ADMINISTRATOR**: nie dostaje przypisan
+ani uprawnien biznesowych. W bazie instalacji nie utworzono kont testowych.
+Nie ma publicznej rejestracji, resetowania hasla, usuwania kont ani API/panelu
+zarzadzania uzytkownikami. Dalsze zarzadzanie kontami czeka na Stage 1D.
+Przypisania realizuje wewnetrzny `MembershipService`; nie jest publicznym API.
+
+Jedno konto UUID nalezy do organizacji instalacji. Email jest obcinany z bialych
+znakow i normalizowany do malych liter UTF-8 przez wspolna regule modelu,
+provisioningu, loginu i limitera; PostgreSQL wymusza normalizacje i
+unikalnosc `lower(email)` w calej instalacji. Haslo jest hashowane przez Laravel,
+a odpowiedzi uzytkownika zawieraja tylko `id`, `first_name`, `last_name`, `email`.
+Hashe, znaczniki wewnetrzne i sekrety sesji nie sa serializowane.
+
+Jedna osoba moze miec wiele niezaleznych przypisan do restauracji i kuchni.
+Przypisanie nie daje zadnych uprawnien administracyjnych/biznesowych.
+Aktywna para uzytkownik/lokalizacja jest unikalna. Zlozone FK wymuszaja wspolna
+organizacje; usuniecie konta/przypisania i przepisywanie historii sa zabronione.
+Odebranie przypisania zapisuje czas i powod; ponowne nadanie tworzy nowy UUID.
+Nieaktywni uzytkownicy/lokalizacje nie sa dostepnymi kontekstami.
+Relacje zarzadzania i zaopatrywania nigdy nie nadaja dostepu do innych lokalizacji.
+
+## Stage 1C: uwierzytelnianie SPA i API
+
+Laravel 13 + Sanctum 4 uzywa natywnego guarda `web` i sesji w Redis, bez tokenow
+Bearer/PAT. Frontend i API dzialaja pod tym samym originem dzieki proxy Vite
+`/api` i `/sanctum`. `SANCTUM_STATEFUL_DOMAINS` musi zawierac jawne hosty i porty
+frontendowe; Compose ustawia je zgodnie z portami projektu.
+Frontend nie przechowuje danych sesji w localStorage.
+
+Przed logowaniem pobierz `GET /sanctum/csrf-cookie` z ciasteczkami.
+Do kazdego POST/PUT dodaj `X-XSRF-TOKEN` z URL-dekodowanej wartosci ciasteczka
+`XSRF-TOKEN`, `Accept: application/json` i wlasciwy Origin/Referer.
+Klient poza lista first-party nie moze korzystac z uwierzytelniania SPA.
+Brak tokenu CSRF dla niezaufanego zadania zmieniajacego stan daje 419.
+Middleware Laravel moze rowniez zweryfikowac browserowy Fetch Metadata same-origin.
+
+| Metoda | Endpoint | Ochrona / wynik |
+|---|---|---|
+| POST | `/api/v1/auth/login` | First-party sesja, CSRF, email i haslo; `data` profilu |
+| POST | `/api/v1/auth/logout` | First-party sesja, CSRF, zalogowanie; `data: null`, uniewaznienie sesji |
+| GET | `/api/v1/auth/me` | Zalogowanie, aktywne konto/organizacja, ponowna walidacja kontekstu |
+| GET | `/api/v1/auth/locations` | Jak wyzej; tylko wlasne aktywne przypisania do aktywnych lokalizacji |
+| PUT | `/api/v1/auth/operating-location` | Jak wyzej + CSRF; body `location_id` UUID, konieczne aktywne przypisanie |
+| GET | `/api/v1/auth/operating-location` | Jak wyzej; lokalizacja lub `data: null` |
+
+Sesja przechowuje UUID **przypisania**, nie arbitralny identyfikator lokalizacji.
+Middleware odczytuje konto, organizacje, przypisanie i lokalizacje ponownie przy
+kazdym chronionym zadaniu. Odebranie przypisania lub wylaczenie lokalizacji
+usuwa kontekst i odrzuca pierwsze kolejne zadanie (403); ponowne nadanie
+nie przywraca starego kontekstu. UI pozwala odswiezyc pozostale przypisania.
+Wylaczone konto/organizacja traci sesje (401). Logout pozostaje dostepny mimo
+utraty kontekstu. Bez wybranego kontekstu mozna odczytac profil i wybrac lokalizacje;
+nie istnieja jeszcze chronione operacje biznesowe.
+
+Bledny email/haslo i konto wylaczone daja ten sam ogolny komunikat 401.
+Walidacja struktury daje 422, nieuprawniona lokalizacja 403, limit logowania 429.
+Limit to 5 prob/minute na znormalizowany email+IP i 30/minute na IP; klucz emaila
+jest hashowany. Redis przechowuje limity w dzialajacej aplikacji.
+Logowanie regeneruje sesje; logout ja uniewaznia i odnawia token CSRF.
+Ciasteczko sesji jest HttpOnly, domyslnie host-only/SameSite=Lax, z limitem
+bezczynnosci 120 minut. Payload Redis jest szyfrowany przez Laravel.
+
+Lokalny HTTP dopuszcza `Secure=false` tylko w `local/testing`. Inne srodowiska
+wymuszaja `Secure=true`; wdrozenie wymaga HTTPS, poprawnego originu, zaufanego
+reverse proxy oraz konfiguracji kluczy i dostepu do Redis/DB poza tym Compose.
+Chronione poprawne odpowiedzi sa `no-store`; SQL/bindings operacji tozsamosci
+nie trafiaja do standardowego logowania wyjatkow. Nie wlaczaj APP_DEBUG publicznie.
+To nie jest kompletny deployment produkcyjny ani niezalezny audyt bezpieczenstwa.
+
+Testy C korzystaja z PostgreSQL, ale z izolowanego cache/sesji `array`; rzeczywiste
+HTTP i testy przegladarki zostaly dodatkowo wykonane na osobnej, tymczasowej bazie.
+Fixture `backend/tests/Support/browser_identity_fixture.php` jest celowo
+zablokowany poza baza `veltra_browser_stage1c`; nie jest seederem instalacji.
+Nie uruchamiaj go na danych rzeczywistych. Kontenery/baza testow przegladarki
+zostaly usuniete po sprawdzeniu.
+
+**Granica pozostaje zamknieta:** logowanie ani tozsamosc poczatkowa nie otwieraja
+API Stage 1B. Nie przeniesiono go pod autoryzacje sesyjna i nie wdrozono RBAC.
+Stage 1D nie zostal rozpoczety.

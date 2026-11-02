@@ -16,8 +16,12 @@ if ($template === false) {
 }
 
 $contents = str_replace(
-    ['POSTGRES_PASSWORD=', 'APP_KEY='],
-    ['POSTGRES_PASSWORD='.bin2hex(random_bytes(32)), 'APP_KEY=base64:'.base64_encode(random_bytes(32))],
+    ['POSTGRES_PASSWORD=', 'APP_KEY=', 'DEV_MANAGEMENT_TOKEN='],
+    [
+        'POSTGRES_PASSWORD='.bin2hex(random_bytes(32)),
+        'APP_KEY=base64:'.base64_encode(random_bytes(32)),
+        'DEV_MANAGEMENT_TOKEN='.bin2hex(random_bytes(32)),
+    ],
     $template,
 );
 

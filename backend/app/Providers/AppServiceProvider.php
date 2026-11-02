@@ -2,6 +2,10 @@
 
 namespace App\Providers;
 
+use App\Domain\Authorization\ModuleAvailability;
+use App\Domain\Authorization\ReportCatalog;
+use App\Domain\Authorization\UnavailableModules;
+use App\Domain\Authorization\UnavailableReports;
 use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -16,7 +20,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(ModuleAvailability::class, UnavailableModules::class);
+        $this->app->bind(ReportCatalog::class, UnavailableReports::class);
     }
 
     /**
@@ -26,6 +31,8 @@ class AppServiceProvider extends ServiceProvider
     {
         // This installation supports cookie sessions only, never bearer-token authentication.
         Sanctum::getAccessTokenFromRequestUsing(fn () => null);
+        RateLimiter::for('security', fn (Request $request) => Limit::perMinute(60)->by('security:'.$request->user()?->id.'|'.$request->ip()));
+        RateLimiter::for('account-links', fn (Request $request) => Limit::perMinute(10)->by('account-link:'.$request->ip()));
         RateLimiter::for('login', function (Request $request): array {
             $email = $request->input('email');
             $identity = is_string($email) ? User::normalizeEmail($email) : '';

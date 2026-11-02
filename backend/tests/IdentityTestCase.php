@@ -5,6 +5,7 @@ namespace Tests;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
+use Illuminate\Contracts\Auth\Authenticatable;
 
 abstract class IdentityTestCase extends InstallationTestCase
 {
@@ -20,11 +21,22 @@ abstract class IdentityTestCase extends InstallationTestCase
 
     protected function user(string $email = 'person@example.test'): User
     {
-        return User::create([
+        $user = User::create([
             'organization_id' => Organization::firstOrFail()->id,
             'first_name' => 'Test', 'last_name' => 'Person',
             'email' => $email, 'password' => self::PASSWORD, 'is_active' => true,
         ]);
+        $user->forceFill(['email_verified_at' => now()])->save();
+
+        return $user->refresh();
+    }
+
+    public function actingAs(Authenticatable $user, $guard = null)
+    {
+        parent::actingAs($user, $guard);
+        $this->withSession(['identity_version' => $user->auth_version]);
+
+        return $this;
     }
 
     protected function activeRestaurant(string $code = 'R1'): Location

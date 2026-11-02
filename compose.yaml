@@ -17,6 +17,7 @@ x-backend: &backend
     PHP_CLI_SERVER_WORKERS: "4"
     APP_KEY: ${APP_KEY:?Run the environment initialization command from README}
     APP_URL: http://localhost:${BACKEND_PORT:-8000}
+    FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5173}
     LOG_CHANNEL: stderr
     LOG_LEVEL: info
     DB_CONNECTION: pgsql
@@ -36,7 +37,10 @@ x-backend: &backend
     REDIS_PORT: "6379"
     REDIS_DB: "0"
     REDIS_CACHE_DB: "1"
-    MAIL_MAILER: log
+    MAIL_MAILER: smtp
+    MAIL_HOST: mailpit
+    MAIL_PORT: "1025"
+    MAIL_FROM_ADDRESS: noreply@veltra.test
   depends_on:
     postgres:
       condition: service_healthy
@@ -45,6 +49,12 @@ x-backend: &backend
   restart: unless-stopped
 
 services:
+  mailpit:
+    image: axllent/mailpit@sha256:9b3a463be15354c0f0eba91697d80e3e0d8a5623ef0e627cacc836bc17fd5231
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+    restart: unless-stopped
+
   backend:
     <<: *backend
     ports:

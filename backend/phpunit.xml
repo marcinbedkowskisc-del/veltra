@@ -29,7 +29,8 @@
         <env name="DB_DATABASE" value="veltra_testing" force="true"/>
         <server name="DB_DATABASE" value="veltra_testing"/>
         <env name="DB_URL" value=""/>
-        <env name="MAIL_MAILER" value="array"/>
+        <env name="MAIL_MAILER" value="array" force="true"/>
+        <server name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array" force="true"/>
         <server name="SESSION_DRIVER" value="array"/>

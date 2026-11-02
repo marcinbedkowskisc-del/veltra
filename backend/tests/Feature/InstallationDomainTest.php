@@ -246,6 +246,7 @@ class InstallationDomainTest extends InstallationTestCase
         $restaurant = $this->restaurant();
         // A rolled-back adversarial fixture bypasses ONLY the singleton constraint.
         // Relationship constraints and application validation remain enabled.
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
         DB::statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
         $other = Organization::create(['name' => 'Adversarial fixture', 'code' => 'OTHER', 'is_active' => false]);
         $foreignKitchen = Location::create([

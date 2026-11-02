@@ -14,7 +14,8 @@ class ValidateIdentityContext
     public function handle(Request $request, Closure $next): Response
     {
         $user = User::with('organization')->find($request->user()->id);
-        if (! $user || ! $user->is_active || ! $user->organization->is_active) {
+        if (! $user || ! $user->is_active || ! $user->organization->is_active || $user->email_verified_at === null
+            || $request->session()->get('identity_version') !== $user->auth_version) {
             Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();

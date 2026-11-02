@@ -1,11 +1,12 @@
-# VELTRA 2.0 — Stage 1A + Stage 1B + Stage 1C
+# VELTRA 2.0 — Stage 1A–1D
 
 Uruchamialny fundament modularnego monolitu: Laravel REST API, osobny frontend
 React + TypeScript + Vite, PostgreSQL oraz Redis jako cache i kolejka.
 Stage 1B dodaje jedna organizacje instalacji, lokalizacje, historie zarzadzania
 i uprawnienie do zaopatrywania restauracji. Stage 1C dodaje konta, sesje
-logowania i niezalezne przypisania do lokalizacji. Bez rol biznesowych,
-dostaw, magazynu, zamowien ani ekranow administracyjnych.
+logowania i niezalezne przypisania do lokalizacji. Stage 1D dodaje szesc rol,
+autoryzacje zakresowa, delegacje, aktywacje e-mail i reset hasla przez przelozonego.
+Bez dostaw, magazynu, zamowien ani ekranow administracyjnych.
 
 Architektura **single-tenant**: jeden klient komercyjny = osobna instalacja
 i osobna baza PostgreSQL. Organizacja nie jest tenantem wspoldzielonej platformy.
@@ -16,7 +17,7 @@ Nie ma wyboru organizacji ani dostepu miedzy instalacjami.
 - Ubuntu WSL2 z dzialajacym Docker Desktop i integracja WSL.
 - Docker Engine i Docker Compose v2 lub nowszy.
 - Dostep do rejestrow obrazow, Packagist i npm podczas pierwszego budowania.
-- Wolne porty `8000` (API) i `5173` (frontend).
+- Wolne porty `8000` (API), `5173` (frontend) i `8025` (lokalna poczta).
 
 PHP, Composer, Node i npm dzialaja **wylacznie w kontenerach**; nie trzeba
 instalowac ich w Ubuntu. Jest to srodowisko lokalne, nie konfiguracja produkcyjna:
@@ -47,7 +48,8 @@ Gotowosc mozna sprawdzic poleceniem `docker compose up -d --wait --wait-timeout 
 - API health: <http://localhost:8000/api/health>
 - API przez proxy frontendu: <http://localhost:5173/api/health>
 
-Compose uruchamia `backend`, `frontend`, `postgres`, `redis` i `queue`.
+Compose uruchamia `backend`, `frontend`, `postgres`, `redis`, `queue` i `mailpit`.
+Skrzynka developerska: <http://localhost:8025>; SMTP tylko wewnatrz sieci Compose.
 PostgreSQL i Redis nie publikuja portow na hoscie. API i frontend nasluchuja
 tylko na `127.0.0.1`. Worker korzysta z Redis; nie potrzebuje tabeli `jobs`.
 Nieudane zadania sa zapisywane przez sterownik `file` Laravela w kontenerze
@@ -243,8 +245,8 @@ sa domyslnie wylaczone. Wymagaja jednoczesnie:
 Poza `local`, przy wylaczeniu lub braku poprawnej konfiguracji odpowiedz to
 HTTP 404. Brak/bledny naglowek w poprawnie wlaczonym srodowisku daje HTTP 403.
 Sprawdzenie dziala przed pobieraniem modeli z bazy. Sesja uzytkownika Stage 1C
-nie zastepuje zadnego z tych warunkow. Nie ma RBAC ani uprawnien
-wynikajacych z relacji dostaw lub zarzadzania.
+nie zastepuje zadnego z tych warunkow. RBAC Stage 1D dziala pod osobnym prefiksem
+`/api/v1/security`; token developerski go nie otwiera.
 Publiczny `/api/health` nie wymaga tego naglowka.
 
 Jawne wlaczenie lokalnie (skrypt zachowuje pozostale sekrety i nie wypisuje tokenu):
@@ -360,9 +362,9 @@ Nie wypisuje hasla ani nie tworzy domyslnych kont.
 
 Jest to **tozsamosc poczatkowa, nie rola ADMINISTRATOR**: nie dostaje przypisan
 ani uprawnien biznesowych. W bazie instalacji nie utworzono kont testowych.
-Nie ma publicznej rejestracji, resetowania hasla, usuwania kont ani API/panelu
-zarzadzania uzytkownikami. Dalsze zarzadzanie kontami czeka na Stage 1D.
-Przypisania realizuje wewnetrzny `MembershipService`; nie jest publicznym API.
+Nie ma publicznej rejestracji, publicznego inicjowania resetu ani usuwania kont.
+Stage 1D dodaje osobne, autoryzowane API zarzadzania oraz kolejny krok CLI
+opisany ponizej. Pierwsze logowanie wymaga teraz weryfikacji e-mail.
 
 Jedno konto UUID nalezy do organizacji instalacji. Email jest obcinany z bialych
 znakow i normalizowany do malych liter UTF-8 przez wspolna regule modelu,
@@ -377,7 +379,8 @@ Aktywna para uzytkownik/lokalizacja jest unikalna. Zlozone FK wymuszaja wspolna
 organizacje; usuniecie konta/przypisania i przepisywanie historii sa zabronione.
 Odebranie przypisania zapisuje czas i powod; ponowne nadanie tworzy nowy UUID.
 Nieaktywni uzytkownicy/lokalizacje nie sa dostepnymi kontekstami.
-Relacje zarzadzania i zaopatrywania nigdy nie nadaja dostepu do innych lokalizacji.
+Relacja zaopatrywania nigdy nie nadaje dostepu. Zarzadzanie samo nie wystarcza:
+Stage 1D wymaga jawnej roli szefa kuchni i poprawnego kontekstu.
 
 ## Stage 1C: uwierzytelnianie SPA i API
 
@@ -410,9 +413,9 @@ usuwa kontekst i odrzuca pierwsze kolejne zadanie (403); ponowne nadanie
 nie przywraca starego kontekstu. UI pozwala odswiezyc pozostale przypisania.
 Wylaczone konto/organizacja traci sesje (401). Logout pozostaje dostepny mimo
 utraty kontekstu. Bez wybranego kontekstu mozna odczytac profil i wybrac lokalizacje;
-nie istnieja jeszcze chronione operacje biznesowe.
+operacje `/api/v1/security` wymagaja aktywnego kontekstu i odpowiedniej roli.
 
-Bledny email/haslo i konto wylaczone daja ten sam ogolny komunikat 401.
+Bledny email/haslo, konto wylaczone i niezweryfikowany e-mail daja ten sam komunikat 401.
 Walidacja struktury daje 422, nieuprawniona lokalizacja 403, limit logowania 429.
 Limit to 5 prob/minute na znormalizowany email+IP i 30/minute na IP; klucz emaila
 jest hashowany. Redis przechowuje limity w dzialajacej aplikacji.
@@ -435,5 +438,137 @@ Nie uruchamiaj go na danych rzeczywistych. Kontenery/baza testow przegladarki
 zostaly usuniete po sprawdzeniu.
 
 **Granica pozostaje zamknieta:** logowanie ani tozsamosc poczatkowa nie otwieraja
-API Stage 1B. Nie przeniesiono go pod autoryzacje sesyjna i nie wdrozono RBAC.
-Stage 1D nie zostal rozpoczety.
+API Stage 1B. Nie przeniesiono go pod autoryzacje sesyjna. Nowe API RBAC ma
+osobne trasy i wymaga niezaleznej autoryzacji.
+
+## Stage 1D: bootstrap i poczta
+
+Po jawnej inicjalizacji organizacji oraz utworzeniu pierwszej tozsamosci:
+
+```bash
+# Terminal interaktywny, bez -T; potwierdz dotychczasowe haslo.
+docker compose exec backend php artisan veltra:bootstrap-authorization
+```
+
+Komenda tworzy potrzebna poczatkowa kuchnie/przypisanie i oczekujaca role
+ADMINISTRATOR. Nie wypisuje hasla ani linku. Otworz Mailpit lokalnie i uzyj
+wiadomosci aktywacyjnej; odbiorca ustawia wlasne nowe haslo. Dopiero wtedy rola
+jest skuteczna i zamyka sie jednokierunkowa blokada bootstrapu. Przed aktywacja
+komende mozna ponowic po cooldownie, takze po wygaśnięciu linku lub awarii SMTP.
+Nie powstaja domyslne konta ani dane organizacji przez migracje/seedery.
+
+Lokalny SMTP jest celowo przechwytywany przez Mailpit (obraz przypiety digestem).
+Nie sluzy do wysylki na rzeczywiste adresy. Interfejs na loopback nie ma
+uwierzytelniania: nie wystawiaj portu `8025` przez tunel ani do sieci publicznej.
+Port zmienia `MAILPIT_PORT`. Tokeny w skrzynce sa sekretami odbiorcy.
+Poza developmentem skonfiguruj rzeczywisty SMTP, TLS, dane nadawcy, HTTPS
+oraz `FRONTEND_URL`. Compose jest tylko lokalny; nie jest deploymentem produkcyjnym.
+Transport `log` jest zabroniony dla linkow; wysylka jest synchroniczna,
+bez tokenow w kolejce lub aplikacyjnych logach.
+
+Aktywacja: 24 godziny. Reset: 30 minut. Laravel przechowuje tylko hashe tokenow.
+Nowe wydanie uniewaznia poprzedni link danego rodzaju; zmiana hasla/e-maila
+uniewaznia oba rodzaje i poprzednie sesje przez wersje konta. E-mail zmienia
+wylacznie **inny** administrator; wymagane ponowne potwierdzenie adresu.
+Samodzielna zmiana adresu nie jest udostepniona.
+Linki maja sekret w fragmencie URL, nie w query string; frontend usuwa fragment
+z historii po odczycie. Odswiezenie formularza wymaga ponownego otwarcia linku.
+Wspolne limity: 3 wiadomosci/konto/60 minut, minimum 60 sekund odstepu
+i 20/IP/godzine. Rezerwacja jest atomowa z blokada organizacji; awaria SMTP
+zuzywa rezerwacje i wymaga nowego linku po cooldownie.
+
+## Stage 1D: zakresy i macierz rol
+
+Kazde zadanie wymaga aktywnego, zweryfikowanego konta oraz jawnego aktywnego
+przypisania do wybranego kontekstu. Wybrany kontekst nie tworzy przypisan
+do celow operacji. Szef dziala z przypisanej kuchni na jej aktualne restauracje
+(albo w wybranej restauracji przez swoja role w jej kuchni); inna przypisana
+kuchnia wymaga przelaczenia kontekstu. Relacja dostaw nie bierze udzialu w decyzji.
+
+| Rola | Zakres / prawa domyslne |
+|---|---|
+| ADMINISTRATOR | Instalacja; struktura, konta, role, uprawnienia. Nadal obowiazuje granica modulow. |
+| CENTRAL_KITCHEN_CHEF | Jawnie przypisana kuchnia i jej aktualnie zarzadzane restauracje; personel, raporty i prawa finansowe. Bez struktury ani rol ADMINISTRATOR/BOSS/szef kuchni. |
+| BOSS | Odczyt i eksport dozwolonych raportow wszystkich restauracji, takze przyszlych; bez edycji, zatwierdzen i danych zrodlowych kuchni. |
+| RESTAURANT_MANAGER | Wlasna restauracja: nowy personel, role EMPLOYEE/RESTAURANT_CHEF, delegacje z allowlisty. Bez zarzadzania kierownikami i kontami globalnymi. |
+| RESTAURANT_CHEF | Wlasna restauracja: kontrakt widocznosci receptur i kalkulatora ilosci. Bez domyslnych praw finansowych. |
+| EMPLOYEE | Podstawowy odczyt lokalizacji; operacje tylko z jawnej delegacji i przy dostepnym module. |
+
+Nowy pracownik restauracji dostaje role EMPLOYEE; istniejaca tozsamosc nie jest
+duplikowana, a wniosek o dodatkowe przypisanie wymaga administratora lub
+uprawnionego szefa zarzadzajacej kuchni. Nowa osoba kuchni nie dostaje roli
+restauracyjnej; role szefa kuchni nadaje jawnie administrator.
+API bezposredniego przypisania istniejącej tozsamosci jest tylko dla administratora.
+Kierownik nie usuwa przypisan osoby z chroniona rola takze w innej lokalizacji.
+Globalne wylaczenie/wlaczenie konta jest tylko dla administratora.
+
+Zmiana roli ADMINISTRATOR wymaga aktualnego hasla przy kazdym zadaniu
+(5 potwierdzen/minute/konto+IP). Samoodwolanie jest mozliwe, jesli pozostaje
+inny aktywny zweryfikowany administrator z dostepnym kontekstem.
+Blokada organizacji i odroczone triggery PostgreSQL chronia tez przed wyscigami,
+usuwaniem ostatniego przypisania i wylaczaniem ostatniej lokalizacji administratora.
+
+`FOODCOST_VIEW`, `PURCHASE_PRICES_VIEW`, `REPORTS_VIEW` i `REPORTS_EXPORT`
+sa osobnymi prawami na restauracje, nadawanymi przez administratora lub jej
+uprawnionego szefa kuchni. Eksport wymaga odczytu raportu **i** prawa do zrodla
+wybranego po stronie serwera. BOSS nie dostaje cen/foodcostu przez prawo eksportu.
+Jawne udostepnienie raportu kuchni BOSS zapisuje osobny niezmienny referencyjny
+grant. `ReportCatalog` domyslnie nie zwraca zadnego raportu: to kontrakt integracji,
+nie gotowy system raportowania ani generowania eksportow.
+
+Allowlista delegacji: `TEMPERATURE_REGISTER` → `TEMPERATURES`,
+`CLEANING_ENTRY_CREATE` → `CLEANING`, `LOSS_REPORT_CREATE` → `LOSSES`,
+`INVENTORY_COUNT_ENTRY` → `INVENTORY`. `ModuleAvailability` domyslnie zwraca
+**false**: zadnego modulu nie aktywowano, nie ma API do ich wlaczania.
+Okresy sa `[valid_from, valid_until)`, z opcjonalnym koncem; czas ocenia serwer.
+Nakladajace sie/przylegajace okresy laczy PostgreSQL `range_agg`, bez utraty
+oryginalnych grantow. Odwolanie zamyka atomowo wszystkie granty danego prawa,
+takze przyszle. Nowy jawny grant po odwolaniu jest nowa decyzja, nie wznowieniem.
+Dezaktywacja przypisania zamyka jego lokalne role i granty.
+
+## Stage 1D: API i audyt
+
+Prefiks `/api/v1/security`; sesja Sanctum first-party, CSRF przy mutacjach,
+walidowany kontekst i autoryzacja domenowa. Limit 60 zadan/minute/konto+IP.
+Nieznane pola sa odrzucane. 401: tozsamosc, 403: uprawnienia/kontekst,
+404: zasob, 409: konflikt, 419: CSRF, 422: walidacja, 429: limiter.
+
+| Metoda | Sciezka bez prefiksu | Cel |
+|---|---|---|
+| GET | `/access?location_id=&permission=` | Wylacznie decyzja o wlasnym prawie |
+| POST / PATCH | `/locations` / `/locations/{location}` | Struktura; tylko administrator |
+| POST / PUT | `/locations/{location}/managing-kitchen` | Jawne zarzadzanie; tylko administrator |
+| GET | `/locations/{location}/users` | Personel w dozwolonym zakresie; paginacja |
+| GET | `/users/{user}/assignments?location_id=` | Zakresowe role/historia i granty; maks. 100 rekordow kazdego rodzaju |
+| POST | `/locations/{location}/personnel` | Nowy personel lub wniosek dla istniejacej tozsamosci; jednolite 202 |
+| GET | `/locations/{location}/membership-requests` | Wnioski dla uprawnionego zatwierdzajacego |
+| POST | `/membership-requests/{request}/decision` | `approve` boolean |
+| POST | `/users/{user}/locations/{location}/membership` | Jawne przypisanie; tylko administrator; bez roli |
+| DELETE | `/memberships/{membership}` | Historyczne odebranie lokalnego dostepu |
+| POST | `/users/{user}/roles` | `role`, opcjonalne `location_id`, `current_password` dla ADMINISTRATOR |
+| DELETE | `/roles/{assignment}` | Cofniecie; `current_password` dla ADMINISTRATOR |
+| PATCH | `/users/{user}/status` | Globalne `is_active`; tylko administrator |
+| PATCH | `/users/{user}/email` | Inny administrator; nowy adres i nowa aktywacja |
+| POST / DELETE | `/users/{user}/locations/{location}/permissions` | `permission`, przy nadaniu opcjonalne `valid_from`, `valid_until` |
+| POST | `/users/{identifier}/links` | `kind`: `activation`/`reset`; zawsze ogolne 202, nigdy token |
+
+`POST /api/v1/account/activate` i `/api/v1/account/reset-password` sa
+niezalogowanymi punktami wymiany jednorazowego sekretu: first-party sesja, CSRF,
+limit 10/minute/IP, `email`, `token`, `password`, `password_confirmation`.
+Brak publicznego endpointu inicjujacego reset. Przelozony nigdy nie wybiera
+hasla personelu. Zle/nieuprawnione/limitowane inicjacje maja ten sam komunikat
+przyjecia zadania, nie gwarancje dostarczenia poczty; wynik zapisuje audyt.
+
+`security_events` jest trwale append-only: UUID, organizacja, aktor/cel/lokalizacja
+(gdy dotyczy), akcja, wynik, identyfikator przedmiotu i czas serwera.
+Udana zmiana i zdarzenie sa w tej samej transakcji; odrzucony uprzywilejowany
+wniosek jest rejestrowany poza wycofana transakcja. Zdarzenie techniczne
+odrzucenia HTTP moze wystapic obok zdarzenia domenowego. Brak dowolnych
+payloadow, hasel, tokenow, ich hashow lub danych SMTP w audycie.
+To minimalny audyt bezpieczenstwa, nie Stage 1F.
+
+Testy wspolbieznosci uruchamiaja rzeczywiste niezalezne procesy PHP/polaczenia
+PostgreSQL i potwierdzaja oczekiwanie na blokade przed COMMIT/ROLLBACK.
+`tests/Support/browser_authorization_fixture.php` jest dostepny wylacznie dla
+tymczasowej bazy `veltra_browser_stage1d` w local; nigdy nie uruchamiaj go
+na instalacji klienta. Stage 1E nie zostal rozpoczety.

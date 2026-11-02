@@ -17,7 +17,8 @@ class AuthenticationController extends Controller
     {
         $credentials = [...$request->validated(), 'is_active' => true];
         if (! Auth::guard('web')->attempt($credentials)
-            || ! Auth::guard('web')->user()->organization->is_active) {
+            || ! Auth::guard('web')->user()->organization->is_active
+            || Auth::guard('web')->user()->email_verified_at === null) {
             Auth::guard('web')->logout();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
@@ -26,6 +27,7 @@ class AuthenticationController extends Controller
         }
         $request->session()->regenerate();
         $request->session()->forget('operating_membership_id');
+        $request->session()->put('identity_version', Auth::guard('web')->user()->auth_version);
 
         return response()->json(['data' => new UserResource(Auth::guard('web')->user())]);
     }

@@ -19,6 +19,7 @@ class IdentityAuthenticationTest extends IdentityTestCase
             'first_name' => 'Unicode', 'last_name' => 'Fixture', 'email' => ' ŻÓŁĆ@EXAMPLE.TEST ',
         ], self::PASSWORD);
         $this->assertSame('żółć@example.test', $user->email);
+        $user->forceFill(['email_verified_at' => now()])->save();
         $this->postJson('/api/v1/auth/login', ['email' => ' ŻÓŁĆ@EXAMPLE.TEST ', 'password' => self::PASSWORD])
             ->assertOk()->assertJsonPath('data.email', 'żółć@example.test');
         $this->assertDatabaseRejects('23505', fn () => $this->user('ŻÓŁĆ@EXAMPLE.TEST'));

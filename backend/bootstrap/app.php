@@ -26,9 +26,10 @@ return Application::configure(basePath: dirname(__DIR__))
         );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->dontFlash(['token', 'current_password', 'password', 'password_confirmation']);
         $exceptions->dontReport([BusinessRuleViolation::class]);
         $exceptions->report(function (QueryException $exception) {
-            if (preg_match('/\b(users|location_memberships)\b/i', $exception->getSql())) {
+            if (preg_match('/\b(users|location_memberships|activation_tokens|password_reset_tokens|role_assignments|permission_grants|security_events|account_email_deliveries|membership_requests|report_shares)\b/i', $exception->getSql())) {
                 // QueryException messages include SQL bindings, which can contain password hashes.
                 Log::error('Identity database operation failed.', ['sqlstate' => $exception->errorInfo[0] ?? null]);
 
@@ -41,7 +42,7 @@ return Application::configure(basePath: dirname(__DIR__))
             }
         });
         $exceptions->render(function (QueryException $exception, Request $request) {
-            if ($request->is('api/v1/auth/*')) {
+            if ($request->is('api/v1/auth/*', 'api/v1/security/*', 'api/v1/account/*')) {
                 return response()->json(['message' => 'The identity operation could not be completed.'], 500);
             }
             if ($request->is('api/v1/*') && in_array($exception->errorInfo[0] ?? null, ['23503', '23505', '23514', '23P01'], true)) {

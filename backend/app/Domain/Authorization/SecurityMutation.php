@@ -1,0 +1,42 @@
+<?php
+
+namespace App\Domain\Authorization;
+
+use App\Domain\Installation\BusinessRuleViolation;
+use App\Models\Location;
+use App\Models\Organization;
+use App\Models\User;
+use Closure;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class SecurityMutation
+{
+    public function record(?User $actor, User $target, ?Location $location, string $action, string $outcome, ?string $subject = null): void
+    {
+        DB::table('security_events')->insert([
+            'id' => Str::uuid()->toString(), 'organization_id' => $target->organization_id,
+            'actor_id' => $actor?->id, 'target_id' => $target->id, 'location_id' => $location?->id,
+            'action' => $action, 'outcome' => $outcome, 'subject_id' => $subject,
+        ]);
+    }
+
+    public function run(User $actor, User $target, ?Location $location, string $action, Closure $operation): mixed
+    {
+        try {
+            return DB::transaction(function () use ($actor, $target, $location, $action, $operation): mixed {
+                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+                $result = $operation();
+                $this->record($actor, $target, $location, $action, 'accepted', $result instanceof Model ? $result->getKey() : null);
+
+                return $result;
+            });
+        } catch (AuthorizationException|BusinessRuleViolation $exception) {
+            // Record outside the rolled-back mutation so rejected decisions are not lost.
+            $this->record($actor, $target, $location, $action, 'rejected');
+            throw $exception;
+        }
+    }
+}

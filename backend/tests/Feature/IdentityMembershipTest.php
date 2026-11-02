@@ -153,6 +153,7 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_cross_organization_memberships_fail_at_database_and_service_boundaries(): void
     {
         $user = $this->user();
+        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
         DB::statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
         $other = Organization::create(['name' => 'Adversarial fixture', 'code' => 'OTHER']);
         $foreign = Location::create([

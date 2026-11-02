@@ -14,11 +14,11 @@ class Organization extends Model
 
     protected $fillable = ['name', 'code', 'is_active'];
 
-    protected $hidden = ['installation'];
+    protected $hidden = ['installation', 'authorization_initialized'];
 
     protected function casts(): array
     {
-        return ['is_active' => 'boolean'];
+        return ['is_active' => 'boolean', 'authorization_initialized' => 'boolean'];
     }
 
     public function locations(): HasMany

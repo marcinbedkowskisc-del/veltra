@@ -1,6 +1,7 @@
 <?php
 
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\RawMaterials\RawMaterialException;
 use App\Http\Middleware\LocalManagementAccess;
 use App\Http\Middleware\PolishApiResponses;
 use Illuminate\Auth\AuthenticationException;
@@ -9,12 +10,12 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\Response;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
-use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -33,7 +34,7 @@ return Application::configure(basePath: dirname(__DIR__))
         );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        $exceptions->respond(function (Response $response, \Throwable $exception, Request $request): Response {
+        $exceptions->respond(function (Response $response, Throwable $exception, Request $request): Response {
             if ($request->is('api/*')) {
                 $response->headers->set('Content-Language', 'pl');
             }
@@ -54,6 +55,18 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/v1/*')) {
                 return response()->json(['message' => $exception->getMessage()], 409);
             }
+        });
+        $exceptions->render(function (RawMaterialException $exception, Request $request) {
+            if ($request->is('api/v1/raw-materials/*') || $request->is('api/v1/raw-materials')) {
+                return response()->json([
+                    'error' => [
+                        'code' => $exception->errorCode,
+                        'message' => $exception->getMessage(),
+                    ],
+                ], $exception->status);
+            }
+
+            return null;
         });
         $exceptions->render(function (AuthenticationException $exception, Request $request) {
             if ($request->is('api/*')) {
@@ -105,6 +118,14 @@ return Application::configure(basePath: dirname(__DIR__))
             return null;
         });
         $exceptions->render(function (QueryException $exception, Request $request) {
+            if ($request->is('api/v1/raw-materials/*') || $request->is('api/v1/raw-materials')) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'RAW_MATERIAL_INTEGRITY_CONFLICT',
+                        'message' => __('messages.raw_material_integrity_conflict'),
+                    ],
+                ], in_array($exception->errorInfo[0] ?? null, ['23503', '23505', '23514'], true) ? 409 : 500);
+            }
             if ($request->is('api/v1/auth/*', 'api/v1/security/*', 'api/v1/account/*')) {
                 return response()->json(['message' => __('messages.identity_operation_failed')], 500);
             }

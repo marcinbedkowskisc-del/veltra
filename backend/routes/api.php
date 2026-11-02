@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
 use App\Http\Controllers\Api\V1\OrganizationController;
+use App\Http\Controllers\Api\V1\RawMaterialController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
@@ -13,6 +14,7 @@ use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuditSecurityRejection;
 use App\Http\Middleware\LocalManagementAccess;
 use App\Http\Middleware\RequireOperatingContext;
+use App\Http\Middleware\RequireRawMaterialsAvailability;
 use App\Http\Middleware\RequireSpaSession;
 use App\Http\Middleware\ValidateIdentityContext;
 use Illuminate\Support\Facades\Route;
@@ -48,6 +50,34 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/users/{user}/locations/{location}/permissions', [SecurityController::class, 'grantPermission'])->whereUuid('user')->whereUuid('location');
     Route::delete('/users/{user}/locations/{location}/permissions', [SecurityController::class, 'revokePermission'])->whereUuid('user')->whereUuid('location');
     Route::post('/users/{identifier}/links', [SecurityController::class, 'link'])->whereUuid('identifier');
+});
+
+Route::prefix('v1/raw-materials')->middleware([
+    RequireSpaSession::class,
+    'auth:sanctum',
+    ValidateIdentityContext::class,
+    AuditSecurityRejection::class,
+    RequireOperatingContext::class,
+    'throttle:security',
+    RequireRawMaterialsAvailability::class,
+])->group(function (): void {
+    Route::get('/', [RawMaterialController::class, 'index']);
+    Route::post('/', [RawMaterialController::class, 'store']);
+    Route::get('/categories', [RawMaterialController::class, 'categories']);
+    Route::post('/categories', [RawMaterialController::class, 'storeCategory']);
+    Route::patch('/categories/{category}', [RawMaterialController::class, 'renameCategory'])->whereUuid('category');
+    Route::get('/{material}', [RawMaterialController::class, 'show'])->whereUuid('material');
+    Route::patch('/{material}/draft', [RawMaterialController::class, 'updateDraft'])->whereUuid('material');
+    Route::get('/{material}/revisions', [RawMaterialController::class, 'revisions'])->whereUuid('material');
+    Route::post('/{material}/submit', [RawMaterialController::class, 'submit'])->whereUuid('material');
+    Route::post('/{material}/approve', [RawMaterialController::class, 'approve'])->whereUuid('material');
+    Route::post('/{material}/return', [RawMaterialController::class, 'returnForChanges'])->whereUuid('material');
+    Route::post('/{material}/block', [RawMaterialController::class, 'block'])->whereUuid('material');
+    Route::post('/{material}/unblock', [RawMaterialController::class, 'unblock'])->whereUuid('material');
+    Route::post('/{material}/archive', [RawMaterialController::class, 'archive'])->whereUuid('material');
+    Route::post('/{material}/restore', [RawMaterialController::class, 'restore'])->whereUuid('material');
+    Route::post('/permissions/{user}', [RawMaterialController::class, 'grantPermission'])->whereUuid('user');
+    Route::delete('/permissions/{grant}', [RawMaterialController::class, 'revokePermission'])->whereUuid('grant');
 });
 
 Route::prefix('v1/auth')->middleware(RequireSpaSession::class)->group(function (): void {

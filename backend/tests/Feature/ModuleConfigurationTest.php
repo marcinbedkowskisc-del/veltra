@@ -41,7 +41,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
     public function test_catalog_and_new_location_states_are_fail_closed_for_both_types(): void
     {
         $catalog = $this->getJson('/api/v1/security/modules/catalog')->assertOk()->json('data');
-        $this->assertSame(['TEMPERATURES', 'CLEANING', 'LOSSES', 'INVENTORY'], array_column($catalog, 'module'));
+        $this->assertSame(['TEMPERATURES', 'CLEANING', 'LOSSES', 'INVENTORY', 'RAW_MATERIALS'], array_column($catalog, 'module'));
         foreach ($catalog as $module) {
             $this->assertSame('NOT_READY', $module['readiness']);
             $this->assertSame([], $module['dependencies']);

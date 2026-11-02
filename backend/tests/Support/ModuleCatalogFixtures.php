@@ -17,11 +17,27 @@ final class ModuleCatalogFixtures
             new ModuleDefinition('CLEANING', 'Cleaning', 'CLEANING_ENTRY_CREATE', $types, ready: true),
             new ModuleDefinition('LOSSES', 'Losses', 'LOSS_REPORT_CREATE', $types, ready: true),
             new ModuleDefinition('INVENTORY', 'Inventory', 'INVENTORY_COUNT_ENTRY', $types, ready: true),
+            new ModuleDefinition('RAW_MATERIALS', 'Surowce', 'RAW_MATERIALS_VIEW', $types),
             new ModuleDefinition('READY_PARENT', 'Ready Parent', 'TEST_PARENT', $types, ready: true),
             new ModuleDefinition('READY_CHILD', 'Ready Child', 'TEST_CHILD', $types, ['READY_PARENT'], true),
             new ModuleDefinition('READY_GRANDCHILD', 'Ready Grandchild', 'TEST_GRANDCHILD', $types, ['READY_CHILD'], true),
             new ModuleDefinition('RESTAURANT_ONLY', 'Restaurant Only', 'TEST_RESTAURANT', [LocationType::Restaurant], ready: true),
             new ModuleDefinition('NOT_READY_TEST', 'Not Ready Test', 'TEST_NOT_READY', $types),
         ]);
+    }
+
+    public static function readyWithRawMaterials(): DefinedModuleCatalog
+    {
+        $definitions = self::ready()->all();
+        $types = [LocationType::CentralKitchen, LocationType::Restaurant];
+        $definitions['RAW_MATERIALS'] = new ModuleDefinition(
+            'RAW_MATERIALS',
+            'Surowce',
+            'RAW_MATERIALS_VIEW',
+            $types,
+            ready: true,
+        );
+
+        return new DefinedModuleCatalog(array_values($definitions));
     }
 }

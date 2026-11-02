@@ -66,6 +66,7 @@ final class DefinedModuleCatalog implements ModuleCatalog
             new ModuleDefinition('CLEANING', 'Higiena i czyszczenie', 'CLEANING_ENTRY_CREATE', $types),
             new ModuleDefinition('LOSSES', 'Straty', 'LOSS_REPORT_CREATE', $types),
             new ModuleDefinition('INVENTORY', 'Inwentaryzacja', 'INVENTORY_COUNT_ENTRY', $types),
+            new ModuleDefinition('RAW_MATERIALS', 'Surowce', 'RAW_MATERIALS_VIEW', $types),
         ];
     }
 

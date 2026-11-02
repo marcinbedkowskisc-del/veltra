@@ -15,12 +15,13 @@ class ModuleCatalogTest extends TestCase
         $catalog = new DefinedModuleCatalog;
         $modules = $catalog->all();
 
-        $this->assertSame(['TEMPERATURES', 'CLEANING', 'LOSSES', 'INVENTORY'], array_keys($modules));
+        $this->assertSame(['TEMPERATURES', 'CLEANING', 'LOSSES', 'INVENTORY', 'RAW_MATERIALS'], array_keys($modules));
         $this->assertSame([
             'TEMPERATURES' => 'TEMPERATURE_REGISTER',
             'CLEANING' => 'CLEANING_ENTRY_CREATE',
             'LOSSES' => 'LOSS_REPORT_CREATE',
             'INVENTORY' => 'INVENTORY_COUNT_ENTRY',
+            'RAW_MATERIALS' => 'RAW_MATERIALS_VIEW',
         ], array_map(fn (ModuleDefinition $module): string => $module->permission, $modules));
         foreach ($modules as $module) {
             $this->assertFalse($module->ready);

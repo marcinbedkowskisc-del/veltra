@@ -12,8 +12,10 @@ use App\Domain\Modules\ModuleCatalog;
 use App\Models\Location;
 use App\Models\PermissionGrant;
 use App\Models\User;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
 
@@ -53,6 +55,15 @@ class ModuleConfigurationTest extends AuthorizationTestCase
                 $this->assertFalse($state['available']);
             }
         }
+
+        $newKitchen = $this->kitchen('CK2');
+        $newRestaurant = $this->activeRestaurant('R2');
+        foreach ([$newKitchen, $newRestaurant] as $location) {
+            $states = $this->getJson("/api/v1/security/locations/{$location->id}/modules")->assertOk()->json('data');
+            foreach ($states as $state) {
+                $this->assertSame('DISABLED', $state['configured_state']);
+            }
+        }
         $this->assertSame(0, DB::table('location_module_states')->count());
     }
 
@@ -85,11 +96,26 @@ class ModuleConfigurationTest extends AuthorizationTestCase
     public function test_non_administrator_cannot_change_configuration(): void
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
-        $this->selectContext($manager, $this->restaurant);
+        $roleContexts = [
+            [BusinessRole::CentralKitchenChef, $this->kitchen, $this->kitchen],
+            [BusinessRole::Boss, $this->kitchen, null],
+            [BusinessRole::RestaurantManager, $this->restaurant, $this->restaurant],
+            [BusinessRole::RestaurantChef, $this->restaurant, $this->restaurant],
+            [BusinessRole::Employee, $this->restaurant, $this->restaurant],
+        ];
 
-        $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertForbidden();
+        foreach ($roleContexts as [$role, $context, $assignmentLocation]) {
+            $user = $this->user('non-admin-'.strtolower($role->value).'@example.test');
+            if ($assignmentLocation) {
+                $this->role($user, $role, $assignmentLocation);
+            } else {
+                $this->role($user, $role);
+                app(MembershipService::class)->assign($user, $context);
+            }
+            $this->selectContext($user, $context);
+            $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertForbidden();
+        }
+
         $this->assertSame(0, DB::table('location_module_states')->count());
     }
 
@@ -235,6 +261,81 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('location_module_states')->count());
     }
 
+    public function test_security_routes_reject_requests_without_a_first_party_session(): void
+    {
+        Auth::guard('web')->logout();
+        Auth::forgetGuards();
+        $this->flushSession();
+
+        $this->withoutHeader('Origin')
+            ->getJson('/api/v1/security/modules/catalog')
+            ->assertUnauthorized();
+    }
+
+    public function test_security_configuration_rejects_a_bad_csrf_token(): void
+    {
+        config(['sanctum.middleware.validate_csrf_token' => EnforcedValidateCsrfTokenForTesting::class]);
+
+        $this->withHeader('X-CSRF-TOKEN', 'invalid-token')
+            ->postJson('/api/v1/security/modules/configuration', $this->configurationBody('TEMPERATURES', [$this->restaurant->id], true))
+            ->assertStatus(419);
+
+        $this->assertSame(0, DB::table('location_module_states')->count());
+        $this->assertSame(0, DB::table('security_events')->where('event_kind', 'module_transition')->count());
+    }
+
+    public function test_security_routes_reject_inactive_users(): void
+    {
+        $replacement = $this->user('replacement-admin@example.test');
+        $this->role($replacement, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($replacement, $this->kitchen);
+        $this->administrator->forceFill(['is_active' => false])->save();
+
+        $this->getJson('/api/v1/security/modules/catalog')->assertUnauthorized();
+        $this->assertSame(0, DB::table('location_module_states')->count());
+    }
+
+    public function test_configuration_rejects_invalid_inactive_and_unresolved_targets(): void
+    {
+        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
+        $inactiveRestaurant = $this->restaurant('R2');
+
+        $this->configure('TEMPERATURES', ['not-a-uuid'], true)->assertUnprocessable()
+            ->assertJsonValidationErrors('location_ids.0');
+        $this->configure('TEMPERATURES', [Str::uuid()->toString()], true)->assertConflict();
+        $this->configure('TEMPERATURES', [$inactiveRestaurant->id], true)->assertConflict();
+
+        $this->assertSame(0, DB::table('location_module_states')->count());
+        $this->assertSame(0, DB::table('security_events')->where('event_kind', 'module_transition')->count());
+    }
+
+    public function test_history_access_is_denied_outside_the_actors_location_scope(): void
+    {
+        $manager = $this->user('scoped-manager@example.test');
+        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
+        $this->selectContext($manager, $this->restaurant);
+
+        $this->getJson("/api/v1/security/locations/{$this->kitchen->id}/modules/history")->assertForbidden();
+    }
+
+    public function test_spoofed_administrator_fields_do_not_escalate_a_manager(): void
+    {
+        $manager = $this->user('spoofed-manager@example.test');
+        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
+        $this->selectContext($manager, $this->restaurant);
+
+        $this->postJson('/api/v1/security/modules/configuration', [
+            ...$this->configurationBody('TEMPERATURES', [$this->restaurant->id], true),
+            'actor_id' => $this->administrator->id,
+            'organization_id' => $this->administrator->organization_id,
+            'role' => 'ADMINISTRATOR',
+            'is_admin' => true,
+        ])->assertUnprocessable()->assertJsonValidationErrors('request');
+
+        $this->assertSame(0, DB::table('location_module_states')->count());
+        $this->assertSame(0, DB::table('security_events')->where('event_kind', 'module_transition')->count());
+    }
+
     /**
      * @param  string|list<string>  $modules
      * @param  list<string>  $locations
@@ -269,5 +370,13 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         ]);
         $response = $this->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id]);
         $this->assertSame(200, $response->status(), $response->getContent());
+    }
+}
+
+final class EnforcedValidateCsrfTokenForTesting extends ValidateCsrfToken
+{
+    protected function runningUnitTests(): bool
+    {
+        return false;
     }
 }

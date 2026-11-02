@@ -26,7 +26,9 @@ return new class extends Migration
                         AND requested_enabled IS NOT NULL AND detail_code IS NOT NULL)
                     OR (event_kind = 'module_transition' AND operation_id IS NOT NULL AND module_key IS NOT NULL
                         AND previous_enabled IS NOT NULL AND requested_enabled IS NOT NULL
-                        AND effective_enabled = requested_enabled AND previous_enabled <> effective_enabled
+                        AND effective_enabled IS NOT NULL
+                        AND effective_enabled IS NOT DISTINCT FROM requested_enabled
+                        AND previous_enabled IS DISTINCT FROM effective_enabled
                         AND outcome = 'accepted' AND detail_code IS NOT NULL)
                 );
             CREATE INDEX security_events_module_operation_idx
@@ -86,6 +88,10 @@ return new class extends Migration
             SQL);
     }
 
+    /**
+     * This rollback deletes module state and module-specific audit details.
+     * Require a verified backup/export or an approved forward-recovery plan.
+     */
     public function down(): void
     {
         DB::unprepared(<<<'SQL'

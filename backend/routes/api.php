@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AccountLinkController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
+use App\Http\Controllers\Api\V1\ModuleConfigurationController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
@@ -29,6 +30,10 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');
     Route::put('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');
     Route::get('/access', [SecurityController::class, 'access']);
+    Route::get('/modules/catalog', [ModuleConfigurationController::class, 'catalog']);
+    Route::get('/locations/{location}/modules', [ModuleConfigurationController::class, 'states'])->whereUuid('location');
+    Route::post('/modules/configuration', [ModuleConfigurationController::class, 'configure']);
+    Route::get('/locations/{location}/modules/history', [ModuleConfigurationController::class, 'history'])->whereUuid('location');
     Route::post('/users/{user}/roles', [SecurityController::class, 'grantRole'])->whereUuid('user');
     Route::delete('/roles/{assignment}', [SecurityController::class, 'revokeRole'])->whereUuid('assignment');
     Route::patch('/users/{user}/status', [SecurityController::class, 'accountStatus'])->whereUuid('user');

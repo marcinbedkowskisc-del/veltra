@@ -518,8 +518,10 @@ nie gotowy system raportowania ani generowania eksportow.
 
 Allowlista delegacji: `TEMPERATURE_REGISTER` → `TEMPERATURES`,
 `CLEANING_ENTRY_CREATE` → `CLEANING`, `LOSS_REPORT_CREATE` → `LOSSES`,
-`INVENTORY_COUNT_ENTRY` → `INVENTORY`. `ModuleAvailability` domyslnie zwraca
-**false**: zadnego modulu nie aktywowano, nie ma API do ich wlaczania.
+`INVENTORY_COUNT_ENTRY` → `INVENTORY`. Stage 1E udostepnia jawna konfiguracje
+per lokalizacja, ale produkcyjny katalog ma wszystkie cztery moduly `NOT_READY`;
+zadne API nie moze ich wlaczyc, dopoki kod nie oznaczy implementacji jako gotowej.
+Brak rekordu oznacza `DISABLED`; zaleznosci nie sa wlaczane automatycznie.
 Okresy sa `[valid_from, valid_until)`, z opcjonalnym koncem; czas ocenia serwer.
 Nakladajace sie/przylegajace okresy laczy PostgreSQL `range_agg`, bez utraty
 oryginalnych grantow. Odwolanie zamyka atomowo wszystkie granty danego prawa,
@@ -571,4 +573,38 @@ Testy wspolbieznosci uruchamiaja rzeczywiste niezalezne procesy PHP/polaczenia
 PostgreSQL i potwierdzaja oczekiwanie na blokade przed COMMIT/ROLLBACK.
 `tests/Support/browser_authorization_fixture.php` jest dostepny wylacznie dla
 tymczasowej bazy `veltra_browser_stage1d` w local; nigdy nie uruchamiaj go
-na instalacji klienta. Stage 1E nie zostal rozpoczety.
+na instalacji klienta.
+
+## Stage 1E: konfiguracja dostepnosci modulow
+
+Katalog jest definiowany w kodzie i zawiera poczatkowo tylko
+`TEMPERATURES`, `CLEANING`, `LOSSES` i `INVENTORY`, zgodnie z mapowaniem
+uprawnien powyzej. Wszystkie cztery obsluguja `CENTRAL_KITCHEN` i `RESTAURANT`,
+nie maja wzajemnych zaleznosci i pozostaja `NOT_READY`; zadne rzeczywiste
+operacje biznesowe tych modulow nie sa wystawione. Gotowosc ani zaleznosci nie
+sa konfigurowalne przez administratora. Testy pozytywnej aktywacji wstrzykuja
+jawny katalog fixture, ktory nie jest dostepny przez produkcyjne API.
+
+| Metoda | Endpoint | Ochrona / wynik |
+|---|---|---|
+| GET | `/api/v1/security/modules/catalog` | Uwierzytelniony kontekst; katalog, gotowosc, zgodne typy i zaleznosci |
+| GET | `/api/v1/security/locations/{location}/modules` | Prawo odczytu lokalizacji; jawny stan i biezaca dostepnosc modułów |
+| POST | `/api/v1/security/modules/configuration` | Tylko ADMINISTRATOR; `module_ids`, `enabled`, `current_password` i jawne `location_ids` albo `all_compatible_locations: true` |
+| GET | `/api/v1/security/locations/{location}/modules/history` | Tylko ADMINISTRATOR; paginowana, tylko-do-odczytu historia konfiguracji |
+
+Kazda zmiana wymaga biezacego hasla; bledne potwierdzenia sa ograniczane do
+5/minute na konto i IP. Operacje zbiorcze rozwiazuja cele do aktywnych,
+zgodnych lokalizacji i sa atomowe w PostgreSQL. Blokada organizacji oraz
+lokalizacji jest pobierana deterministycznie; ponowienie juz osiagnietego
+stanu rejestruje probe, ale nie tworzy fikcyjnej zmiany. Zdarzenia prob i
+rzeczywistych przejsc stanow rozszerzaja append-only `security_events`;
+przejscie i jego audyt sa zatwierdzane razem. Dezaktywacja nie kasuje grantow,
+rol ani historii, a biezaca kontrola `ModuleAvailability` odmawia dostepu
+poza gotowym, jawnie wlaczonym modulem. Nie ma automatycznego dziedziczenia
+ustawien z kuchni na restauracje.
+
+Frontend obecnie nie ma autoryzowanego panelu administracyjnego, dlatego Stage
+1E udostepnia stabilny backend i nie dodaje ekranu, ktory sugerowalby gotowosc
+nieistniejacych funkcji biznesowych. Testy migracji, integralnosci i
+wspolbieznosci uruchamiaj wylacznie na zweryfikowanym, odizolowanym PostgreSQL;
+nie uzywaj bazy ani wolumenow instalacji.

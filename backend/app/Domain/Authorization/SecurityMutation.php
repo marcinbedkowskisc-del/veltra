@@ -23,6 +23,36 @@ class SecurityMutation
         ]);
     }
 
+    public function recordModuleEvent(
+        User $actor,
+        ?Location $location,
+        string $module,
+        ?bool $previous,
+        bool $requested,
+        ?bool $effective,
+        string $outcome,
+        string $operationId,
+        string $eventKind,
+        string $detailCode,
+    ): void {
+        DB::table('security_events')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $actor->organization_id,
+            'actor_id' => $actor->id,
+            'target_id' => null,
+            'location_id' => $location?->id,
+            'action' => 'module.configure',
+            'outcome' => $outcome,
+            'operation_id' => $operationId,
+            'event_kind' => $eventKind,
+            'module_key' => $module,
+            'previous_enabled' => $previous,
+            'requested_enabled' => $requested,
+            'effective_enabled' => $effective,
+            'detail_code' => $detailCode,
+        ]);
+    }
+
     public function run(User $actor, User $target, ?Location $location, string $action, Closure $operation): mixed
     {
         try {

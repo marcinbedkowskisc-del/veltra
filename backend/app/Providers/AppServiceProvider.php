@@ -2,10 +2,12 @@
 
 namespace App\Providers;
 
+use App\Domain\Authorization\ConfiguredModuleAvailability;
 use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Authorization\ReportCatalog;
-use App\Domain\Authorization\UnavailableModules;
 use App\Domain\Authorization\UnavailableReports;
+use App\Domain\Modules\DefinedModuleCatalog;
+use App\Domain\Modules\ModuleCatalog;
 use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -20,7 +22,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->app->bind(ModuleAvailability::class, UnavailableModules::class);
+        $this->app->singleton(ModuleCatalog::class, DefinedModuleCatalog::class);
+        $this->app->bind(ModuleAvailability::class, ConfiguredModuleAvailability::class);
         $this->app->bind(ReportCatalog::class, UnavailableReports::class);
     }
 

@@ -45,8 +45,7 @@ class BusinessAuthorization
         if (! $this->eligible($actor, $context, $target)) {
             return false;
         }
-        if ($permission->module() !== null && ($target->type !== LocationType::Restaurant
-            || ! app(ModuleAvailability::class)->enabled($target, $permission->module()))) {
+        if ($permission->module() !== null && ! app(ModuleAvailability::class)->enabled($target, $permission->module())) {
             return false;
         }
         if ($this->hasRole($actor, BusinessRole::Administrator)) {

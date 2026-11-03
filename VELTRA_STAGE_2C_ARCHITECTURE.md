@@ -1,9 +1,9 @@
 # VELTRA 2.0 — Architektura Stage 2C
 ## Dostawcy, produkty i opakowania, ceny referencyjne oraz waluty
 
-**Status:** propozycja architektury do przeglądu biznesowego  
-**Zakres:** projekt Stage 2C; bez implementacji, migracji, zmian danych ani aktywacji modułu  
-**Rekomendacja:** **CONDITIONAL ACCEPT** — projekt jest spójny z Stage 2A i Stage 2B, ale przed implementacją wymagają decyzji kwestie wskazane w rozdziale 12 i w raporcie przeglądowym.  
+**Status:** architektura po integracji zatwierdzonych decyzji D-01–D-10
+**Zakres:** projekt Stage 2C; bez implementacji, migracji, zmian danych ani aktywacji modułu
+**Rekomendacja:** **ACCEPT** — decyzje biznesowe D-01–D-10 są wiążącymi niezmiennikami projektu. Pozostają ryzyka wykonawcze, ale nie wymagają ponownego wyboru polityki biznesowej.
 **Gotowość modułu:** `RAW_MATERIALS` pozostaje `NOT_READY` i nieaktywny.
 
 ## 1. Cel i granice
@@ -21,7 +21,7 @@ Projekt zachowuje zatwierdzone decyzje Stage 2A B1–B8. Szczególnie:
 - PLN jest walutą raportową; zakupy w walutach obcych zachowują kwotę źródłową, kurs i precyzję, bez przedwczesnego zaokrąglania (B7);
 - archiwizację i restore obsługują audytowane przejścia istniejącego lifecycle, bez usuwania historii i kodu (B8).
 
-Poza zakresem są: zamówienia/umowy/rozrachunki dostawców, przyjęcia i partie magazynowe, faktury, płatności, automatyczny import notowań kursowych, workflow alergenów, dokumenty dostawców oraz obliczanie i zamykanie kosztu partii produkcyjnej. Stage 2C przygotowuje kontrakty, ale nie implementuje domen Inventory, Purchasing ani Production.
+Poza zakresem są: zamówienia/umowy/rozrachunki dostawców, przyjęcia i partie magazynowe, faktury, płatności, workflow alergenów, dokumenty dostawców oraz obliczanie i zamykanie kosztu partii produkcyjnej. Import oficjalnych dziennych kursów NBP jest w zakresie 2C jako kontrolowane, idempotentne pobranie danych źródłowych; ręczne nadpisanie jest osobnym audytowanym workflow. Stage 2C tworzy wspólny master dostawców i kontrakty dla Purchasing/Inventory, ale nie implementuje zamówień, przyjęć ani domeny Production.
 
 ## 2. Stan istniejący i zgodność z Stage 2B
 
@@ -46,11 +46,12 @@ Wyniki audytu Stage 2B są warunkiem wejściowym, nie zamiennikiem kontroli Stag
 ### 3.1 Własność i rozdzielenie pojęć
 
 1. `raw_materials` pozostaje jedyną centralną definicją składnika, należącą do organizacji.
-2. `organization_suppliers` to organizacyjny rejestr kontrahentów; jeden dostawca może oferować wiele produktów i wiele ofert.
-3. `supplier_products` opisuje relację dostawca–surowiec oraz zewnętrzny produkt/SKU. Produkt dostawcy, GTIN, jego opakowanie i cena nie są tożsamością surowca.
+2. `organization_suppliers` to jedyny organizacyjny master dostawców, wspólny dla Raw Materials, Purchasing i Inventory (D-08). Właścicielem technicznym jest wspólna domena `Suppliers`; moduły konsumują ją przez jawny serwis/kontrakt, nie tworzą własnych kopii. Jeden dostawca może oferować wiele produktów i wiele ofert.
+3. `supplier_products` opisuje relację dostawca–surowiec oraz zewnętrzny produkt/SKU. Produkt dostawcy, GTIN, jego prosta konfiguracja opakowania i cena nie są tożsamością surowca. Opakowanie Stage 2C zawiera jeden produkt i jedną definicję surowca; zestawy mieszane są wyłączone (D-06).
 4. Konfiguracja produktu i jego przelicznik są wersjonowane. Oferta cenowa wskazuje dokładną wersję produktu i opakowania, której dotyczy.
 5. `supplier_offer_events` opisują oferty/zakupowe warunki dostawcy, a `raw_material_reference_price_events` opisują osobną, centralnie zatwierdzaną wartość foodcost. Zmiana jednego rodzaju ceny nigdy nie aktualizuje drugiego.
 6. Rekordy cenowe Stage 2C nie są dowodem faktury ani rzeczywistego kosztu przyjętej partii. Koszt rzeczywisty należy do przyszłej domeny Inventory/Purchasing.
+7. Produkt i oferta mogą być ewidencjonowane przed oceną zgodności alergenowej; status zgodności jest jawnie nieustalony. Utworzenie, zatwierdzenie lub rejestracja oferty nie daje prawa do operacyjnego PO, przyjęcia ani użycia produkcyjnego. Te operacje wymagają zatwierdzonego review Stage 2D dla dokładnej rewizji (D-10).
 
 ### 3.2 Zatwierdzony produkt i zgodność alergenowa
 
@@ -63,7 +64,8 @@ Stage 2C może rejestrować produkt dostawcy, jego opakowanie i ofertę, ale nie
 - PK to UUID; każda tabela organizacyjna ma `organization_id uuid NOT NULL`, indeksy rozpoczynają się od tenant scope, a FK do encji organizacyjnych zawierają `organization_id`.
 - FK historyczne stosują `ON DELETE RESTRICT`; nie ma fizycznego usuwania użytych dostawców, produktów, rewizji, ofert, cen, kursów ani zdarzeń audytu.
 - Daty zdarzeń i obowiązywania są `timestamptz`; klient nie określa `created_at`, autora, organizacji, zatwierdzającego ani wyniku oceny.
-- Ilości i kursy są `NUMERIC`, nigdy `float`/`real`; kwota zakupu zachowuje walutę źródłową. Pola i skale proponowane poniżej wymagają potwierdzenia decyzją D-04.
+- Ilości i kursy są `NUMERIC`, nigdy `float`/`real`; kwota zakupu zachowuje walutę źródłową. Skale są konwencją techniczną; implementacja wykazuje ich zakres, overflow i zgodność z HALF-EVEN.
+- Nowe wartości Stage 2C wymagające kontroli skali są przechowywane jako unconstrained PostgreSQL `NUMERIC` z constraintami zakresu/precyzji. Nie używać kolumn `NUMERIC(p,s)` dla niezweryfikowanego wejścia ani końcowego wyniku, ponieważ PostgreSQL może zaokrąglić przy przypisaniu przed kontrolą constraintu. Odrzucać nadmiarowe cyfry przez `value = trunc(value, allowed_scale)`; końcowe wyniki sprawdzać funkcją `raw_materials_round_half_even_v1(value, scale)`. Nie korzystać z domyślnego `round(numeric)` PostgreSQL.
 - Każdy historyczny wiersz cenowy/FX/wersji konfiguracji jest append-only, chroniony triggerem PostgreSQL przed `UPDATE` i `DELETE`. Bieżące wartości wyznacza się przez projekcję najnowszego zdarzenia obowiązującego w danym czasie, a nie przez edycję rekordu historii.
 - Nowe tabele oraz API używają kluczy stabilnych i kaskadowego org scope. Tenant scope z requestu nie jest źródłem prawdy: organizacja pochodzi z uwierzytelnionego aktora.
 
@@ -78,7 +80,7 @@ Jeden rekord oznacza dostawcę w zakresie jednej organizacji. Nie przechowuje da
 | `supplier_code` | `varchar(40) NOT NULL` | Kod wewnętrzny, unikalny w organizacji; nie jest numerem podatkowym. |
 | `display_name` | `varchar(200) NOT NULL` | Niepusta nazwa widoczna po polsku/oryginalna nazwa dostawcy. |
 | `legal_name` | `varchar(240) NULL` | Opcjonalna nazwa prawna; dostęp ograniczony do właściwego permission. |
-| `tax_identifier` | `varchar(80) NULL` | Opcjonalny identyfikator; szyfrowanie/retencja i ekspozycja wymagają decyzji organizacyjnej. |
+| `tax_identifier` | `varchar(80) NULL` | Dane wrażliwe; ograniczyć do Supplier permission, maskować w API, wyłączyć z logów/eksportów bez uprawnienia i chronić mechanizmem ochrony danych platformy. |
 | `lifecycle_state` | `varchar(16) NOT NULL` | `ACTIVE`, `ARCHIVED`; stan nie kasuje produktów ani historii. |
 | `created_by`, `created_at` | UUID, `timestamptz` | Autor i czas serwera; FK złożony do organizacji/użytkownika. |
 
@@ -91,12 +93,11 @@ Indeksy: `UNIQUE(organization_id, supplier_code)`, indeks wyszukiwania `(organiz
 | Tabela | Istotne kolumny | Klucze/reguły |
 |---|---|---|
 | `supplier_products` | `id`, `organization_id`, `supplier_id`, `raw_material_id`, `lifecycle_state`, `created_by`, `created_at` | `UNIQUE(id, organization_id)`; FK złożone do dostawcy i surowca; stan `ACTIVE`/`ARCHIVED`; brak fizycznego delete. |
-| `supplier_product_revisions` | `id`, `organization_id`, `supplier_product_id`, `revision_no`, `raw_material_revision_id`, `supplier_sku`, `gtin`, `product_name`, `purchase_unit_code`, `components_hash`, `content_hash`, `created_by`, `created_at` | `UNIQUE(supplier_product_id, revision_no)` i złożone FK do dokładnego produktu, organizacji, materiału/revizji. Immutable; nowa konfiguracja/SKU tworzy nową rewizję. |
-| `supplier_product_packaging_components` | `id`, `organization_id`, `product_revision_id`, `component_no`, `component_count numeric(24,9)`, `content_quantity numeric(24,9)`, `content_unit_code varchar(24)`, `raw_material_revision_unit_id uuid`, `to_base_factor_snapshot numeric(24,12)`, `base_quantity_snapshot numeric(30,12)` | Unikalny `(product_revision_id, component_no)`; wszystkie komponenty wskazują ten sam produkt, surowiec i rewizję bazową. Ilości/factor dodatnie. Immutable. |
+| `supplier_product_revisions` | `id`, `organization_id`, `supplier_product_id`, `revision_no`, `raw_material_revision_id`, `supplier_sku`, `gtin`, `product_name`, `purchase_unit_code`, `content_quantity`, `content_unit_code`, `raw_material_revision_unit_id`, `to_base_factor_snapshot`, `base_quantity_snapshot`, `content_hash`, `created_by`, `created_at` | `UNIQUE(supplier_product_id, revision_no)` i złożone FK do dokładnego produktu, organizacji, materiału/revizji/jednostki. Immutable; nowa konfiguracja/SKU tworzy nową rewizję. |
 
-`purchase_unit_code` opisuje jednostkę zamawianą, np. `PACKAGE`, `CASE`, `BAG`, a nie nową jednostkę konwersji surowca. Konfiguracja opakowania określa ilość zawartości i jednostkę pomiaru, liczbę komponentów oraz przelicznik do jednostki bazowej z konkretnej zatwierdzonej rewizji surowca. Suma `base_quantity_snapshot` to niezmienna ilość bazowa na jedną jednostkę zakupu. Serwer wylicza wynik dziesiętnie i porównuje go z wejściem/limitem; klient nie wysyła wiążącego współczynnika.
+`purchase_unit_code` opisuje pojedynczą jednostkę zamawianą, np. `BAG` lub `CASE`, a nie nową jednostkę konwersji surowca. Każda rewizja zapisuje jedną całkowitą zawartość jednego surowca w jednym UOM, np. 10 kg na worek. Serwer oblicza `base_quantity_snapshot` z ilości, unit record i współczynnika konkretnej zatwierdzonej rewizji; klient nie wysyła wiążącego współczynnika ani wyliczonej zawartości. Mieszane/wieloskładnikowe opakowania i hierarchie case→pack→unit są poza Stage 2C.
 
-Każda rewizja produktu przechowuje `raw_material_revision_id` i snapshot podstawy/przelicznika, nawet jeśli jednostka bazowa aktualnie się nie zmieniła. Zmiana konwersji w nowej rewizji surowca nie przelicza już istniejących ofert; wymaga nowej rewizji produktu i nowych zdarzeń ofertowych przypiętych do tej konfiguracji. GTIN i SKU normalizuje serwer; unikalność SKU (gdy niepuste) egzekwuje się w obrębie dostawcy i organizacji. Nie zakłada się globalnej unikalności SKU.
+Każda rewizja produktu przechowuje `raw_material_revision_id` i snapshot podstawy/przelicznika, nawet jeśli jednostka bazowa aktualnie się nie zmieniła. Zmiana konwersji w nowej rewizji surowca nie przelicza już istniejących ofert; wymaga nowej rewizji produktu i nowych zdarzeń ofertowych przypiętych do tej konfiguracji. GTIN i SKU normalizuje serwer; unikalność SKU (gdy niepuste) egzekwuje się w obrębie dostawcy i organizacji. Nie zakłada się globalnej unikalności SKU. Pole zgodności alergennej nie jest ustawiane przez Stage 2C; stan przed decyzją Stage 2D pozostaje jawnie `PENDING`.
 
 ### 4.4 `supplier_offers` i `supplier_offer_events`
 
@@ -105,10 +106,10 @@ Każda rewizja produktu przechowuje `raw_material_revision_id` i snapshot podsta
 | Tabela | Istotne kolumny | Klucze/reguły |
 |---|---|---|
 | `supplier_offers` | `id`, `organization_id`, `supplier_product_id`, `offer_reference`, `created_by`, `created_at` | FK złożony do produktu; unikalny `offer_reference` w zakresie produktu, jeżeli istnieje. Nie przechowuje mutable „aktualnej ceny”. |
-| `supplier_offer_events` | `id`, `organization_id`, `offer_id`, `supplier_product_revision_id`, `event_no`, `event_type`, `valid_from`, `recorded_at`, `net_amount_per_purchase_unit`, `currency_code`, `minimum_purchase_quantity`, `source_code`, `source_reference`, `source_document_version_id NULL`, `recorded_by`, `reason_code`, `operation_id` | `event_type` = `PRICE_SET` lub `WITHDRAWN`; `event_no` rośnie pod lockiem oferty; zdarzenie wycofania nie ma kwoty. FK do dokładnej wersji produktu/opakowania. `PRICE_SET` wymaga `net_amount_per_purchase_unit >= 0`, ISO 4217 i dodatniego MOQ, jeśli podane. Append-only. |
-| `supplier_offer_fx_normalization_events` | `id`, `organization_id`, `supplier_offer_event_id`, `exchange_rate_event_id`, `rate_snapshot numeric(24,12)`, `reporting_amount_pln_per_purchase_unit numeric(30,14)`, `reporting_amount_pln_per_base_unit numeric(30,14)`, `normalized_at`, `recorded_by`, `operation_id` | Append-only snapshot wyliczenia PLN dla dokładnego eventu ceny i rewizji opakowania. FK złożone; korekta tworzy nowy event korekcyjny, nie aktualizuje snapshotu. |
+| `supplier_offer_events` | `id`, `organization_id`, `offer_id`, `supplier_product_revision_id`, `event_no`, `event_type`, `valid_from`, `valid_until NULL`, `recorded_at`, `net_amount_per_purchase_unit`, `currency_code`, `minimum_order_quantity NULL`, `quantity_from`, `quantity_until NULL`, `source_code`, `source_reference`, `source_document_version_id NULL`, `recorded_by`, `reason_code`, `operation_id` | `event_type` = `PRICE_SET` lub `WITHDRAWN`; event opisuje jedną walutę, purchase unit, przedział ceny ilościowej, MOQ i okres ważności; `event_no` rośnie pod lockiem oferty. Wycofanie nie ma kwoty. FK do dokładnej wersji produktu/opakowania. `PRICE_SET` wymaga kwoty nieujemnej, ISO 4217, `quantity_from > 0`, `quantity_until > quantity_from` gdy podane, dodatniego MOQ gdy podane oraz `valid_until > valid_from` gdy podane. Append-only. |
+| `supplier_offer_fx_normalization_events` | `id`, `organization_id`, `supplier_offer_event_id`, `exchange_rate_event_id`, `rate_snapshot numeric`, `reporting_amount_pln_per_purchase_unit numeric`, `reporting_amount_pln_per_base_unit numeric`, `normalized_at`, `recorded_by`, `operation_id` | Append-only snapshot wyliczenia PLN dla dokładnego eventu ceny i rewizji opakowania. Skala kursu i finalnych wyników ma jawne CHECK/trigger; końcowe kwoty muszą równać się `raw_materials_round_half_even_v1(value, 14)`. FK złożone; korekta tworzy nowy event korekcyjny, nie aktualizuje snapshotu. |
 
-Cena oferty jest kwotą netto w walucie źródłowej za dokładnie jedną jednostkę zakupu z rewizji produktu. Ilość minimalna jest wyrażona w tych samych jednostkach zakupu. Kwota pozostaje źródłowa; do raportowania system używa osobnego, niezmiennego snapshotu kursu i wyliczonego PLN. Cena w walucie obcej może być zachowana jako `SOURCE_ONLY`, gdy nie ma zatwierdzonego kursu; w takim stanie nie wolno jej sumować/porównywać w PLN ani używać do normalizacji ceny referencyjnej. Późniejsze uzyskanie kursu tworzy `supplier_offer_fx_normalization_events`, nie aktualizuje źródłowego eventu. Zmiana warunków/ceny/terminu to nowe zdarzenie, nie UPDATE poprzedniej oferty. Na tym etapie oferta nie oznacza zamówienia, potwierdzenia dostawy ani kosztu partii.
+Cena oferty jest kwotą netto w walucie źródłowej za dokładnie jedną jednostkę zakupu z rewizji produktu. MOQ i progi cenowe są wyrażone w tych samych jednostkach zakupu; cena może mieć wiele progów, walut i okresów ważności, bez automatycznego wyboru dostawcy ani oferty. Dla tej samej oferty, rewizji i waluty aktywne przedziały ilościowe nie mogą nakładać się w czasie, w którym obowiązują jednocześnie; wykluczenie jest wymuszane w PostgreSQL (exclusion constraint lub równoważny trigger serializowany pod lockiem oferty), nie wyłącznie walidacją API. Kwota pozostaje źródłowa; do raportowania system używa osobnego, niezmiennego snapshotu kursu i wyliczonego PLN. Cena w walucie obcej może być zachowana jako `SOURCE_ONLY`, gdy brak dostępnego kursu; nie wolno jej sumować/porównywać w PLN ani używać do normalizacji ceny referencyjnej. Późniejsze uzyskanie kursu tworzy `supplier_offer_fx_normalization_events`, nie aktualizuje źródłowego eventu. Zmiana warunków/ceny/terminu to nowe zdarzenie, nie UPDATE poprzedniej oferty. Na tym etapie oferta nie oznacza zamówienia, potwierdzenia dostawy ani kosztu partii.
 
 ### 4.5 `raw_material_reference_price_events`
 
@@ -119,39 +120,43 @@ Jeden strumień zdarzeń na surowiec reprezentuje centralną cenę referencyjną
 | `id`, `organization_id`, `raw_material_id` | UUID | PK i FK złożone do surowca tej organizacji. |
 | `event_no` | `integer` | Monotoniczny w strumieniu surowca, przydzielany pod blokadą. |
 | `event_type` | enum/check | `PRICE_SET` albo `PRICE_WITHDRAWN`; withdrawal wyłącza cenę od jego `effective_from`. |
-| `effective_from`, `recorded_at` | `timestamptz` | Czas skuteczności i niezmienny czas zarejestrowania. Wybór strefy biznesowej wymaga zatwierdzenia D-02. |
-| `net_pln_per_base_unit` | `numeric(30,14) NULL` | Kanoniczna cena PLN netto/baza dla `PRICE_SET`; brak kwoty dla withdrawal. |
-| `source_net_amount`, `source_currency_code` | `numeric(24,8) NULL`, `char(3) NULL` | Źródło ceny, jeśli dotyczy; nie jest wyświetlane bez właściwego permission. |
+| `effective_from`, `recorded_at` | `timestamptz` | Czas skuteczności i niezmienny czas zarejestrowania; interpretacja operacyjnej daty FX stosuje `Europe/Warsaw`. |
+| `net_pln_per_base_unit` | `numeric NULL` | Kanoniczna cena PLN netto/baza dla `PRICE_SET`; brak kwoty dla withdrawal. Constraint wymaga wyniku HALF-EVEN do skali 14. |
+| `source_net_amount`, `source_currency_code` | `numeric NULL`, `char(3) NULL` | Źródło ceny, jeśli dotyczy; CHECK nie dopuszcza więcej niż 8 istotnych miejsc dziesiętnych; pole nie jest wyświetlane bez właściwego permission. |
 | `source_offer_event_id`, `source_product_revision_id` | UUID NULL | Opcjonalne pochodzenie; FK złożone i RESTRICT. Cena referencyjna może być ustalona niezależnie od oferty. |
-| `exchange_rate_event_id`, `rate_snapshot` | UUID NULL, `numeric(24,12) NULL` | Kurs dokładnie wykorzystany dla źródła obcego; przy `PLN` zapis tożsamości 1 lub jawnie zatwierdzony odpowiednik. |
+| `exchange_rate_event_id`, `rate_snapshot` | UUID NULL, `numeric NULL` | Kurs dokładnie wykorzystany dla źródła obcego; CHECK skali do 12; przy `PLN` zapis tożsamości 1 lub jawnie zatwierdzony odpowiednik. |
 | `recorded_by`, `reason_code`, `operation_id` | UUID, kody, UUID | Autor, powód i korelacja audytu. |
 
 Ograniczenia: `UNIQUE(raw_material_id, event_no)`, kwoty nieujemne, kod waluty z rejestru ISO 4217, walidacja spójności pola źródłowego i kursu, brak UPDATE/DELETE. Zapis ceny wymaga `RAW_MATERIALS_REFERENCE_PRICE_MANAGE`; oferta i źródłowa cena zakupu wymagają dodatkowo odrębnego permission kosztów zakupu. Nie wolno tworzyć kopii ceny w zwykłym endpointcie katalogu.
 
-Odczyt „as of” sortuje po `effective_from DESC`, a przy tej samej chwili po `event_no DESC`; wybiera ostatnie zdarzenie, które może być również wycofaniem. Wsteczna korekta jest nowym zdarzeniem i nie przepina zapisanych snapshotów. Kwestia, czy korekta ma zmieniać przyszłe wyniki „as of” dla już zamkniętych okresów, wymaga decyzji D-03; nie może zmienić zamkniętej partii ani historycznego snapshotu.
+Odczyt „as of” sortuje po `effective_from DESC`, a przy tej samej chwili po `event_no DESC`; wybiera ostatnie zdarzenie, które może być również wycofaniem. Wsteczna korekta jest nowym zdarzeniem i nie przepina zapisanych snapshotów. Korekta historyczna nie modyfikuje oryginalnego wyniku: wymaga osobnego, audytowanego restatementu ze wskazaniem źródła, zakresu i oryginalnego snapshotu (D-03). Zamknięte snapshoty produkcyjne pozostają niezmienne; ich ewentualny restatement należy do domeny Production/Finance.
 
 ### 4.6 `organization_exchange_rate_events`
 
-Kurs jest zdarzeniem organizacji, a nie konfigurowalnym, mutowalnym ustawieniem. Proponowany kierunek pary: liczba PLN za jedną jednostkę waluty obcej; kurs PLN/PLN jest tożsamością 1 i nie wymaga zewnętrznego notowania.
+Kurs jest zdarzeniem organizacji, a nie konfigurowalnym, mutowalnym ustawieniem. Kierunek pary: liczba PLN za jedną jednostkę waluty obcej; kurs PLN/PLN jest tożsamością 1 i nie wymaga zewnętrznego notowania. Źródłem podstawowym są oficjalne dzienne kursy NBP (D-01). Dla konwersji raportowej przyjmuje się średni kurs NBP z Tabeli A jako jednolitą konwencję techniczną; nie stanowi on reguły podatkowej ani księgowej.
 
 | Kolumna | Typ/propozycja | Reguła |
 |---|---|---|
 | `id`, `organization_id` | UUID | PK, zakres organizacji. |
 | `base_currency_code` | `char(3)` | Zawsze `PLN`. |
 | `quote_currency_code` | `char(3)` | ISO 4217; różna od `PLN` dla zewnętrznego kursu. |
-| `pln_per_quote_unit` | `numeric(24,12)` | Wartość dodatnia i skończona; żadnych kursów zerowych/ujemnych. |
-| `effective_at`, `recorded_at` | `timestamptz` | Czas obowiązywania źródłowego kursu i czas wprowadzenia do VELTRA. |
-| `source_code`, `source_rate_id` | `varchar`, `varchar NULL` | Źródło, identyfikator notowania/serii; tekst z allowlisty lub walidowanego rejestru, nie dowolny URL. |
+| `pln_per_quote_unit` | `numeric` | Wartość dodatnia; CHECK skali do 12 i zakresu; żadnych kursów zerowych/ujemnych. |
+| `rate_date`, `recorded_at` | `date`, `timestamptz` | Data tabeli NBP i niezmienny czas pobrania/zapisu. |
+| `source_code`, `source_rate_id`, `source_payload_hash` | `varchar`, `varchar NULL`, `char(64)` | Źródło `NBP_TABLE_A` albo `MANUAL_OVERRIDE`, identyfikator tabeli/pozycji i hash utrwalonej odpowiedzi źródłowej; nie przechowywać dowolnego URL ani sekretów. |
 | `revision_no`, `supersedes_id` | integer, UUID NULL | Korekta tego samego punktu effective-time tworzy nowy event; nie zmienia historycznego rekordu. |
-| `recorded_by`, `reason_code`, `operation_id` | UUID/kody | Autor, przyczyna i ślad audytowy. |
+| `override_of_id`, `recorded_by`, `reason_code`, `operation_id` | UUID NULL, UUID/kody | Manualne nadpisanie wskazuje pierwotny kurs NBP, autora z `RAW_MATERIALS_EXCHANGE_RATE_MANAGE`, obowiązkowy powód i ślad audytowy. Nadpisanie nie edytuje ani nie usuwa NBP eventu. |
 
-Indeks as-of: `(organization_id, quote_currency_code, effective_at DESC, revision_no DESC)`. Unikalność zdarzeń obejmuje organizację, walutę, chwilę obowiązywania i `revision_no`. FX event jest append-only. Każdy price event, który wymaga konwersji, zachowuje zarówno FK do kursu, jak i wartość kursu użytego w obliczeniu, walutę, kierunek, czas effective-time, źródło oraz kwotę PLN. Snapshot jest źródłem prawdy dla zapisanej ceny; późniejsza korekta kursu nie przelicza jej automatycznie.
+Indeks as-of: `(organization_id, quote_currency_code, rate_date DESC, revision_no DESC)`. Unikalność obejmuje organizację, walutę, datę i rewizję. Dla daty operacji wyliczonej w `Europe/Warsaw` wybierany jest najnowszy dostępny kurs NBP z `rate_date <= operation_date`; weekend/święto korzysta z ostatniej wcześniejszej publikacji. Nie używa się kursu przyszłego, kursu 1 dla obcej waluty ani kursu spoza NBP bez jawnego nadpisania. Brak jakiegokolwiek dopuszczalnego kursu blokuje normalizację PLN; kwota źródłowa może pozostać `SOURCE_ONLY`. Kontrolowana synchronizacja pobiera NBP poza transakcją, jest idempotentna i zachowuje identyfikator tabeli/hash odpowiedzi.
 
-Nie pobierać kursu z sieci synchronicznie podczas zapisu oferty/ceny. Dostarczenie notowań, źródło autorytatywne, godzina publikacji, dni bez notowania, kurs ręczny i korekta to decyzje biznesowo-finansowe D-01/D-02. Do chwili ich zatwierdzenia przewidziany jest kontrolowany, ręczny zapis autoryzowanym użytkownikiem, z rejestrowanym źródłem i powodem; nie jest to zgoda na domyślanie kursu.
+Manual override jest osobnym append-only eventem ograniczonym do autoryzowanego grantobiorcy, z obowiązkowym powodem, datą operacji, wskazaniem zastępowanego kursu NBP i audytem. Nie zastępuje źródłowego eventu. Każdy price event, który wymaga konwersji, zachowuje FK do kursu i snapshot: wartość, kierunek, datę operacji w Warszawie, datę NBP, źródło/override oraz PLN. Snapshot jest źródłem prawdy dla zapisanej ceny; późniejsza korekta kursu nie przelicza go automatycznie.
 
-### 4.7 `raw_materials_financial_audit` albo wspólny audyt domenowy
+Nie pobierać kursu z sieci synchronicznie podczas zapisu oferty/ceny. Kontrolowana synchronizacja używa NBP; ręczny override jest osobnym, autoryzowanym i audytowanym zdarzeniem. Awarie synchronizacji nie powodują użycia fikcyjnego lub ukrytego kursu zastępczego.
 
-Preferowany wariant to użycie istniejącego append-only `raw_material_audit_events`, o ile jego kontrakt dopuszcza wymagane zdarzenia finansowe i metadane. Zdarzenia obejmują co najmniej `SUPPLIER_CREATED`, `SUPPLIER_PRODUCT_REVISION_CREATED`, `OFFER_PRICE_SET`, `OFFER_WITHDRAWN`, `REFERENCE_PRICE_SET`, `REFERENCE_PRICE_WITHDRAWN`, `FX_RATE_RECORDED` i `FX_RATE_CORRECTED`. Nie zapisują pełnych danych płatniczych, dokumentów, sekretów ani kwot poza uprawnionym zakresem audytu.
+### 4.7 Restatement i audyt finansowy
+
+Restatement jest nowym, niezmiennym wynikiem, nigdy edycją pierwotnego snapshotu. Minimalna tabela `raw_material_financial_restatements` zawiera: `id`, `organization_id`, `subject_type`, `subject_id`, `original_snapshot_id/hash`, `supersedes_restatement_id NULL`, użyte price/FX event IDs i ich snapshoty, `restated_value`, `currency_code`, `operation_date`, `reason_code`, `recorded_by`, `recorded_at`, `operation_id`. Unikalność/idempotency i FK tenantowe wiążą restatement z oryginałem; write wymaga właściwego permission finansowego, a korekta wsteczna nie zmienia zwykłego odczytu historycznego ani zamkniętych kosztów. Stage 2C definiuje ten wzorzec dla swoich zdarzeń; restatement kosztu produkcyjnego pozostaje odpowiedzialnością Production/Finance.
+
+Preferowany wariant to użycie istniejącego append-only `raw_material_audit_events`, o ile jego kontrakt dopuszcza wymagane zdarzenia finansowe i metadane. Zdarzenia obejmują co najmniej `SUPPLIER_CREATED`, `SUPPLIER_PRODUCT_REVISION_CREATED`, `OFFER_PRICE_SET`, `OFFER_WITHDRAWN`, `REFERENCE_PRICE_SET`, `REFERENCE_PRICE_WITHDRAWN`, `FX_RATE_IMPORTED`, `FX_RATE_OVERRIDE_CREATED`, `FX_RATE_CORRECTED` i `FINANCIAL_RESTATEMENT_CREATED`. Nie zapisują pełnych danych płatniczych, dokumentów, sekretów ani kwot poza uprawnionym zakresem audytu.
 
 Jeśli tabela/constraint Stage 2B nie może bezpiecznie obsłużyć finansowych eventów, Stage 2C może dodać wyspecjalizowaną tabelę append-only z indeksem `(organization_id, occurred_at)`; nie może zmieniać znaczenia ani osłabiać obecnego audytu. Audyt i mutacja finansowa commitują atomowo. Błąd audytu oznacza rollback mutacji.
 
@@ -159,9 +164,9 @@ Jeśli tabela/constraint Stage 2B nie może bezpiecznie obsłużyć finansowych 
 
 ### 5.1 Normalizacja jednostki
 
-Dla produktu z jedną jednostką zakupu:
+Dla produktu z jedną jednostką zakupu i jedną jednorodną zawartością:
 
-`ilość_bazowa_na_jednostkę_zakupu = Σ(liczba_komponentów × ilość_zawartości × współczynnik_do_bazy_z_rewizji_surowca)`
+`ilość_bazowa_na_jednostkę_zakupu = ilość_zawartości × współczynnik_do_bazy_z_rewizji_surowca`
 
 `cena_źródłowa_na_jednostkę_bazową = kwota_netto_na_jednostkę_zakupu / ilość_bazowa_na_jednostkę_zakupu`
 
@@ -171,7 +176,7 @@ Operacje wykonuje PostgreSQL `NUMERIC` albo sprawdzona arytmetyka dziesiętna; n
 
 Warunki walidacji:
 
-- dodatnia, ograniczona liczba komponentów i ilość zawartości; zakresy i maksima konfiguracyjne wymagają ustalenia przed implementacją;
+- dodatnia i ograniczona ilość zawartości; limity techniczne są walidowane przed zapisem, bez nowych reguł biznesowych;
 - jednostka zawartości występuje w konkretnej zatwierdzonej rewizji `raw_material_revision_units`;
 - wymiar musi być zgodny albo istnieje jawny, zatwierdzony przelicznik material-specific z basis; brak/UNKNOWN konwersji oznacza odmowę normalizacji;
 - zapisuje się identyfikator rewizji surowca, wiersz jednostki, współczynnik, ilość wejściową, ilość bazową oraz wersję konfiguracji opakowania;
@@ -179,17 +184,17 @@ Warunki walidacji:
 
 ### 5.2 Precyzja i rounding
 
-Propozycja zgodna ze Stage 2A: oferta źródłowa `numeric(24,8)`, przelicznik i kurs `numeric(24,12)`, ilości `numeric(24,9)` lub większa skala dla ułamkowych opakowań, wynik jednostkowy PLN minimum `numeric(30,14)`. Operacje pośrednie zachowują większą precyzję niż docelowe kolumny. Kwota do prezentacji może być zwykle formatowana do dwóch miejsc dziesiętnych, ale format prezentacji nie jest wartością obliczeniową.
+Konwencja techniczna limitów: kwota źródłowa maksymalnie 24 cyfry/8 miejsc dziesiętnych, kurs/przelicznik maksymalnie 24 cyfry/12 miejsc, ilość maksymalnie 24 cyfry/9 miejsc, końcowa cena PLN maksymalnie 30 cyfr/14 miejsc. Dla Stage 2C zapis typów to unconstrained `NUMERIC` z constraintami zakresu i skali, tak aby PostgreSQL nie zaokrąglał danych wejściowych przed walidacją. Operacje pośrednie zachowują pełną precyzję dziesiętną dostępną w arytmetyce `NUMERIC`; końcowy wynik oblicza wersjonowana, niezmienna funkcja dziesiętna `raw_materials_round_half_even_v1(value, scale)` do skali docelowej. Constraint/trigger PostgreSQL wymaga, aby utrwalona wartość końcowa była równa wynikowi tej funkcji; bezpośredni zapis SQL z innym rounding jest odrzucany. Nie obcinać operandów przed obliczeniem; przepełnienie powoduje jawny błąd i rollback. Kwota do prezentacji może być formatowana do dwóch miejsc dziesiętnych, ale format prezentacji nie jest wartością obliczeniową.
 
-Nie przyjmować arbitralnego `rounding_mode` z żądania API. Wartość źródłowa, surowy wynik arytmetyczny lub jego dokładne operand-y, wynik utrwalony i reguła skalowania muszą być możliwe do odtworzenia. Reguła punktu rounding (wyświetlenie, raport, wartość księgowa) i tryb rounding wymagają jawnej decyzji finansowej D-04.
+Tryb `HALF-EVEN` jest stałym wymogiem normalizacji Stage 2C, nie parametrem API (D-04). Zapisuje się operandy/snapshoty oraz wersję reguły skalowania. Testy DB sprawdzają wartości tie dla liczb dodatnich i ujemnych, zero, carry/overflow, oraz bezpośredni SQL. Księgowe i podatkowe zaokrąglanie pozostaje osobną regułą odpowiednich domen; Stage 2C nie interpretuje formatowania jako rozliczenia księgowego.
 
 ### 5.3 PLN oraz waluty
 
-- `PLN` jest reporting currency; każdy przeliczony koszt/opportunity record zachowuje źródłową kwotę i walutę oraz PLN snapshot.
+- `PLN` jest reporting currency; każda przeliczona oferta/cena referencyjna zachowuje źródłową kwotę i walutę oraz PLN snapshot.
 - Kody walut są ograniczone do ISO 4217; obsługę zmian listy kodów należy wersjonować. Nie przyjmować arbitrary trzech liter.
 - Waluty nie mogą być porównywane ani sumowane bez użycia konkretnego kursu. Nie stosować kursu jednego dostawcy/oferty do drugiej bez jawnego wskazania.
-- Nie wykonywać konwersji przez triangulację walut, jeżeli brak bezpośredniego kursu PLN/quote i jawnego zatwierdzenia D-01.
-- Cena referencyjna ma jeden aktywny wynik na surowiec i czas, w PLN/base unit (propozycja D-05). Cena zakupu pozostaje w currency quote; kwota PLN jest pomocniczym snapshotem raportowym.
+- Konwersja do PLN używa bezpośredniego kursu NBP dla waluty quote albo jawnego, audytowanego override; triangulacja jest wyłączona.
+- Cena referencyjna ma jedną kanoniczną wartość netto PLN/base unit na surowiec i czas (D-05). Cena zakupu pozostaje w currency quote; kwota PLN jest snapshotem raportowym.
 
 ## 6. Oddzielenie kosztu szacowanego od rzeczywistego (B4)
 
@@ -205,7 +210,7 @@ Stage 2C ceny oznaczają dostawcę/ofertę albo cenę referencyjną, nie faktycz
 
 ### 7.1 Proponowane uprawnienia
 
-Wszystkie są nowymi kluczami organizacyjnymi; nazwy i podział wymagają biznesowej akceptacji. Nie są nadawane rolom automatycznie.
+Wszystkie są nowymi kluczami organizacyjnymi zgodnie z D-09. Nie są nadawane rolom automatycznie ani dziedziczone przez zwykły odczyt katalogu.
 
 | Permission | Dostęp |
 |---|---|
@@ -215,11 +220,12 @@ Wszystkie są nowymi kluczami organizacyjnymi; nazwy i podział wymagają biznes
 | `RAW_MATERIALS_PURCHASING_COSTS_MANAGE` | Rejestracja i wycofanie historycznych zdarzeń cen oferty oraz ich metadanych. |
 | `RAW_MATERIALS_REFERENCE_PRICE_VIEW` | Kwota centralnej ceny netto PLN/base unit, jej historia i źródłowa kwota FX. |
 | `RAW_MATERIALS_REFERENCE_PRICE_MANAGE` | Dodanie ceny referencyjnej/wycofania/korekty z reason, bez edycji historii. |
+| `RAW_MATERIALS_EXCHANGE_RATE_VIEW` | Odczyt źródła, daty i wartości kursu wyłącznie w dozwolonym kontekście finansowym. |
 | `RAW_MATERIALS_EXCHANGE_RATE_MANAGE` | Dodanie/korekta kursu organizacyjnego; zdarzenie audytu wymagane. |
 
 `RAW_MATERIALS_REFERENCE_PRICE_VIEW` nie przyznaje `RAW_MATERIALS_PURCHASING_COSTS_VIEW` ani odwrotnie. Zwykłe `RAW_MATERIALS_VIEW`, widoki katalogu, filtry, sort, paginacja, statystyki, cache, idempotency response i eksport nie zwracają kwot, waluty źródłowej ani szczegółów rate snapshot. Endpointy cenowe autoryzują oddzielnie każde żądanie.
 
-Widoczność kursów prezentowanych bezpośrednio wymaga jednego z dedykowanych permissions ceny referencyjnej/kosztu zakupu dla powiązanego kontekstu. Zapis kursu jest oddzielną capability. Rola lokalizacyjna nigdy nie daje grantów organizacyjnych. Delegowanie/expiry/revoke/audyt zachowują Stage 2B model; grant utracony przy zawieszeniu nie odzyskuje skuteczności przez reaktywację.
+Odczyt kursu wymaga `RAW_MATERIALS_EXCHANGE_RATE_VIEW` albo odpowiedniego permission ceny/kosztu dla konkretnego obliczenia; administracja NBP i manual override wymagają `RAW_MATERIALS_EXCHANGE_RATE_MANAGE`. Dostęp do danych dostawcy, kosztów zakupu i kursów jest odrębny. Rola lokalizacyjna nigdy nie daje grantów organizacyjnych. Delegowanie/expiry/revoke/audyt zachowują Stage 2B model; grant utracony przy zawieszeniu nie odzyskuje skuteczności przez reaktywację.
 
 ### 7.2 Moduł
 
@@ -247,21 +253,18 @@ Przykładowy payload dodania produktu:
   "supplier_sku": "M500-10",
   "gtin": "5900000000000",
   "purchase_unit_code": "BAG",
-  "packaging_components": [{
-    "component_count": "1",
-    "content_quantity": "10",
-    "content_unit_code": "kg"
-  }],
+  "content_quantity": "10",
+  "content_unit_code": "kg",
   "raw_material_revision_id": "uuid"
 }
 ```
 
-Serwer weryfikuje scope dostawcy/surowca, aktywną zatwierdzoną rewizję, unit registry i konwersje z tej rewizji, oblicza bazową ilość i zapisuje niezmienny snapshot. Jeśli produkt jest `PENDING` pod kątem B3, odpowiedź i eksport nie mogą sugerować zgodności.
+Serwer weryfikuje scope dostawcy/surowca, aktywną zatwierdzoną rewizję, unit registry i konwersje z tej rewizji, oblicza bazową ilość i zapisuje niezmienny snapshot. Utworzenie produktu jest dozwolone przy statusie zgodności `PENDING`; odpowiedź i eksport muszą ten stan ujawniać, nie sugerując zatwierdzenia.
 
 ### 8.2 Oferty i koszty zakupu
 
-- `GET /api/v1/supplier-products/{productId}/offers` — `SUPPLIER_VIEW`; kwota/currency/historyczne eventy tylko po `PURCHASING_COSTS_VIEW`, inaczej odpowiedź pozbawiona tych pól albo endpoint 403; rekomendowana osobna trasa cenowa poniżej.
-- `POST /api/v1/supplier-products/{productId}/offers` — utworzenie tożsamości oferty z permission `PURCHASING_COSTS_MANAGE` i `SUPPLIER_MANAGE`.
+- `GET /api/v1/supplier-products/{productId}/offers` — `RAW_MATERIALS_SUPPLIER_VIEW`; wyłącznie oferta bez wartości kosztowej.
+- `POST /api/v1/supplier-products/{productId}/offers` — utworzenie tożsamości oferty z `RAW_MATERIALS_PURCHASING_COSTS_MANAGE` i `RAW_MATERIALS_SUPPLIER_MANAGE`; dozwolone przed zatwierdzeniem zgodności.
 - `GET /api/v1/supplier-offers/{offerId}/price-events` — `PURCHASING_COSTS_VIEW`.
 - `POST /api/v1/supplier-offers/{offerId}/price-events` — `PURCHASING_COSTS_MANAGE`, nowe zdarzenie `PRICE_SET` lub `WITHDRAWN`, `Idempotency-Key` wymagany.
 
@@ -272,23 +275,27 @@ Przykładowe ustawienie ceny:
   "event_type": "PRICE_SET",
   "net_amount_per_purchase_unit": "42.50000000",
   "currency_code": "EUR",
-  "valid_from": "2026-11-03T11:00:00Z",
-  "minimum_purchase_quantity": "1",
+  "valid_from": "2026-11-03",
+  "valid_until": null,
+  "minimum_order_quantity": "1",
+  "quantity_from": "1",
+  "quantity_until": "10",
   "source_code": "SUPPLIER_QUOTE",
   "reason_code": "QUOTE_UPDATED"
 }
 ```
 
-Nieznany kurs/niezatwierdzone źródło nie skutkuje domyślnym kursem 1. Zapis ceny źródłowej może być oddzielony od PLN normalizacji do momentu wskazania skutecznego FX zgodnie z D-01/D-02; API ma wtedy zwrócić jawny stan `FX_RATE_REQUIRED` i nie przedstawiać kwoty jako przeliczonej. Błędy i pola `message`/`errors` są po polsku, kody są stabilne, np. `SUPPLIER_PRODUCT_REVISION_STALE`, `RAW_MATERIALS_FX_RATE_REQUIRED`, `RAW_MATERIALS_PRICE_CONFLICT`.
+Oferta przyjmuje wiele append-only zdarzeń dla różnych progów/walut/okresów; API odrzuca nakładające się przedziały tej samej oferty, rewizji i waluty. Rejestracja ceny źródłowej jest możliwa bez dostępnego kursu i zwraca jawny stan `SOURCE_ONLY`/`FX_RATE_REQUIRED`; nie przedstawia kwoty jako PLN. Dostępne NBP jest wybierane według `operation_date` w strefie `Europe/Warsaw`, a nie czasu klienta/serwera.
 
 ### 8.3 Cena referencyjna i kursy
 
 - `GET /api/v1/raw-materials/{id}/reference-prices?as_of=...` — `REFERENCE_PRICE_VIEW`.
 - `POST /api/v1/raw-materials/{id}/reference-prices` — `REFERENCE_PRICE_MANAGE`; wymaga `Idempotency-Key`, expected event version, daty skuteczności, kwoty PLN/base unit, powodu oraz opcjonalnego, jawnego źródła oferty/FX.
 - `POST /api/v1/raw-materials/{id}/reference-prices/withdraw` — tworzy `PRICE_WITHDRAWN`; nigdy nie usuwa poprzedniej ceny.
-- `GET /api/v1/exchange-rates?currency=EUR&as_of=...` — widoczność wg uprawnień przypisanego use-case; bez katalogowego price grantu nie ujawnia się kursowi publiczny endpoint.
-- `POST /api/v1/exchange-rates` — `EXCHANGE_RATE_MANAGE`, źródło, quote currency, rate, effective_at i reason.
-- `POST /api/v1/exchange-rates/{rateId}/corrections` — dodaje event korekcyjny; nie edytuje wskazanego rate.
+- `GET /api/v1/exchange-rates?currency=EUR&operation_date=YYYY-MM-DD` — `RAW_MATERIALS_EXCHANGE_RATE_VIEW` albo odpowiedni permission finansowy dla konkretnej operacji; odpowiedź wskazuje rate date, NBP table ID, fallback date i źródło.
+- `POST /api/v1/exchange-rates/nbp/sync` — kontrolowane/idempotentne pobranie oficjalnych danych NBP przez uprawniony proces z `RAW_MATERIALS_EXCHANGE_RATE_MANAGE`; pobranie sieciowe odbywa się poza transakcją.
+- `POST /api/v1/exchange-rates/{rateId}/overrides` — ręczne nadpisanie daty operacyjnej, rate i powodu; wymagane `RAW_MATERIALS_EXCHANGE_RATE_MANAGE`; tworzy nowy event powiązany z NBP, bez modyfikacji źródła.
+- `POST /api/v1/exchange-rates/{rateId}/corrections` — dodaje audytowany event korekcyjny/restatement reference; nie edytuje wskazanego rate ani wcześniejszych snapshotów.
 
 Przykładowa odpowiedź finansowa:
 
@@ -298,14 +305,18 @@ Przykładowa odpowiedź finansowa:
     "raw_material_id": "uuid",
     "event_id": "uuid",
     "event_no": 8,
-    "effective_from": "2026-11-03T11:00:00Z",
+    "effective_from": "2026-11-03",
     "net_pln_per_base_unit": "0.00425000000000",
     "reporting_currency": "PLN",
     "source": {
       "amount": "42.50000000",
       "currency": "EUR",
       "exchange_rate_event_id": "uuid",
-      "pln_per_currency_unit": "4.123456789012"
+      "pln_per_currency_unit": "4.123456789012",
+      "operation_date": "2026-11-03",
+      "rate_date": "2026-11-03",
+      "source_code": "NBP_TABLE_A",
+      "rounding": "HALF_EVEN"
     }
   }
 }
@@ -336,7 +347,7 @@ Walidacja zwraca polskie komunikaty. `details` nie zawiera kwoty, nazwy dostawcy
 3. Wstawia immutable event i audit event w tej samej transakcji. Wyjątek lub błąd audytu oznacza rollback wszystkich zmian.
 4. Unikalność i sekwencje `event_no`/`revision_no` są egzekwowane constraintem; przy konfliktach API zwraca 409 z polskim komunikatem, nie sukces ani cichy retry.
 5. `Idempotency-Key` ma zakres `(organization_id, actor_user_id, endpoint/operation)` i `request_hash`. Ten sam klucz/hash odtwarza poprzedni rezultat wyłącznie po ponownej autoryzacji; inny hash to 409.
-6. Kurs „as-of” i price event selection używają wspólnej reguły rozstrzygania effective-time oraz `revision_no`. Korekty nie aktualizują historii i nie zmieniają zapisanych snapshots.
+6. Kurs as-of wybiera ostatni dostępny NBP `rate_date <= operation_date` (data lokalna `Europe/Warsaw`); price event selection ma jawny effective-time i `event_no`. Korekty nie aktualizują historii ani zapisanych snapshots; restatement jest osobnym zdarzeniem.
 7. Jeśli operacja obejmuje wiele rekordów, kolejność blokad jest stabilna (organizacja, surowiec/dostawca, produkt/oferta po UUID sortowanym rosnąco); wszystkie zmiany albo commitują razem, albo żadne.
 8. Długie pobieranie notowań/dokumentów lub połączenia z dostawcą nie są wykonywane w transakcji ani pod blokadą organizacji.
 
@@ -358,22 +369,22 @@ Rewizje produktu/opakowania, price events, FX events, reference-price events i a
 | HACCP | Nie konsumuje samej oferty jako dowodu bezpieczeństwa; wymagane dane deklaracji i zgodności z 2D oraz przyszłe kontrole partii. |
 | Stage 1E | `RAW_MATERIALS` pozostaje NOT_READY; żadna migracja/definicja klucza lub grant nie może aktywować go per lokalizacja. |
 
-## 12. Decyzje biznesowe do zatwierdzenia
+## 12. Wiążące decyzje biznesowe D-01–D-10
 
-Poniższe punkty nie zmieniają zatwierdzonych B1–B8. Są potrzebne do ustalenia konkretnej polityki operacyjno-finansowej.
+Decyzje poniżej zostały zatwierdzone; poniższa tabela stanowi wiążący kontrakt, a nie listę pytań ani opcji do ponownego rozstrzygnięcia.
 
-| ID | Decyzja | Opcje | Rekomendacja | Uzasadnienie i konsekwencje |
-|---|---|---|---|---|
-| D-01 | Autorytatywne źródło FX i sposób publikacji | (A) ręcznie wprowadzane kursy z dokumentem/źródłem; (B) oficjalne źródło centralne (np. NBP) z importem zatwierdzanym; (C) źródło księgowe/umowny kurs organizacji; automatyczny feed lub ręczna kontrola. | B jako źródło domyślne po akceptacji Finance, z audytowanym override ręcznym; bez łączenia kilku źródeł w jednym przeliczeniu. | Zapewnia powtarzalność. Wymaga ustalenia licencji/availability/odpowiedzialności za awarie; kurs źródłowy zachować także po zmianie feedu. Nie zakładamy, że NBP jest już zatwierdzone. |
-| D-02 | Czas obowiązywania, dni bez kursu i backdating | (A) data faktury/operacji; (B) data tabeli źródłowej; (C) data przyjęcia do systemu; wybór strefy czasowej i reguły dni bez publikacji. | Zachować osobno source effective date i recorded timestamp; używać source effective date do wyboru kursu po zatwierdzeniu reguły; brak kursu = jawny błąd, nie kurs 1 ani cichy carry-forward. | Umożliwia odtworzenie i rozróżnia spóźniony import od czasu źródła. Wymaga jasnej strefy/time-of-day i reguły weekend/święto przed API i raportami. |
-| D-03 | Korekty wsteczne cen/kursów | (A) korekta wpływa tylko na nowe obliczenia; (B) przelicza otwarte raporty as-of; (C) restatement wyłącznie jawnie wybranych okresów. | C: zachować oryginalny snapshot; wszelkie restatementy tworzą nowy audytowany wynik i nie modyfikują zamkniętych partii. | Chroni historię i audyt. Wymaga odrębnego workflow/permission dla korekt finansowych; nie wdrożyć przeliczenia ukrytego w read query. |
-| D-04 | Rounding księgowy i skale | (A) round half-up; (B) half-even; (C) reguła systemu księgowego; punkt rounding: linia, jednostka, suma, eksport. | Bez rounding pośredniego; końcowe rozliczenie zgodnie z pisemną polityką księgową (rekomendacja do uzgodnienia z systemem Finance), prezentacja 2 miejsc. | Zmiana punktu rounding może zmienić sumy faktur/raportów. Potrzebne przykłady testowe z kwotami granicznymi, ale nie wpływa na raw snapshots. |
-| D-05 | Denominacja centralnej ceny referencyjnej | (A) zawsze PLN/base unit; (B) zachowuje walutę źródłową i osobno PLN; (C) wiele równoległych walut referencyjnych. | A jako jedyna cena kanoniczna PLN/base-unit; jeżeli pochodzenie jest foreign, przechować niezmienną źródłową kwotę, walutę i rate snapshot. | Utrzymuje jedną referencyjną wartość B1 i porównywalny foodcost B7. Wariant C naruszałby „jedną cenę referencyjną” w praktyce; wymagałby jawnej zmiany wymogu. |
-| D-06 | Znaczenie opakowania i wycena wielopoziomowa | (A) jeden zakupowy unit z sumaryczną zawartością; (B) hierarchia case→pack→unit; (C) dowolny zestaw komponentów. | A w pierwszym wdrożeniu; liczba identycznych komponentów może być >1, a wynik sumaryczny jest snapshotem. | Ogranicza niejednoznaczność i upraszcza konwersje. Części/zestawy o różnych składach wymagają rozszerzenia po przeglądzie testów; nie wolno imputować brakujących ilości. |
-| D-07 | Wielowalutowe oferty, progi i ważność | Czy ta sama oferta może mieć równoległe progi ilościowe/waluty/terminy, MOQ i termin ważności; czy `supplier_offer` ma własne SLA? | Dopuścić wiele offer identities/price events, jeden event wycenia jedną walutę, jednostkę zakupu i warunek MOQ; bez automatycznego wyboru „najlepszej” oferty. | Umożliwia wieloźródłowe zakupy bez mieszania jednostek. Automatyczny ranking wymaga osobnej polityki uwzględniającej dostawę, VAT, jakość i B3. |
-| D-08 | Wspólny master dostawcy dla przyszłego Purchasing | (A) dostawcy żyją w domenie Surowców; (B) organizacyjny Supplier master wspólny dla Purchasing; (C) migracja do wspólnego master później. | B: projektować `organization_suppliers` jako kandydat na wspólny, tenant-scoped Supplier master z właścicielem domeny ustalonym przed kodowaniem. | Ogranicza duplikaty kontrahenta w Purchasing. Wymaga wyznaczenia ownera i pól wrażliwych; bez akceptacji nie tworzyć drugiej tabeli Supplier w przyszłym Purchasing. |
-| D-09 | Prawa do odczytu danych kontrahenta i FX | (A) dane dostawcy widoczne ogólnym `RAW_MATERIALS_VIEW`; (B) osobny `SUPPLIER_VIEW`; waluty widoczne wraz z ceną czy przez nowe granty FX. | B; kwoty tylko przez osobne B1 price permissions; użycie kursu widoczne tylko w kontekście uprawnionej ceny, a admin kursów osobnym `EXCHANGE_RATE_MANAGE`. | Minimalizuje ujawnienie komercyjne i danych podatkowych. Wymaga jawnego bootstrap/delegacji nowych kluczy, bez automatycznego rozszerzenia wszystkich grantów katalogowych. |
-| D-10 | Wymóg compatibility przed zakupem | Czy Stage 2C pozwala jedynie ewidencjonować ofertę, czy też wybrać ją do realnego PO przed pełnym Stage 2D. | Ewidencja oferty możliwa; wybór produktu do operacyjnego PO/zużycia wymaga B3 review. | Stage 2C nie implementuje dowodów/allergen workflow; akceptacja ceny nie może być interpretowana jako bezpieczeństwo. |
+| ID | Wiążąca reguła | Konsekwencja architektoniczna |
+|---|---|---|
+| D-01 | Oficjalne kursy NBP; kontrolowane, audytowane nadpisania ręczne. | Import idempotentny zachowuje identyfikator publikacji i hash źródła. Nadpisanie jest osobnym, niezmiennym zdarzeniem z uprawnieniem FX, powodem i referencją do kursu NBP; brak niejawnego kursu zastępczego. |
+| D-02 | Kurs obowiązuje dla daty operacji w `Europe/Warsaw`; weekendy i święta używają najnowszego wcześniejszego kursu NBP. Nie wymyśla się ani nie zakłada kursu. | Snapshot zapisuje lokalną datę operacji, datę tabeli NBP, źródło i czas rejestracji. Brak dostępnego kursu blokuje przeliczenie PLN; obca kwota może pozostać `SOURCE_ONLY`. |
+| D-03 | Korekta historyczna tworzy osobny audytowany restatement; oryginalny snapshot jest niezmienny. | Restatement wskazuje oryginał, podstawę i wynik. Nie aktualizuje historycznych cen ani zamkniętych kosztów; restatement Production należy do tej domeny. |
+| D-04 | Pełna precyzja obliczeń pośrednich; `HALF-EVEN` wyłącznie dla końcowego wyniku. Księgowe i podatkowe zasady pozostają osobne. | Arytmetyka dziesiętna/`NUMERIC`, bez `float` i zaokrągleń operandów; tryb nie jest parametrem API. Skala prezentacji nie zastępuje wartości obliczeniowej ani reguł księgowych. |
+| D-05 | Jedna kanoniczna cena referencyjna netto w PLN na jednostkę bazową; zachowane źródłowa kwota, waluta i historia FX. | Jeden event stream per surowiec; źródłowa oferta i snapshot kursu są przypięte, jeśli dotyczy. |
+| D-06 | Prosta jednostka zakupu z obliczaną całkowitą zawartością; bez opakowań mieszanych w 2C. | Jedna rewizja produktu zawiera jeden surowiec, UOM i ilość całkowitą oraz wyliczoną ilość bazową; brak hierarchii opakowań i komponentów mieszanych. |
+| D-07 | Wiele ofert może mieć waluty, progi ilościowe, MOQ i okresy ważności; system nie wybiera automatycznie dostawcy/oferty. | Każde zdarzenie określa warunek, walutę, jednostkę, przedział ilościowy i okres ważności; nakładające się pasma są odrzucane. Ranking i wybór pozostają jawne po stronie użytkownika/przyszłego modułu Purchasing. |
+| D-08 | Jeden wspólny, tenant-scoped master dostawców dla Raw Materials, Purchasing i Inventory. | `organization_suppliers` jest własnością wspólnej domeny Supplier; moduły współdzielą identyfikator/kontrakt, bez tabel kopii ani utożsamiania go z relacją lokalizacji. |
+| D-09 | Osobne RBAC dla danych dostawców, kosztów zakupu i zarządzania kursami. | Dedykowane permissiony VIEW/MANAGE; rozdzielone od katalogu i od ceny referencyjnej, bez automatycznego grantu lub dziedziczenia z ról lokalnych. |
+| D-10 | Rejestracja produktów/ofert przed zatwierdzeniem alergenów jest dozwolona; operacyjne zakupy i produkcja wymagają zatwierdzonej zgodności Stage 2D. | 2C nie implementuje ani nie symuluje weryfikacji. Każdy zapis/użycie w systemie zależnym sprawdza zatwierdzenie zgodne z dokładną rewizją; `PENDING`/brak/nieaktualna weryfikacja blokuje operację. |
 
 ## 13. Plan weryfikacji implementacji
 
@@ -396,9 +407,9 @@ Wszystkie integracyjne/migracyjne testy uruchamiać wyłącznie na disposable Po
 ## 14. Kryteria akceptacji Stage 2C
 
 1. W organizacji może istnieć wiele dostawców, produktów i ofert dla jednego `raw_material_id`, bez tworzenia dodatkowej definicji master.
-2. Produkt/konfiguracja jest historycznie odtwarzalna i wskazuje dokładną rewizję jednostek surowca oraz opakowania.
-3. Każdy event kosztu zakupu zachowuje kwotę, walutę, jednostkę zakupu, effective time, źródło i product revision; nie aktualizuje ceny referencyjnej.
-4. Cena referencyjna jest jednym centralnym event stream per materiał i zachowuje cenę PLN/base unit oraz (gdy ma zastosowanie) źródłową kwotę i niezmienny kurs.
+2. Produkt/konfiguracja jest historycznie odtwarzalna i wskazuje dokładną rewizję jednostek surowca oraz prostego opakowania.
+3. Każdy event kosztu zakupu zachowuje kwotę, walutę, jednostkę zakupu, progi/MOQ, okres ważności, źródło i rewizję produktu; nie aktualizuje ceny referencyjnej.
+4. Cena referencyjna jest jednym centralnym event stream per materiał i zachowuje cenę PLN/base unit oraz (gdy ma zastosowanie) źródłową kwotę i niezmienny kurs NBP/override.
 5. Żaden odczyt/filtr/agregacja/cache/export katalogowy nie ujawnia ceny ani kosztu bez odrębnego permission; rozdzielone prawa nie można wzajemnie odziedziczyć.
 6. Zapis historycznego kosztu nie zmienia się po późniejszej zmianie product package, conversion, price event, FX event lub supplier record.
 7. Brak kompatybilności Stage 2D nie jest interpretowany jako zgodność ani zgoda na zakupowe/produkcyjne użycie.
@@ -408,4 +419,4 @@ Wszystkie integracyjne/migracyjne testy uruchamiać wyłącznie na disposable Po
 
 ## 15. Podsumowanie
 
-Projekt proponuje rozszerzenie Stage 2B o tenant-scoped dostawców, wersje produktów/opakowań, append-only oferty i ceny, jedną referencyjną cenę foodcost oraz audytowane kursy PLN. Nie zmienia zatwierdzonych B1–B8 i nie myli ceny zakupu z kosztem rzeczywistej partii. Przed implementacją należy zatwierdzić D-01–D-10 albo jawnie zdecydować, które nierozstrzygnięte pozycje są warunkami wejścia. Moduł pozostaje `NOT_READY`.
+Projekt rozszerza Stage 2B o wspólny tenant-scoped master dostawców, wersje prostych produktów/opakowań, append-only oferty i ceny, jedną referencyjną cenę foodcost oraz kursy NBP z kontrolowanym override. Zawiera wiążące D-01–D-10, zachowuje B1–B8 i nie myli ceny oferty/szacunku z kosztem rzeczywistej partii. Pozostałe ryzyka są techniczne: walidacja zakresu/skali `NUMERIC`, niezawodność i replay synchronizacji NBP, constraints braku nakładających się progów, kompatybilność istniejącego append-only audytu i migracja addytywna. To ryzyka do zamknięcia testami/projektem migracji, nie otwarte decyzje biznesowe. **Rekomendacja architektury: ACCEPT; nie jest to zgoda na rozpoczęcie implementacji.** `RAW_MATERIALS` pozostaje `NOT_READY` i nieaktywne.

@@ -6,6 +6,7 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
@@ -73,6 +74,135 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(2, DB::table('raw_material_aliases')->where('revision_id', $material['revision']['id'])->count());
         $this->assertSame(1, DB::table('raw_material_audit_events')
             ->where('subject_id', $material['id'])->where('event_code', 'CREATED')->count());
+    }
+
+    public function test_view_only_reader_cannot_discover_drafts_or_pending_revisions(): void
+    {
+        $category = $this->category();
+        $draft = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => $category['id'],
+            'name' => 'Tajny szkic',
+            'description' => 'Nieopublikowana treść',
+            'base_unit_code' => 'g',
+        ]);
+        $activeId = $this->declaredMaterial($category['id'], 'Materiał zatwierdzony');
+        $this->rawMaterialService->submit($this->steward, $this->location, $activeId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $activeId, 'Pierwsze zatwierdzenie');
+        $this->rawMaterialService->revise($this->steward, $this->location, $activeId, [
+            'category_id' => $category['id'],
+            'name' => 'Oczekująca poufna zmiana',
+            'description' => 'Nieopublikowany opis',
+            'base_unit_code' => 'g',
+        ]);
+        $this->rawMaterialService->submit($this->steward, $this->location, $activeId);
+
+        $viewer = $this->user('raw-material-view-only@example.test');
+        app(MembershipService::class)->assign($viewer, $this->location);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $viewer,
+            RawMaterialPermission::View,
+            'Odczyt zatwierdzonego katalogu',
+        );
+        $this->selectContext($viewer);
+
+        $this->getJson('/api/v1/raw-materials')->assertOk()->assertJsonPath('meta.total', 1)
+            ->assertJsonMissing(['name' => 'Tajny szkic'])
+            ->assertJsonMissing(['name' => 'Oczekująca poufna zmiana']);
+        $this->getJson('/api/v1/raw-materials?search=Tajny%20szkic')->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/raw-materials?search=Oczekująca%20poufna%20zmiana')
+            ->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/raw-materials?category_id='.$category['id'].'&lifecycle_state=DRAFT')
+            ->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/raw-materials/'.$draft['id'])->assertNotFound()
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_NOT_FOUND')
+            ->assertJsonMissing(['description' => 'Nieopublikowana treść']);
+        $this->getJson('/api/v1/raw-materials/'.$activeId)->assertOk()
+            ->assertJsonPath('data.revision.name', 'Materiał zatwierdzony')
+            ->assertJsonMissing(['description' => 'Nieopublikowany opis']);
+        $this->getJson('/api/v1/raw-materials/'.$activeId.'/revisions')->assertForbidden();
+        $this->getJson('/api/v1/raw-materials/'.Str::uuid())->assertNotFound()
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_NOT_FOUND');
+    }
+
+    public function test_draft_can_be_edited_and_returned_for_changes_without_mutating_prior_revisions(): void
+    {
+        $category = $this->category();
+        $material = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => $category['id'],
+            'name' => 'Szkic do edycji',
+            'base_unit_code' => 'g',
+        ]);
+        $originalRevisionId = $material['revision']['id'];
+        $this->selectContext($this->steward);
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', [
+            'category_id' => $category['id'],
+            'name' => 'Poprawiony szkic',
+            'description' => 'Pierwsza edycja',
+            'base_unit_code' => 'g',
+        ])->assertOk()->assertJsonPath('data.revision.revision_no', 2)
+            ->assertJsonPath('data.revision.name', 'Poprawiony szkic');
+        $this->assertSame('Szkic do edycji', DB::table('raw_material_revisions')
+            ->where('id', $originalRevisionId)->value('name'));
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->returnForChanges(
+            $this->steward,
+            $this->location,
+            $material['id'],
+            'Doprecyzuj opis',
+        );
+        $returnedRevisionId = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
+        $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $category['id'],
+            'name' => 'Poprawiony szkic ponownie',
+            'description' => 'Druga edycja',
+            'base_unit_code' => 'g',
+        ]);
+
+        $revisions = $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']);
+        $this->assertCount(3, $revisions);
+        $this->assertSame('DRAFT', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        $this->assertNotSame(
+            $returnedRevisionId,
+            DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id'),
+        );
+        $this->assertSame(2, DB::table('raw_material_audit_events')
+            ->where('subject_id', $material['id'])->where('event_code', 'REVISION_CREATED')->count());
+    }
+
+    public function test_editing_an_active_material_keeps_approved_snapshot_until_reapproval(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Materiał przed zmianą');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsze zatwierdzenie');
+        $approvedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+
+        $this->rawMaterialService->revise($this->steward, $this->location, $materialId, [
+            'category_id' => $category['id'],
+            'name' => 'Materiał po zmianie',
+            'description' => 'Zmiana oczekuje na zatwierdzenie',
+            'base_unit_code' => 'g',
+        ]);
+        $pendingRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
+        $this->assertNotSame($approvedRevisionId, $pendingRevisionId);
+        $this->assertSame('DECLARED', DB::table('raw_material_revisions')
+            ->where('id', $pendingRevisionId)->value('allergen_state'));
+        $this->assertSame('Materiał przed zmianą', $this->rawMaterialService
+            ->show($this->steward, $this->location, $materialId)['revision']['name']);
+
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->assertSame($approvedRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id'));
+        $this->assertSame($pendingRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('pending_revision_id'));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowne zatwierdzenie');
+
+        $this->assertSame($pendingRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id'));
+        $this->assertSame('Materiał przed zmianą', DB::table('raw_material_revisions')
+            ->where('id', $approvedRevisionId)->value('name'));
+        $this->assertSame(2, DB::table('raw_material_revision_approval_events')
+            ->whereIn('revision_id', [$approvedRevisionId, $pendingRevisionId])
+            ->where('outcome', 'APPROVED')->count());
     }
 
     public function test_duplicate_terms_and_client_supplied_metric_factors_are_rejected_atomically(): void

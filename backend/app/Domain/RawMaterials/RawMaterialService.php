@@ -85,11 +85,12 @@ final class RawMaterialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $query = DB::table('raw_materials as materials')
             ->leftJoin('raw_material_revisions as revisions', function ($join): void {
-                $join->on('revisions.id', '=', DB::raw('COALESCE(materials.approved_revision_id, materials.working_revision_id)'))
+                $join->on('revisions.id', '=', 'materials.approved_revision_id')
                     ->on('revisions.organization_id', '=', 'materials.organization_id');
             })
             ->leftJoin('raw_material_categories as categories', 'categories.id', '=', 'revisions.category_id')
             ->where('materials.organization_id', $actor->organization_id)
+            ->whereNotNull('materials.approved_revision_id')
             ->select([
                 'materials.id', 'materials.code', 'materials.lifecycle_state',
                 'revisions.id as revision_id', 'revisions.revision_no', 'revisions.name',
@@ -99,13 +100,13 @@ final class RawMaterialService
 
         if (isset($filters['search'])) {
             $search = self::normalizeTerm($filters['search']);
-            $query->where(function ($builder) use ($search): void {
+            $query->where(function ($builder) use ($search, $filters): void {
                 $builder->whereRaw('lower(revisions.name) LIKE ?', ['%'.addcslashes($search, '%_\\').'%'])
                     ->orWhere('materials.code', 'ilike', '%'.addcslashes($filters['search'], '%_\\').'%')
                     ->orWhereExists(fn ($aliases) => $aliases->selectRaw('1')->from('raw_material_aliases as aliases')
                         ->whereColumn('aliases.raw_material_id', 'materials.id')
                         ->where('aliases.organization_id', DB::raw('materials.organization_id'))
-                        ->whereColumn('aliases.revision_id', DB::raw('COALESCE(materials.approved_revision_id, materials.working_revision_id)'))
+                        ->whereColumn('aliases.revision_id', 'materials.approved_revision_id')
                         ->where('aliases.normalized_alias', 'like', '%'.addcslashes($search, '%_\\').'%'));
             });
         }
@@ -150,7 +151,15 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $material = $this->material($actor, $materialId);
-        $revisionId = $material->approved_revision_id ?? $material->working_revision_id;
+        $revisionId = $material->approved_revision_id;
+        if ($revisionId === null) {
+            $canInspectDraft = $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::Edit)
+                || $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::AuditView);
+            if (! $canInspectDraft) {
+                throw new RawMaterialException('RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            $revisionId = $material->working_revision_id ?? $material->pending_revision_id;
+        }
         $revision = $revisionId ? DB::table('raw_material_revisions')->where('id', $revisionId)->first() : null;
 
         return $this->presentMaterial($material, $revision);
@@ -253,7 +262,26 @@ final class RawMaterialService
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
             $material = $this->material($actor, $materialId, true);
             if (! in_array($material->lifecycle_state, ['DRAFT', 'ACTIVE'], true)
-                || $material->pending_revision_id !== null || $material->working_revision_id !== null) {
+                || $material->pending_revision_id !== null
+                || ($material->lifecycle_state === 'DRAFT' && $material->working_revision_id === null)) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_REVISION_NOT_EDITABLE',
+                    __('messages.raw_material_revision_not_editable'),
+                );
+            }
+            $baseRevisionId = $material->working_revision_id ?? $material->approved_revision_id;
+            if ($baseRevisionId === null) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_REVISION_NOT_EDITABLE',
+                    __('messages.raw_material_revision_not_editable'),
+                );
+            }
+            $baseRevision = DB::table('raw_material_revisions')
+                ->where('organization_id', $actor->organization_id)
+                ->where('raw_material_id', $materialId)
+                ->where('id', $baseRevisionId)
+                ->first();
+            if (! $baseRevision) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_REVISION_NOT_EDITABLE',
                     __('messages.raw_material_revision_not_editable'),
@@ -269,6 +297,7 @@ final class RawMaterialService
                 'working_revision_id' => $revisionId,
                 'updated_at' => now(),
             ]);
+            $criticalChange = $material->lifecycle_state === 'ACTIVE';
             $revision = $this->insertRevision(
                 $actor,
                 $materialId,
@@ -277,13 +306,15 @@ final class RawMaterialService
                 $input,
                 $unitData,
                 $aliases,
-                true,
+                $criticalChange,
                 $input['change_reason'] ?? null,
+                $baseRevision->allergen_state,
             );
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'REVISION_CREATED', null, [
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
-                'critical_change' => true,
+                'previous_revision_id' => $baseRevisionId,
+                'critical_change' => $criticalChange,
             ]);
 
             return $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);

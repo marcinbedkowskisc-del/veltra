@@ -126,8 +126,7 @@ final class OrganizationRawMaterialPermissionAdministration
                 ->where('id', $grantId)
                 ->first();
 
-            if (! $grant || $grant->granted_by !== $actor->id
-                || ! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::from($grant->permission))) {
+            if (! $grant) {
                 throw new AuthorizationException(__('messages.unauthorized'));
             }
 

@@ -50,9 +50,24 @@ final class RawMaterialAuthorization
             fn (object $grant): string => $grant->id,
             DB::select(<<<'SQL'
                 WITH RECURSIVE effective_grants AS (
-                    SELECT grants.id, grants.organization_id, grants.user_id, grants.permission, grants.delegation_source_id
+                    SELECT grants.id, grants.organization_id, grants.user_id, grants.permission,
+                        grants.delegation_source_id, grants.valid_from, grants.valid_until
                     FROM organization_permission_grants grants
+                    JOIN organizations ON organizations.id = grants.organization_id
+                    JOIN users recipient ON recipient.id = grants.user_id
+                        AND recipient.organization_id = grants.organization_id
                     WHERE grants.organization_id = ?
+                        AND organizations.is_active
+                        AND recipient.is_active
+                        AND recipient.email_verified_at IS NOT NULL
+                        AND EXISTS (
+                            SELECT 1 FROM location_memberships memberships
+                            JOIN locations ON locations.id = memberships.location_id
+                                AND locations.organization_id = memberships.organization_id
+                            WHERE memberships.user_id = recipient.id
+                                AND memberships.organization_id = grants.organization_id
+                                AND memberships.is_active AND locations.is_active
+                        )
                         AND grants.delegation_source_id IS NULL
                         AND grants.valid_from <= statement_timestamp()
                         AND (grants.valid_until IS NULL OR grants.valid_until > statement_timestamp())
@@ -61,14 +76,43 @@ final class RawMaterialAuthorization
                             WHERE events.grant_id = grants.id AND events.event_type = 'REVOKED'
                         )
                     UNION ALL
-                    SELECT child.id, child.organization_id, child.user_id, child.permission, child.delegation_source_id
+                    SELECT child.id, child.organization_id, child.user_id, child.permission,
+                        child.delegation_source_id, child.valid_from, child.valid_until
                     FROM organization_permission_grants child
                     JOIN effective_grants parent ON child.delegation_source_id = parent.id
+                    JOIN users recipient ON recipient.id = child.user_id
+                        AND recipient.organization_id = child.organization_id
                     WHERE child.valid_from <= statement_timestamp()
+                        AND child.granted_by = parent.user_id
+                        AND child.permission = parent.permission
+                        AND recipient.is_active
+                        AND recipient.email_verified_at IS NOT NULL
+                        AND EXISTS (
+                            SELECT 1 FROM location_memberships memberships
+                            JOIN locations ON locations.id = memberships.location_id
+                                AND locations.organization_id = memberships.organization_id
+                            WHERE memberships.user_id = recipient.id
+                                AND memberships.organization_id = child.organization_id
+                                AND memberships.is_active AND locations.is_active
+                        )
                         AND (child.valid_until IS NULL OR child.valid_until > statement_timestamp())
                         AND NOT EXISTS (
                             SELECT 1 FROM organization_permission_grant_events events
                             WHERE events.grant_id = child.id AND events.event_type = 'REVOKED'
+                        )
+                        AND EXISTS (
+                            SELECT 1 FROM organization_permission_grants authority
+                            WHERE authority.organization_id = child.organization_id
+                                AND authority.user_id = child.granted_by
+                                AND authority.permission = 'RAW_MATERIALS_PERMISSION_DELEGATE'
+                                AND authority.delegation_source_id IS NULL
+                                AND authority.valid_from <= statement_timestamp()
+                                AND (authority.valid_until IS NULL
+                                    OR authority.valid_until > statement_timestamp())
+                                AND NOT EXISTS (
+                                    SELECT 1 FROM organization_permission_grant_events events
+                                    WHERE events.grant_id = authority.id AND events.event_type = 'REVOKED'
+                                )
                         )
                 )
                 SELECT id FROM effective_grants

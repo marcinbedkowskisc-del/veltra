@@ -657,6 +657,34 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
+    public function test_postgresql_half_even_preserves_large_values_and_fractional_precision(): void
+    {
+        $rounding = DB::selectOne(<<<'SQL'
+            SELECT
+                raw_materials_round_half_even_v1('50000000.12345678901234'::numeric, 14)::text AS large_positive,
+                raw_materials_round_half_even_v1('-50000000.12345678901234'::numeric, 14)::text AS large_negative,
+                raw_materials_round_half_even_v1('0.123456789012345'::numeric, 14)::text AS fractional_even_tie,
+                raw_materials_round_half_even_v1('-0.123456789012345'::numeric, 14)::text AS fractional_negative_even_tie,
+                raw_materials_round_half_even_v1('0.123456789012355'::numeric, 14)::text AS fractional_odd_tie,
+                raw_materials_round_half_even_v1('-0.123456789012355'::numeric, 14)::text AS fractional_negative_odd_tie,
+                raw_materials_round_half_even_v1(2.5, 0)::text AS positive_even_tie,
+                raw_materials_round_half_even_v1(3.5, 0)::text AS positive_odd_tie,
+                raw_materials_round_half_even_v1(-2.5, 0)::text AS negative_even_tie,
+                raw_materials_round_half_even_v1(-3.5, 0)::text AS negative_odd_tie
+            SQL);
+
+        $this->assertSame('50000000.12345678901234', $rounding->large_positive);
+        $this->assertSame('-50000000.12345678901234', $rounding->large_negative);
+        $this->assertSame('0.12345678901234', $rounding->fractional_even_tie);
+        $this->assertSame('-0.12345678901234', $rounding->fractional_negative_even_tie);
+        $this->assertSame('0.12345678901236', $rounding->fractional_odd_tie);
+        $this->assertSame('-0.12345678901236', $rounding->fractional_negative_odd_tie);
+        $this->assertSame('2', $rounding->positive_even_tie);
+        $this->assertSame('4', $rounding->positive_odd_tie);
+        $this->assertSame('-2', $rounding->negative_even_tie);
+        $this->assertSame('-4', $rounding->negative_odd_tie);
+    }
+
     public function test_reference_price_view_does_not_disclose_purchasing_source_without_cost_permission(): void
     {
         $fixture = $this->createCommercialOfferFixture('Cena z oferty', 'SOURCE_01', 'SOURCE-1', 'source-disclosure');

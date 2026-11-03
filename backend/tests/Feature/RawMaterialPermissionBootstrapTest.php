@@ -8,8 +8,10 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
+use App\Domain\RawMaterials\RawMaterialPermissionUpgrade;
 use App\Models\Location;
 use App\Models\LocationModuleState;
 use App\Models\Organization;
@@ -112,6 +114,175 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
                 $this->assertSame(0, DB::table('organization_permission_grants')
                     ->where('organization_id', $administrator->organization_id)->count());
             }
+        }
+    }
+
+    public function test_existing_organization_permission_upgrade_is_explicit_idempotent_and_permanently_revocable(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->user('permission-upgrade-bootstrap-admin@example.test');
+        $this->role($administrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($administrator, $location);
+        $steward = $this->user('permission-upgrade-steward@example.test');
+        app(MembershipService::class)->assign($steward, $location);
+        $this->role($steward, BusinessRole::Administrator);
+        $recipient = $this->user('permission-upgrade-recipient@example.test');
+        app(MembershipService::class)->assign($recipient, $location);
+        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $initialGrants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $administrator->id,
+            $steward->id,
+            [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+            'Jawne ustanowienie opiekuna',
+            self::PASSWORD,
+        );
+        $authorityGrant = collect($initialGrants)
+            ->firstWhere('permission', RawMaterialPermission::PermissionDelegate->value);
+        $permissions = [
+            RawMaterialPermission::PurchasingCostsView->value,
+            RawMaterialPermission::SupplierView->value,
+        ];
+        $upgrade = app(RawMaterialPermissionUpgrade::class);
+        try {
+            $upgrade->grant(
+                $steward->id,
+                $recipient->id,
+                $permissions,
+                'Uwierzytelnienie musi być ponowione',
+                'stage2c-upgrade-badpass',
+                'Nieprawidłowe-Hasło!99',
+            );
+            $this->fail('A permission upgrade with an incorrect password must be denied.');
+        } catch (AuthorizationException) {
+            $this->assertSame(0, DB::table('raw_material_permission_upgrade_operations')->count());
+        }
+
+        $result = $upgrade->grant(
+            $steward->id,
+            $recipient->id,
+            $permissions,
+            'Zatwierdzony zakres dla organizacji już działającej',
+            'stage2c-upgrade-0001',
+            self::PASSWORD,
+        );
+
+        $this->assertFalse($result['replayed']);
+        $this->assertCount(2, $result['grants']);
+        $this->assertSame($authorityGrant['id'], DB::table('raw_material_permission_upgrade_operations')
+            ->where('id', $result['operation_id'])->value('authority_grant_id'));
+        $this->assertSame($permissions, DB::table('organization_permission_grants')
+            ->where('bootstrap_operation_id', $result['operation_id'])
+            ->orderBy('permission')->pluck('permission')->all());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('operation_id', $result['operation_id'])
+            ->where('event_code', 'PERMISSION_UPGRADE')
+            ->where('actor_user_id', $steward->id)
+            ->where('outcome', 'ACCEPTED')->count());
+        $this->assertSame(2, count(app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($recipient, RawMaterialPermission::SupplierView))
+            + count(app(RawMaterialAuthorization::class)
+                ->effectiveGrantIds($recipient, RawMaterialPermission::PurchasingCostsView)));
+        $this->assertSame(0, LocationModuleState::where('organization_id', $administrator->organization_id)
+            ->where('module_key', 'RAW_MATERIALS')->count());
+
+        $retry = $upgrade->grant(
+            $steward->id,
+            $recipient->id,
+            array_reverse($permissions),
+            'Zatwierdzony zakres dla organizacji już działającej',
+            'stage2c-upgrade-0001',
+            self::PASSWORD,
+        );
+        $this->assertTrue($retry['replayed']);
+        $this->assertSame($result['operation_id'], $retry['operation_id']);
+        $this->assertSame($result['grants'], $retry['grants']);
+        $this->assertSame(2, DB::table('organization_permission_grants')
+            ->where('bootstrap_operation_id', $result['operation_id'])->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('operation_id', $result['operation_id'])->where('event_code', 'PERMISSION_UPGRADE')->count());
+
+        try {
+            $upgrade->grant(
+                $steward->id,
+                $recipient->id,
+                [RawMaterialPermission::SupplierManage->value],
+                'Inna lista dla istniejącego klucza',
+                'stage2c-upgrade-0001',
+                self::PASSWORD,
+            );
+            $this->fail('A reused idempotency key with changed permissions must conflict.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_IDEMPOTENCY_CONFLICT', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+        }
+
+        try {
+            DB::transaction(fn () => DB::table('raw_material_permission_upgrade_operations')
+                ->where('id', $result['operation_id'])->update(['reason' => 'Niedozwolona zmiana']));
+            $this->fail('Permission-upgrade operations must be append-only.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0]);
+        }
+        try {
+            DB::transaction(fn () => DB::table('raw_material_audit_events')
+                ->where('operation_id', $result['operation_id'])->update(['reason_code' => 'Niedozwolona zmiana']));
+            $this->fail('Permission-upgrade audit events must be append-only.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0]);
+        }
+
+        User::whereKey($steward->id)->update(['is_active' => false]);
+        $grantIds = collect($result['grants'])->pluck('id');
+        $this->assertSame($grantIds->count(), DB::table('organization_permission_grant_events')
+            ->whereIn('grant_id', $grantIds)->where('event_type', 'REVOKED')->count());
+        User::whereKey($steward->id)->update(['is_active' => true]);
+        $this->assertSame([], app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($recipient, RawMaterialPermission::SupplierView));
+        $this->assertSame([], app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($recipient, RawMaterialPermission::PurchasingCostsView));
+    }
+
+    public function test_permission_upgrade_denies_administrators_without_delegate_authority_and_rejects_forged_sql_grants(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->user('permission-upgrade-denied-admin@example.test');
+        $this->role($administrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($administrator, $location);
+        $recipient = $this->user('permission-upgrade-denied-recipient@example.test');
+        app(MembershipService::class)->assign($recipient, $location);
+        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $service = app(RawMaterialPermissionUpgrade::class);
+
+        try {
+            $service->grant(
+                $administrator->id,
+                $recipient->id,
+                [RawMaterialPermission::SupplierManage->value],
+                'Brak prawa delegowania',
+                'stage2c-upgrade-denied',
+                self::PASSWORD,
+            );
+            $this->fail('An administrator without permission-delegation authority must be denied.');
+        } catch (AuthorizationException) {
+            $this->assertSame(0, DB::table('raw_material_permission_upgrade_operations')->count());
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+        }
+
+        try {
+            DB::table('organization_permission_grants')->insert([
+                'id' => (string) Str::uuid(),
+                'organization_id' => $administrator->organization_id,
+                'user_id' => $recipient->id,
+                'permission' => RawMaterialPermission::SupplierManage->value,
+                'granted_by' => $administrator->id,
+                'valid_from' => now(),
+                'delegation_source_id' => null,
+                'bootstrap_operation_id' => (string) Str::uuid(),
+                'reason_code' => 'DIRECT_SQL_PROBE',
+            ]);
+            $this->fail('A root grant without an audited bootstrap or upgrade operation must be rejected.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0]);
         }
     }
 

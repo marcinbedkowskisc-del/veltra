@@ -71,6 +71,9 @@ final class RawMaterialAuthorization
                         AND grants.delegation_source_id IS NULL
                         AND grants.valid_from <= statement_timestamp()
                         AND (grants.valid_until IS NULL OR grants.valid_until > statement_timestamp())
+                        AND raw_materials_permission_upgrade_authority_is_effective(
+                            grants.organization_id, grants.bootstrap_operation_id
+                        )
                         AND NOT EXISTS (
                             SELECT 1 FROM organization_permission_grant_events events
                             WHERE events.grant_id = grants.id AND events.event_type = 'REVOKED'

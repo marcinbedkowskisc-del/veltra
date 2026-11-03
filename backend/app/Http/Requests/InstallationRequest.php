@@ -12,6 +12,18 @@ abstract class InstallationRequest extends FormRequest
         return true;
     }
 
+    public function idempotencyKey(): string
+    {
+        $key = $this->header('Idempotency-Key');
+        if (! is_string($key) || preg_match('/^[\x21-\x7E]{1,120}$/D', $key) !== 1) {
+            throw ValidationException::withMessages([
+                'Idempotency-Key' => [__('messages.raw_materials_idempotency_key_required')],
+            ]);
+        }
+
+        return $key;
+    }
+
     protected function identifierRules(): array
     {
         return ['string', 'max:50', 'regex:/^[A-Z0-9_-]+$/'];

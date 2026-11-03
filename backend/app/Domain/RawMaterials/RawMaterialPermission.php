@@ -15,6 +15,14 @@ enum RawMaterialPermission: string
     case Archive = 'RAW_MATERIALS_ARCHIVE';
     case Restore = 'RAW_MATERIALS_RESTORE';
     case CategoryManage = 'RAW_MATERIALS_CATEGORY_MANAGE';
+    case SupplierView = 'RAW_MATERIALS_SUPPLIER_VIEW';
+    case SupplierManage = 'RAW_MATERIALS_SUPPLIER_MANAGE';
+    case PurchasingCostsView = 'RAW_MATERIALS_PURCHASING_COSTS_VIEW';
+    case PurchasingCostsManage = 'RAW_MATERIALS_PURCHASING_COSTS_MANAGE';
+    case ReferencePriceView = 'RAW_MATERIALS_REFERENCE_PRICE_VIEW';
+    case ReferencePriceManage = 'RAW_MATERIALS_REFERENCE_PRICE_MANAGE';
+    case ExchangeRateView = 'RAW_MATERIALS_EXCHANGE_RATE_VIEW';
+    case ExchangeRateManage = 'RAW_MATERIALS_EXCHANGE_RATE_MANAGE';
     case AuditView = 'RAW_MATERIALS_AUDIT_VIEW';
     case PermissionDelegate = 'RAW_MATERIALS_PERMISSION_DELEGATE';
 

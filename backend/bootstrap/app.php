@@ -50,6 +50,11 @@ return Application::configure(basePath: dirname(__DIR__))
 
                 return false;
             }
+            if (preg_match('/\b(raw_materials|raw_material_revisions|raw_material_revision_units|raw_material_aliases|raw_material_audit_events|raw_material_categories|raw_material_category_closure|raw_materials_currency_codes|organization_suppliers|supplier_products|supplier_product_revisions|supplier_offers|organization_exchange_rate_events|supplier_offer_events|supplier_offer_fx_normalization_events|raw_material_reference_price_events|raw_material_financial_restatements|raw_materials_commercial_idempotency|raw_materials_commercial_audit_events)\b/i', $exception->getSql())) {
+                Log::error('Raw-material database operation failed.', ['sqlstate' => $exception->errorInfo[0] ?? null]);
+
+                return false;
+            }
         });
         $exceptions->render(function (BusinessRuleViolation $exception, Request $request) {
             if ($request->is('api/v1/*')) {
@@ -62,7 +67,7 @@ return Application::configure(basePath: dirname(__DIR__))
                     'error' => [
                         'code' => $exception->errorCode,
                         'message' => $exception->getMessage(),
-                    ],
+                    ] + ($exception->details === [] ? [] : ['details' => $exception->details]),
                 ], $exception->status);
             }
 
@@ -124,7 +129,7 @@ return Application::configure(basePath: dirname(__DIR__))
                         'code' => 'RAW_MATERIAL_INTEGRITY_CONFLICT',
                         'message' => __('messages.raw_material_integrity_conflict'),
                     ],
-                ], in_array($exception->errorInfo[0] ?? null, ['23503', '23505', '23514'], true) ? 409 : 500);
+                ], in_array($exception->errorInfo[0] ?? null, ['23503', '23505', '23514', '23P01'], true) ? 409 : 500);
             }
             if ($request->is('api/v1/auth/*', 'api/v1/security/*', 'api/v1/account/*')) {
                 return response()->json(['message' => __('messages.identity_operation_failed')], 500);

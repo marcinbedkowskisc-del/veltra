@@ -7,6 +7,8 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
+use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
@@ -15,7 +17,10 @@ use App\Models\LocationModuleState;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Tests\AuthorizationTestCase;
@@ -323,8 +328,450 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(7, DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count());
     }
 
+    public function test_supplier_products_offer_prices_and_cost_permissions_are_isolated(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Mąka do oferty', [[
+            'unit_code' => 'mg',
+            'dimension' => 'MASS',
+            'conversion_kind' => 'METRIC',
+            'to_base_factor' => '0.001000000000',
+            'basis' => null,
+        ]]);
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza');
+        $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+        $this->selectContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/suppliers', [
+            'supplier_code' => 'MISSING_KEY',
+            'display_name' => 'Dostawca bez klucza',
+        ])->assertUnprocessable()
+            ->assertJsonPath('errors.Idempotency-Key.0', __('messages.raw_materials_idempotency_key_required'));
+        $this->assertSame(0, DB::table('organization_suppliers')->where('organization_id', $this->steward->organization_id)->count());
+
+        $supplierResponse = $this->postJson('/api/v1/raw-materials/suppliers', [
+            'supplier_code' => 'MILL_01',
+            'display_name' => 'Młyn testowy',
+            'tax_identifier' => '1234567890',
+        ], ['Idempotency-Key' => 'supplier-create-0001'])->assertCreated();
+        $supplierId = $supplierResponse->json('data.id');
+        $supplierResponse->assertJsonMissing(['tax_identifier' => '1234567890']);
+
+        $productResponse = $this->postJson('/api/v1/raw-materials/'.$materialId.'/supplier-products', [
+            'supplier_id' => $supplierId,
+            'raw_material_revision_id' => $materialRevisionId,
+            'product_name' => 'Mąka pszenna 500 g',
+            'supplier_sku' => 'FLOUR-500',
+            'purchase_unit_code' => 'BAG',
+            'content_quantity' => '500000',
+            'content_unit_code' => 'mg',
+        ], ['Idempotency-Key' => 'product-create-0001'])->assertCreated();
+        $productId = $productResponse->json('data.id');
+        $productRevisionId = $productResponse->json('data.current_revision.id');
+        $this->assertSame('500.00000000000000', $productResponse->json('data.current_revision.base_quantity'));
+        $this->assertSame('0.001000000000', $productResponse->json('data.current_revision.to_base_factor'));
+
+        $offerResponse = $this->postJson('/api/v1/raw-materials/supplier-products/'.$productId.'/offers', [
+            'offer_reference' => 'Q-2026-01',
+        ], ['Idempotency-Key' => 'offer-create-0001'])->assertCreated();
+        $offerId = $offerResponse->json('data.id');
+        $eventResponse = $this->postJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events', [
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->toDateString(),
+            'net_amount_per_purchase_unit' => '5.00000000',
+            'currency_code' => 'PLN',
+            'quantity_from' => '1',
+            'reason_code' => 'SUPPLIER_QUOTE',
+        ], ['Idempotency-Key' => 'price-event-00001'])->assertCreated();
+        $eventId = $eventResponse->json('data.id');
+        $this->assertSame('NORMALIZED', $eventResponse->json('data.normalization_status'));
+        $this->assertTrue((bool) DB::table('supplier_product_revisions')->where('id', $productRevisionId)->exists());
+        $this->assertTrue((bool) DB::selectOne(
+            'SELECT reporting_amount_pln_per_base_unit = 0.01 AS matches
+                FROM supplier_offer_fx_normalization_events WHERE supplier_offer_event_id = ?',
+            [$eventId],
+        )->matches);
+        $this->assertSame('1', (string) DB::table('supplier_offer_fx_normalization_events')
+            ->where('supplier_offer_event_id', $eventId)->value('rate_snapshot'));
+        $this->postJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events', [
+            'event_type' => 'WITHDRAWN',
+            'valid_from' => now()->toDateString(),
+            'supersedes_event_id' => $eventId,
+            'reason_code' => 'OFFER_WITHDRAWN',
+        ], ['Idempotency-Key' => 'price-withdrawal-0001'])->assertCreated()
+            ->assertJsonPath('data.event_type', 'WITHDRAWN');
+        $replacement = $this->postJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events', [
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->toDateString(),
+            'net_amount_per_purchase_unit' => '6.00000000',
+            'currency_code' => 'PLN',
+            'quantity_from' => '1',
+            'reason_code' => 'UPDATED_QUOTE',
+        ], ['Idempotency-Key' => 'price-event-00002'])->assertCreated();
+        $this->assertSame(3, DB::table('supplier_offer_events')->where('offer_id', $offerId)->count());
+
+        Log::spy();
+        $this->postJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events', [
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->toDateString(),
+            'net_amount_per_purchase_unit' => '9.00000000',
+            'currency_code' => 'PLN',
+            'quantity_from' => '1',
+            'reason_code' => 'OVERLAPPING_QUOTE',
+        ], ['Idempotency-Key' => 'price-event-overlap-0001'])->assertStatus(409)
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_INTEGRITY_CONFLICT')
+            ->assertJsonMissing(['net_amount_per_purchase_unit' => '9.00000000']);
+        Log::shouldHaveReceived('error')->with(
+            'Raw-material database operation failed.',
+            \Mockery::on(fn (array $context): bool => $context === ['sqlstate' => '23P01']),
+        );
+
+        $catalogManager = $this->user('raw-material-supplier-manager@example.test');
+        app(MembershipService::class)->assign($catalogManager, $this->location);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $catalogManager,
+            RawMaterialPermission::SupplierManage,
+            'Zarządzanie danymi dostawców',
+        );
+        $this->assertFalse(app(RawMaterialAuthorization::class)->hasEffectiveGrant(
+            $catalogManager,
+            RawMaterialPermission::PurchasingCostsManage,
+        ));
+        $this->flushSession();
+        $this->selectContext($catalogManager->fresh());
+        $this->postJson('/api/v1/raw-materials/supplier-products/'.$productId.'/offers', [
+            'offer_reference' => 'Oferta bez uprawnienia kosztowego',
+        ], ['Idempotency-Key' => 'offer-without-cost-permission'])->assertForbidden();
+        $this->assertSame(1, DB::table('supplier_offers')->where('supplier_product_id', $productId)->count());
+
+        $viewer = $this->user('raw-material-supplier-viewer@example.test');
+        app(MembershipService::class)->assign($viewer, $this->location);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $viewer,
+            RawMaterialPermission::SupplierView,
+            'Odczyt danych dostawców',
+        );
+        $this->assertFalse(app(RawMaterialAuthorization::class)->hasEffectiveGrant(
+            $viewer,
+            RawMaterialPermission::PurchasingCostsView,
+        ));
+        $this->flushSession();
+        $this->selectContext($viewer->fresh());
+        $this->getJson('/api/v1/auth/me')->assertOk()
+            ->assertJsonPath('data.email', 'raw-material-supplier-viewer@example.test');
+        $this->getJson('/api/v1/raw-materials/suppliers')->assertOk()
+            ->assertJsonMissing(['tax_identifier' => '1234567890'])
+            ->assertJsonMissing(['net_amount_per_purchase_unit' => '5.00000000']);
+        $this->getJson('/api/v1/raw-materials/'.$materialId.'/supplier-products')->assertOk()
+            ->assertJsonMissing(['net_amount_per_purchase_unit' => '5.00000000']);
+        $this->getJson('/api/v1/raw-materials/supplier-products/'.$productId.'/offers')->assertOk()
+            ->assertJsonMissing(['net_amount_per_purchase_unit' => '6.00000000'])
+            ->assertJsonMissing(['currency_code' => 'PLN']);
+        $this->getJson('/api/v1/raw-materials/supplier-products/'.Str::uuid().'/revisions')->assertNotFound();
+        $this->getJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events')->assertForbidden();
+        $this->getJson('/api/v1/raw-materials/supplier-offers/'.Str::uuid().'/price-events')->assertForbidden();
+
+        try {
+            DB::transaction(fn () => DB::table('supplier_product_revisions')->where('id', $productRevisionId)
+                ->update(['product_name' => 'Niedozwolona zmiana']));
+            $this->fail('A supplier-product revision was mutable.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
+        }
+        try {
+            DB::transaction(fn () => DB::table('supplier_offer_events')->where('id', $eventId)
+                ->update(['net_amount_per_purchase_unit' => '100']));
+            $this->fail('A supplier-price event was mutable.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
+        }
+    }
+
+    public function test_nbp_as_of_overrides_half_even_restatements_and_idempotency(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Cena referencyjna');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona cena');
+        $this->selectContext($this->steward);
+        Http::fake([
+            'https://api.nbp.pl/*' => Http::response(
+                '[{"table":"A","no":"214/A/NBP/2026","effectiveDate":"2026-10-30","rates":[{"currency":"dolar amerykański","code":"USD","mid":4.123456789012}]}]',
+                200,
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+        $commercial = app(RawMaterialCommercialService::class);
+        $sync = $commercial->syncNbpRate(
+            $this->steward,
+            $this->location,
+            'USD',
+            '2026-11-01',
+            'nbp-sync-sunday-0001',
+        );
+        $this->assertSame('2026-10-30', $sync['data']['selected_rate']['rate_date']);
+        $this->assertSame('4.123456789012', $sync['data']['selected_rate']['pln_per_quote_unit']);
+        $nbpRateId = $sync['data']['selected_rate']['id'];
+
+        $override = $commercial->overrideExchangeRate(
+            $this->steward,
+            $this->location,
+            $nbpRateId,
+            '4.000000000000',
+            'KONTROLOWANY_OVERRIDE',
+            'fx-override-000001',
+        );
+        $this->assertSame('MANUAL_OVERRIDE', $override['data']['source_code']);
+        $this->assertSame('4.000000000000', $commercial->exchangeRate(
+            $this->steward,
+            $this->location,
+            'USD',
+            '2026-11-01',
+        )['data']['pln_per_quote_unit']);
+        $this->assertSame('PLN_IDENTITY', $commercial->exchangeRate(
+            $this->steward,
+            $this->location,
+            'PLN',
+            '2026-11-01',
+        )['data']['source_code']);
+
+        $rounding = DB::selectOne(<<<'SQL'
+            SELECT
+                raw_materials_round_half_even_v1(2.5, 0) AS positive_even,
+                raw_materials_round_half_even_v1(3.5, 0) AS positive_odd,
+                raw_materials_round_half_even_v1(-2.5, 0) AS negative_even,
+                raw_materials_round_half_even_v1(-3.5, 0) AS negative_odd
+            SQL);
+        $this->assertSame('2', (string) $rounding->positive_even);
+        $this->assertSame('4', (string) $rounding->positive_odd);
+        $this->assertSame('-2', (string) $rounding->negative_even);
+        $this->assertSame('-4', (string) $rounding->negative_odd);
+
+        $price = $commercial->setReferencePrice(
+            $this->steward,
+            $this->location,
+            $materialId,
+            [
+                'event_type' => 'PRICE_SET',
+                'effective_from' => '2026-11-01',
+                'net_pln_per_base_unit' => '0.00500000000000',
+                'expected_event_no' => 0,
+                'reason_code' => 'INITIAL_REFERENCE',
+            ],
+            'reference-price-0001',
+        );
+        $eventId = $price['data']['id'];
+        $restatement = $commercial->createRestatement(
+            $this->steward,
+            $this->location,
+            $materialId,
+            $eventId,
+            [
+                'restated_net_pln_per_base_unit' => '0.00600000000000',
+                'operation_date' => '2026-11-01',
+                'reason_code' => 'UDOKUMENTOWANA_KOREKTA',
+            ],
+            'restatement-000001',
+        );
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $restatement['data']['original_snapshot_hash']);
+        $this->assertSame('0.00500000000000', (string) DB::table('raw_material_reference_price_events')
+            ->where('id', $eventId)->value('net_pln_per_base_unit'));
+        $this->assertSame(1, DB::table('raw_material_financial_restatements')
+            ->where('original_reference_price_event_id', $eventId)->count());
+
+        $supplierInput = ['supplier_code' => 'IDEMPOTENT', 'display_name' => 'Dostawca idempotentny'];
+        $first = $commercial->createSupplier($this->steward, $this->location, $supplierInput, 'supplier-idempotent-001');
+        $replay = $commercial->createSupplier($this->steward, $this->location, $supplierInput, 'supplier-idempotent-001');
+        $this->assertSame($first['data']['id'], $replay['data']['id']);
+        try {
+            $commercial->createSupplier(
+                $this->steward,
+                $this->location,
+                ['supplier_code' => 'IDEMPOTENT', 'display_name' => 'Inny dostawca'],
+                'supplier-idempotent-001',
+            );
+            $this->fail('An idempotency key was reused with a different payload.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_IDEMPOTENCY_CONFLICT', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+        }
+    }
+
+    public function test_reference_price_view_does_not_disclose_cost_and_commercial_sources_must_be_eligible(): void
+    {
+        $fixture = $this->createCommercialOfferFixture('Cena z oferty', 'SOURCE_01', 'SOURCE-1', 'source-disclosure');
+        $commercial = app(RawMaterialCommercialService::class);
+        $commercial->setReferencePrice($this->steward, $this->location, $fixture['material_id'], [
+            'event_type' => 'PRICE_SET',
+            'effective_from' => now()->toDateString(),
+            'net_pln_per_base_unit' => '5.00000000000000',
+            'expected_event_no' => 0,
+            'source_offer_event_id' => $fixture['price_event_id'],
+            'reason_code' => 'SOURCE_OFFER',
+        ], 'source-disclosure-reference-price');
+
+        $referenceViewer = $this->user('reference-price-only@example.test');
+        app(MembershipService::class)->assign($referenceViewer, $this->location);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $referenceViewer,
+            RawMaterialPermission::ReferencePriceView,
+            'Odczyt cen referencyjnych bez kosztów zakupu',
+        );
+        $this->assertFalse(app(RawMaterialAuthorization::class)->hasEffectiveGrant(
+            $referenceViewer,
+            RawMaterialPermission::PurchasingCostsView,
+        ));
+        $this->flushSession();
+        $this->selectContext($referenceViewer->fresh());
+        $this->getJson('/api/v1/raw-materials/'.$fixture['material_id'].'/reference-prices')
+            ->assertOk()->assertJsonPath('data.0.source', null);
+
+        $this->flushSession();
+        $this->selectContext($this->steward->fresh());
+        $this->getJson('/api/v1/raw-materials/'.$fixture['material_id'].'/reference-prices')
+            ->assertOk()->assertJsonPath('data.0.source.amount', '5.00000000')
+            ->assertJsonPath('data.0.source.currency', 'PLN');
+    }
+
+    public function test_blocked_material_rejects_new_offers_and_offer_prices_in_api_and_postgresql(): void
+    {
+        $fixture = $this->createCommercialOfferFixture('Blokowany surowiec', 'BLOCKED_01', 'BLOCKED-1', 'blocked');
+        $commercial = app(RawMaterialCommercialService::class);
+        $this->rawMaterialService->block($this->steward, $this->location, $fixture['material_id'], 'Blokada testowa');
+
+        $this->postJson('/api/v1/raw-materials/supplier-products/'.$fixture['product_id'].'/offers', [], [
+            'Idempotency-Key' => 'blocked-material-offer-0001',
+        ])->assertNotFound();
+        $this->postJson('/api/v1/raw-materials/supplier-offers/'.$fixture['offer_id'].'/price-events', [
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->toDateString(),
+            'net_amount_per_purchase_unit' => '7.00000000',
+            'currency_code' => 'USD',
+            'quantity_from' => '1',
+            'reason_code' => 'BLOCKED_MATERIAL',
+        ], ['Idempotency-Key' => 'blocked-material-price-0001'])->assertNotFound();
+        $this->assertSame(1, DB::table('supplier_offers')->where('supplier_product_id', $fixture['product_id'])->count());
+        $this->assertSame(1, DB::table('supplier_offer_events')->where('offer_id', $fixture['offer_id'])->count());
+
+        $this->assertConstraintViolation('23514', fn () => DB::table('supplier_offers')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->steward->organization_id,
+            'supplier_product_id' => $fixture['product_id'],
+            'created_by' => $this->steward->id,
+        ]));
+        $this->assertConstraintViolation('23514', fn () => DB::table('supplier_offer_events')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->steward->organization_id,
+            'offer_id' => $fixture['offer_id'],
+            'supplier_product_id' => $fixture['product_id'],
+            'supplier_product_revision_id' => $fixture['product_revision_id'],
+            'event_no' => 2,
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->addDay()->toDateString(),
+            'net_amount_per_purchase_unit' => '7.00000000',
+            'currency_code' => 'USD',
+            'quantity_from' => '1',
+            'recorded_by' => $this->steward->id,
+            'reason_code' => 'DIRECT_SQL_BLOCKED_MATERIAL',
+            'operation_id' => Str::uuid()->toString(),
+        ]));
+    }
+
+    public function test_archived_supplier_cannot_be_used_as_new_reference_price_source_in_api_or_postgresql(): void
+    {
+        $fixture = $this->createCommercialOfferFixture('Archiwizowany dostawca', 'ARCHIVED_01', 'ARCHIVED-1', 'archived');
+        $commercial = app(RawMaterialCommercialService::class);
+        $commercial->archiveSupplier(
+            $this->steward,
+            $this->location,
+            $fixture['supplier_id'],
+            'Archiwizacja testowa',
+            'archived-supplier-archive-001',
+        );
+        $this->postJson('/api/v1/raw-materials/'.$fixture['material_id'].'/reference-prices', [
+            'event_type' => 'PRICE_SET',
+            'effective_from' => now()->toDateString(),
+            'net_pln_per_base_unit' => '5.00000000000000',
+            'expected_event_no' => 0,
+            'source_offer_event_id' => $fixture['price_event_id'],
+            'reason_code' => 'ARCHIVED_SUPPLIER_SOURCE',
+        ], ['Idempotency-Key' => 'archived-supplier-reference-001'])->assertNotFound();
+        $this->assertSame(0, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $fixture['material_id'])->count());
+
+        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_reference_price_events')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->steward->organization_id,
+            'raw_material_id' => $fixture['material_id'],
+            'event_no' => 1,
+            'event_type' => 'PRICE_SET',
+            'effective_from' => now()->toDateString(),
+            'net_pln_per_base_unit' => '5.00000000000000',
+            'source_net_amount' => '5.00000000',
+            'source_currency_code' => 'PLN',
+            'source_offer_event_id' => $fixture['price_event_id'],
+            'source_product_revision_id' => $fixture['product_revision_id'],
+            'rate_snapshot' => '1',
+            'operation_date' => now()->toDateString(),
+            'source_code' => 'PLN_IDENTITY',
+            'reason_code' => 'DIRECT_SQL_ARCHIVED_SUPPLIER',
+            'recorded_by' => $this->steward->id,
+            'operation_id' => Str::uuid()->toString(),
+        ]));
+    }
+
+    public function test_commercial_mutation_rolls_back_when_append_only_audit_fails(): void
+    {
+        DB::unprepared(<<<'SQL'
+            CREATE FUNCTION raw_materials_test_fail_commercial_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'Injected audit failure' USING ERRCODE = 'P0001';
+            END
+            $$;
+            CREATE TRIGGER raw_materials_test_fail_commercial_audit
+                BEFORE INSERT ON raw_materials_commercial_audit_events
+                FOR EACH ROW EXECUTE FUNCTION raw_materials_test_fail_commercial_audit();
+            SQL);
+
+        try {
+            app(RawMaterialCommercialService::class)->createSupplier(
+                $this->steward,
+                $this->location,
+                ['supplier_code' => 'ROLLBACK', 'display_name' => 'Wycofany zapis'],
+                'supplier-rollback-001',
+            );
+            $this->fail('The mutation succeeded despite a failing audit insert.');
+        } catch (QueryException $exception) {
+            $this->assertSame('P0001', $exception->errorInfo[0] ?? null);
+        } finally {
+            DB::unprepared('DROP TRIGGER raw_materials_test_fail_commercial_audit ON raw_materials_commercial_audit_events');
+            DB::unprepared('DROP FUNCTION raw_materials_test_fail_commercial_audit()');
+        }
+
+        $this->assertDatabaseMissing('organization_suppliers', [
+            'organization_id' => $this->steward->organization_id,
+            'supplier_code' => 'ROLLBACK',
+        ]);
+        $this->assertDatabaseMissing('raw_materials_commercial_idempotency', [
+            'organization_id' => $this->steward->organization_id,
+            'idempotency_key' => 'supplier-rollback-001',
+        ]);
+        $this->assertDatabaseMissing('raw_materials_commercial_audit_events', [
+            'organization_id' => $this->steward->organization_id,
+            'event_code' => 'SUPPLIER_CREATED',
+        ]);
+    }
+
     private function selectContext(User $actor): void
     {
+        Auth::forgetGuards();
         $response = $this->actingAs($actor, 'web')->putJson('/api/v1/auth/operating-location', [
             'location_id' => $this->location->id,
         ]);
@@ -392,6 +839,61 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
+    private function createCommercialOfferFixture(
+        string $materialName,
+        string $supplierCode,
+        string $supplierSku,
+        string $keyPrefix,
+    ): array {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], $materialName);
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza');
+        $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+        $this->selectContext($this->steward);
+
+        $commercial = app(RawMaterialCommercialService::class);
+        $supplierId = $commercial->createSupplier($this->steward, $this->location, [
+            'supplier_code' => $supplierCode,
+            'display_name' => $supplierCode,
+        ], $keyPrefix.'-supplier-001')['data']['id'];
+        $product = $commercial->createProduct($this->steward, $this->location, $materialId, [
+            'supplier_id' => $supplierId,
+            'raw_material_revision_id' => $materialRevisionId,
+            'product_name' => $materialName,
+            'supplier_sku' => $supplierSku,
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '1',
+            'content_unit_code' => 'g',
+        ], $keyPrefix.'-product-001')['data'];
+        $productId = $product['id'];
+        $productRevisionId = $product['current_revision']['id'];
+        $offerId = $commercial->createOffer(
+            $this->steward,
+            $this->location,
+            $productId,
+            [],
+            $keyPrefix.'-offer-001',
+        )['data']['id'];
+        $priceEventId = $commercial->recordOfferPriceEvent($this->steward, $this->location, $offerId, [
+            'event_type' => 'PRICE_SET',
+            'valid_from' => now()->toDateString(),
+            'net_amount_per_purchase_unit' => '5.00000000',
+            'currency_code' => 'PLN',
+            'quantity_from' => '1',
+            'reason_code' => 'SUPPLIER_QUOTE',
+        ], $keyPrefix.'-price-event-001')['data']['id'];
+
+        return [
+            'material_id' => $materialId,
+            'supplier_id' => $supplierId,
+            'product_id' => $productId,
+            'product_revision_id' => $productRevisionId,
+            'offer_id' => $offerId,
+            'price_event_id' => $priceEventId,
+        ];
+    }
+
     private function category(): array
     {
         return $this->rawMaterialService->createCategory($this->steward, $this->location, [
@@ -437,7 +939,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
-    private function declaredMaterial(string $categoryId, string $name): string
+    private function declaredMaterial(string $categoryId, string $name, array $additionalUnits = []): string
     {
         $materialId = Str::uuid()->toString();
         $revisionId = Str::uuid()->toString();
@@ -457,7 +959,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'conversion_kind' => 'BASE',
             'to_base_factor' => '1.000000000000',
             'basis' => null,
-        ]];
+        ], ...$additionalUnits];
         $aliases = [['alias' => $name, 'normalized_alias' => $alias]];
         $hash = hash('sha256', json_encode([
             'payload' => $payload,
@@ -486,12 +988,14 @@ class RawMaterialsTest extends AuthorizationTestCase
             'created_by' => $this->steward->id,
             'content_hash' => $hash,
         ]);
-        DB::table('raw_material_revision_units')->insert([
-            'id' => Str::uuid()->toString(),
-            'organization_id' => $this->steward->organization_id,
-            'revision_id' => $revisionId,
-            ...$units[0],
-        ]);
+        foreach ($units as $unit) {
+            DB::table('raw_material_revision_units')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $this->steward->organization_id,
+                'revision_id' => $revisionId,
+                ...$unit,
+            ]);
+        }
         DB::table('raw_material_aliases')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,

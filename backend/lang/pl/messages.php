@@ -91,4 +91,10 @@ return [
     'raw_material_unit_invalid' => 'Wybrana jednostka nie należy do kontrolowanego słownika jednostek.',
     'raw_material_unblock_invalid' => 'Surowiec nie może zostać odblokowany przed zakończeniem oczekującej weryfikacji.',
     'raw_materials_module_unavailable' => 'Moduł surowców nie jest gotowy lub aktywny dla tej lokalizacji.',
+    'raw_materials_currency_invalid' => 'Wybrana waluta nie jest obsługiwana dla wskazanej daty.',
+    'raw_materials_fx_rate_required' => 'Brak zatwierdzonego kursu dla waluty :currency_code i wskazanej daty.',
+    'raw_materials_idempotency_key_required' => 'Wymagany jest prawidłowy nagłówek Idempotency-Key.',
+    'raw_materials_nbp_response_invalid' => 'Otrzymano nieprawidłową odpowiedź z serwisu kursów NBP.',
+    'raw_materials_nbp_unavailable' => 'Serwis kursów NBP jest tymczasowo niedostępny.',
+    'raw_materials_pln_rate_not_importable' => 'Kurs PLN jest kursem tożsamościowym i nie podlega importowi z NBP.',
 ];

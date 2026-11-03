@@ -61,6 +61,40 @@ Route::prefix('v1/raw-materials')->middleware([
     'throttle:security',
     RequireRawMaterialsAvailability::class,
 ])->group(function (): void {
+    Route::get('/suppliers', [RawMaterialController::class, 'suppliers']);
+    Route::post('/suppliers', [RawMaterialController::class, 'storeSupplier']);
+    Route::post('/suppliers/{supplier}/archive', [RawMaterialController::class, 'archiveSupplier'])
+        ->whereUuid('supplier');
+    Route::get('/{material}/supplier-products', [RawMaterialController::class, 'supplierProducts'])
+        ->whereUuid('material');
+    Route::post('/{material}/supplier-products', [RawMaterialController::class, 'storeSupplierProduct'])
+        ->whereUuid('material');
+    Route::get('/supplier-products/{product}/revisions', [RawMaterialController::class, 'supplierProductRevisions'])
+        ->whereUuid('product');
+    Route::post('/supplier-products/{product}/revisions', [RawMaterialController::class, 'reviseSupplierProduct'])
+        ->whereUuid('product');
+    Route::post('/supplier-products/{product}/archive', [RawMaterialController::class, 'archiveSupplierProduct'])
+        ->whereUuid('product');
+    Route::get('/supplier-products/{product}/offers', [RawMaterialController::class, 'supplierOffers'])
+        ->whereUuid('product');
+    Route::post('/supplier-products/{product}/offers', [RawMaterialController::class, 'storeSupplierOffer'])
+        ->whereUuid('product');
+    Route::get('/supplier-offers/{offer}/price-events', [RawMaterialController::class, 'supplierOfferPriceEvents'])
+        ->whereUuid('offer');
+    Route::post('/supplier-offers/{offer}/price-events', [RawMaterialController::class, 'storeSupplierOfferPriceEvent'])
+        ->whereUuid('offer');
+    Route::get('/exchange-rates', [RawMaterialController::class, 'exchangeRate']);
+    Route::post('/exchange-rates/nbp-sync', [RawMaterialController::class, 'syncExchangeRate']);
+    Route::post('/exchange-rates/{rate}/overrides', [RawMaterialController::class, 'overrideExchangeRate'])
+        ->whereUuid('rate');
+    Route::get('/{material}/reference-prices', [RawMaterialController::class, 'referencePrices'])
+        ->whereUuid('material');
+    Route::post('/{material}/reference-prices', [RawMaterialController::class, 'storeReferencePrice'])
+        ->whereUuid('material');
+    Route::get('/{material}/reference-prices/{event}/restatements', [RawMaterialController::class, 'referencePriceRestatements'])
+        ->whereUuid('material')->whereUuid('event');
+    Route::post('/{material}/reference-prices/{event}/restatements', [RawMaterialController::class, 'storeReferencePriceRestatement'])
+        ->whereUuid('material')->whereUuid('event');
     Route::get('/', [RawMaterialController::class, 'index']);
     Route::post('/', [RawMaterialController::class, 'store']);
     Route::get('/categories', [RawMaterialController::class, 'categories']);

@@ -257,6 +257,12 @@ final class RawMaterialCommercialService
                 if ($product->supplier_id !== $input['supplier_id']) {
                     $this->notFound();
                 }
+                $supplier = DB::table('organization_suppliers')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('id', $product->supplier_id)->first();
+                if (! $supplier || $supplier->lifecycle_state !== 'ACTIVE') {
+                    $this->notFound();
+                }
                 $material = $this->material($actor, $product->raw_material_id, activeOnly: true);
                 $revision = $this->insertProductRevision($actor, $productId, $material, $input, $latest->revision_no + 1);
                 $this->audit($actor, $context, $operationId, 'SUPPLIER_PRODUCT', $productId,
@@ -571,6 +577,19 @@ final class RawMaterialCommercialService
                 'currency_code' => [__('messages.raw_materials_pln_rate_not_importable')],
             ]);
         }
+        $payload = ['currency_code' => $currencyCode, 'operation_date' => $operationDate];
+        $replay = $this->existingIdempotencyResponse(
+            $actor,
+            $context,
+            [RawMaterialPermission::ExchangeRateManage],
+            'exchange-rate.nbp-sync',
+            $idempotencyKey,
+            $payload,
+        );
+        if ($replay !== null) {
+            return $replay;
+        }
+
         $tables = $this->fetchNbpTables($operationDate);
         $selected = $this->extractNbpRate($tables, $currencyCode);
         if ($selected === []) {
@@ -583,7 +602,7 @@ final class RawMaterialCommercialService
             [RawMaterialPermission::ExchangeRateManage],
             'exchange-rate.nbp-sync',
             $idempotencyKey,
-            ['currency_code' => $currencyCode, 'operation_date' => $operationDate, 'source_hashes' => array_column($selected, 'hash')],
+            $payload,
             function (string $operationId) use ($actor, $context, $selected, $currencyCode, $operationDate): array {
                 $imported = [];
                 foreach ($selected as $record) {
@@ -894,7 +913,7 @@ final class RawMaterialCommercialService
         );
 
         return DB::transaction(function () use (
-            $actor, $context, $permissions, $operationCode, $idempotencyKey, $operation, $requestHash,
+            $actor, $context, $permissions, $operationCode, $idempotencyKey, $payload, $operation, $requestHash,
         ): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             foreach ($permissions as $permission) {
@@ -907,14 +926,14 @@ final class RawMaterialCommercialService
                 ->where('idempotency_key', $idempotencyKey)
                 ->first();
             if ($prior) {
-                if (! hash_equals($prior->request_hash, $requestHash)) {
+                $response = $this->decodeIdempotencyResponse($prior);
+                if (! hash_equals($prior->request_hash, $requestHash)
+                    && ! $this->matchesNbpSyncIntent($operationCode, $response, $payload)) {
                     $this->conflict('RAW_MATERIAL_IDEMPOTENCY_CONFLICT',
                         'Klucz idempotencji został już użyty dla innego żądania.');
                 }
 
-                return is_array($prior->response_body)
-                    ? $prior->response_body
-                    : json_decode($prior->response_body, true, 512, JSON_THROW_ON_ERROR);
+                return $response;
             }
             $operationId = Str::uuid()->toString();
             $response = $operation($operationId);
@@ -930,6 +949,72 @@ final class RawMaterialCommercialService
 
             return $response;
         }, attempts: 1);
+    }
+
+    private function existingIdempotencyResponse(
+        User $actor,
+        Location $context,
+        array $permissions,
+        string $operationCode,
+        string $idempotencyKey,
+        array $payload,
+    ): ?array {
+        if (! preg_match('/^[A-Za-z0-9._:-]{8,120}$/D', $idempotencyKey)) {
+            throw ValidationException::withMessages([
+                'Idempotency-Key' => [__('messages.raw_material_idempotency_key_required')],
+            ]);
+        }
+        foreach ($permissions as $permission) {
+            $this->authorization->assertAllowed($actor, $context, $permission);
+        }
+        $requestHash = hash_hmac(
+            'sha256',
+            json_encode($this->canonicalize($payload), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            (string) config('app.key'),
+        );
+
+        return DB::transaction(function () use (
+            $actor, $context, $permissions, $operationCode, $idempotencyKey, $payload, $requestHash,
+        ): ?array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            foreach ($permissions as $permission) {
+                $this->authorization->assertAllowed($actor, $context, $permission);
+            }
+            $prior = DB::table('raw_materials_commercial_idempotency')
+                ->where('organization_id', $actor->organization_id)
+                ->where('actor_user_id', $actor->id)
+                ->where('operation_code', $operationCode)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+            if (! $prior) {
+                return null;
+            }
+            if (! hash_equals($prior->request_hash, $requestHash)) {
+                $response = $this->decodeIdempotencyResponse($prior);
+                if (! $this->matchesNbpSyncIntent($operationCode, $response, $payload)) {
+                    $this->conflict('RAW_MATERIAL_IDEMPOTENCY_CONFLICT',
+                        'Klucz idempotencji został już użyty dla innego żądania.');
+                }
+
+                return $response;
+            }
+
+            return $this->decodeIdempotencyResponse($prior);
+        }, attempts: 1);
+    }
+
+    private function matchesNbpSyncIntent(string $operationCode, array $response, array $payload): bool
+    {
+        return $operationCode === 'exchange-rate.nbp-sync'
+            && ($response['data']['currency_code'] ?? null) === ($payload['currency_code'] ?? null)
+            && ($response['data']['operation_date'] ?? null) === ($payload['operation_date'] ?? null);
+    }
+
+    private function decodeIdempotencyResponse(object $prior): array
+    {
+        return is_array($prior->response_body)
+            ? $prior->response_body
+            : json_decode($prior->response_body, true, 512, JSON_THROW_ON_ERROR);
     }
 
     private function insertProductRevision(

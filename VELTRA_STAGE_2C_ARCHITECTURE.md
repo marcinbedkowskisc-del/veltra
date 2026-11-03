@@ -420,3 +420,9 @@ Wszystkie integracyjne/migracyjne testy uruchamiać wyłącznie na disposable Po
 ## 15. Podsumowanie
 
 Projekt rozszerza Stage 2B o wspólny tenant-scoped master dostawców, wersje prostych produktów/opakowań, append-only oferty i ceny, jedną referencyjną cenę foodcost oraz kursy NBP z kontrolowanym override. Zawiera wiążące D-01–D-10, zachowuje B1–B8 i nie myli ceny oferty/szacunku z kosztem rzeczywistej partii. Pozostałe ryzyka są techniczne: walidacja zakresu/skali `NUMERIC`, niezawodność i replay synchronizacji NBP, constraints braku nakładających się progów, kompatybilność istniejącego append-only audytu i migracja addytywna. To ryzyka do zamknięcia testami/projektem migracji, nie otwarte decyzje biznesowe. **Rekomendacja architektury: ACCEPT; nie jest to zgoda na rozpoczęcie implementacji.** `RAW_MATERIALS` pozostaje `NOT_READY` i nieaktywne.
+
+## 16. Wiążący model wdrożenia klienta — ADR-001
+
+Zgodnie z [ADR-001 — Model wdrożenia klienta](./VELTRA_ADR_001_MODEL_WDROZENIA_KLIENTA.md), reguła wdrożeniowa brzmi: **jeden klient = jeden serwer = jedna instancja aplikacji = odrębne dane klienta**. Każdy klient otrzymuje izolowane wdrożenie, bazę PostgreSQL, instancję Redis, pliki, konfigurację i kopie zapasowe. Nie należy zmieniać tej reguły przez współdzielenie infrastruktury lub danych między klientami.
+
+Izolacja wdrożeń nie znosi istniejących granic autoryzacji organizacji i lokalizacji wewnątrz instancji. Zapytania, granty, członkostwa oraz operacje domenowe nadal muszą egzekwować zakres organizacji i lokalizacji zgodnie z architekturą Stage 2B. Constraint jednej organizacji instalacyjnej nie uzasadnia osłabienia tych kontroli.

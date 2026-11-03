@@ -11,7 +11,7 @@ return new class extends Migration
             ALTER TABLE organization_permission_grant_events
                 ALTER COLUMN actor_user_id DROP NOT NULL;
 
-            CREATE FUNCTION raw_materials_revoke_grants_on_suspension() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_revoke_grants_on_suspension() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 organization_key uuid;
                 user_key uuid;

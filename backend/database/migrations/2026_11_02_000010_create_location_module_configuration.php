@@ -51,7 +51,7 @@ return new class extends Migration
             CREATE INDEX location_module_states_organization_idx
                 ON location_module_states(organization_id, location_id);
 
-            CREATE FUNCTION serialize_location_module_state() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION serialize_location_module_state() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE organization_key uuid;
             BEGIN
                 IF TG_OP = 'DELETE' THEN
@@ -70,7 +70,7 @@ return new class extends Migration
             CREATE TRIGGER location_module_states_serialize
                 BEFORE INSERT OR UPDATE OR DELETE ON location_module_states
                 FOR EACH ROW EXECUTE FUNCTION serialize_location_module_state();
-            CREATE FUNCTION preserve_location_module_state_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_location_module_state_identity() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.id IS DISTINCT FROM OLD.id
                     OR NEW.organization_id IS DISTINCT FROM OLD.organization_id

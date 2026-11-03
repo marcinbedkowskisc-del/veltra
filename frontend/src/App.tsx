@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import './App.css'
 import AuthPanel from './AuthPanel'
 import AccountLinkForm from './AccountLinkForm'
+import { developmentStageLabel } from './config/developmentStage'
 
 type Health = {
   app: string
@@ -88,7 +89,7 @@ function App() {
 
   return (
     <main>
-      <p className="eyebrow">STAGE 1A / FUNDAMENT TECHNICZNY</p>
+      <p className="eyebrow">{developmentStageLabel}</p>
       <h1>VELTRA 2.0</h1>
       <section aria-label="Status środowiska" aria-live="polite" aria-busy={loading}>
         <h2>Status backendu</h2>

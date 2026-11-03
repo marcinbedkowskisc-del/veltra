@@ -475,7 +475,7 @@ return new class extends Migration
             CREATE INDEX raw_materials_commercial_audit_subject_idx
                 ON raw_materials_commercial_audit_events(organization_id, subject_type, subject_id, occurred_at DESC);
 
-            CREATE FUNCTION raw_materials_commercial_serialize() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_serialize() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE organization_key uuid;
             BEGIN
                 organization_key := CASE WHEN TG_OP = 'DELETE' THEN OLD.organization_id ELSE NEW.organization_id END;
@@ -485,13 +485,13 @@ return new class extends Migration
             END
             $$;
 
-            CREATE FUNCTION raw_materials_commercial_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 RAISE EXCEPTION 'Commercial history is append-only' USING ERRCODE = '23514';
             END
             $$;
 
-            CREATE FUNCTION raw_materials_commercial_product_revision_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_product_revision_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 unit_factor numeric;
                 material_state varchar(16);
@@ -528,7 +528,7 @@ return new class extends Migration
                 BEFORE INSERT ON supplier_product_revisions
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_product_revision_validate();
 
-            CREATE FUNCTION raw_materials_commercial_sku_unique() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_sku_unique() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.supplier_sku IS NOT NULL AND EXISTS (
                     SELECT 1 FROM supplier_product_revisions existing
@@ -552,7 +552,7 @@ return new class extends Migration
                 BEFORE INSERT ON supplier_product_revisions
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_sku_unique();
 
-            CREATE FUNCTION raw_materials_commercial_offer_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_offer_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
                 IF NOT EXISTS (
@@ -586,7 +586,7 @@ return new class extends Migration
             END
             $$;
 
-            CREATE FUNCTION raw_materials_commercial_event_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_event_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 parent_product uuid;
                 parent_state varchar(16);
@@ -670,7 +670,7 @@ return new class extends Migration
                 BEFORE INSERT ON supplier_offer_events
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_event_validate();
 
-            CREATE FUNCTION raw_materials_commercial_fx_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_fx_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 previous_rate organization_exchange_rate_events%ROWTYPE;
                 overridden_rate organization_exchange_rate_events%ROWTYPE;
@@ -708,7 +708,7 @@ return new class extends Migration
                 BEFORE INSERT ON organization_exchange_rate_events
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_fx_validate();
 
-            CREATE FUNCTION raw_materials_commercial_normalization_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_normalization_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 offer_event supplier_offer_events%ROWTYPE;
                 product_revision supplier_product_revisions%ROWTYPE;
@@ -770,7 +770,7 @@ return new class extends Migration
                 BEFORE INSERT ON supplier_offer_fx_normalization_events
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_normalization_validate();
 
-            CREATE FUNCTION raw_materials_commercial_reference_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_reference_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE
                 next_event integer;
                 price_event supplier_offer_events%ROWTYPE;
@@ -880,7 +880,7 @@ return new class extends Migration
                 BEFORE INSERT ON raw_material_reference_price_events
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_reference_validate();
 
-            CREATE FUNCTION raw_materials_commercial_restatement_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_restatement_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE original_event raw_material_reference_price_events%ROWTYPE;
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
@@ -903,7 +903,7 @@ return new class extends Migration
                 BEFORE INSERT ON raw_material_financial_restatements
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_commercial_restatement_validate();
 
-            CREATE FUNCTION raw_materials_commercial_product_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_product_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Supplier products cannot be deleted' USING ERRCODE = '23514';
@@ -919,7 +919,7 @@ return new class extends Migration
             END
             $$;
 
-            CREATE FUNCTION raw_materials_commercial_supplier_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_supplier_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Suppliers cannot be deleted' USING ERRCODE = '23514';
@@ -934,7 +934,7 @@ return new class extends Migration
             END
             $$;
 
-            CREATE FUNCTION raw_materials_commercial_offer_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_commercial_offer_preserve() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Supplier offers cannot be deleted' USING ERRCODE = '23514';

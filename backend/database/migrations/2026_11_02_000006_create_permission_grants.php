@@ -29,7 +29,7 @@ return new class extends Migration
             CREATE INDEX permission_grants_effective_idx ON permission_grants(user_id,location_id,permission) WHERE revoked_at IS NULL;
             CREATE TRIGGER permission_grants_serialize BEFORE INSERT OR UPDATE OR DELETE ON permission_grants
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
-            CREATE FUNCTION validate_permission_grant() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION validate_permission_grant() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM locations l JOIN location_memberships m ON m.location_id = l.id
                     JOIN users u ON u.id = m.user_id WHERE m.id = NEW.membership_id AND m.is_active AND l.is_active
@@ -42,7 +42,7 @@ return new class extends Migration
                 FOR EACH ROW EXECUTE FUNCTION validate_permission_grant();
             CREATE TRIGGER permission_grants_history BEFORE UPDATE OR DELETE ON permission_grants
                 FOR EACH ROW EXECUTE FUNCTION preserve_role_history();
-            CREATE FUNCTION revoke_membership_authorization() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION revoke_membership_authorization() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE boundary timestamptz := clock_timestamp();
             BEGIN
                 UPDATE role_assignments SET revoked_at = boundary WHERE membership_id = NEW.id AND revoked_at IS NULL;

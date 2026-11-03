@@ -67,7 +67,7 @@ return new class extends Migration
                 ON location_supply_relationships(supplier_kitchen_id, restaurant_id) WHERE is_active;
             CREATE INDEX supply_restaurant_idx ON location_supply_relationships(restaurant_id);
 
-            CREATE FUNCTION serialize_installation_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION serialize_installation_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     PERFORM id FROM organizations WHERE id = OLD.organization_id FOR UPDATE;
@@ -83,7 +83,7 @@ return new class extends Migration
             CREATE TRIGGER supply_serialize BEFORE INSERT OR UPDATE OR DELETE ON location_supply_relationships
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
 
-            CREATE FUNCTION validate_location_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION validate_location_identity() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.type IS DISTINCT FROM OLD.type OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
                     OR NEW.id IS DISTINCT FROM OLD.id THEN
@@ -94,7 +94,7 @@ return new class extends Migration
             CREATE TRIGGER locations_immutable_identity BEFORE UPDATE ON locations
                 FOR EACH ROW EXECUTE FUNCTION validate_location_identity();
 
-            CREATE FUNCTION validate_location_relationship() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION validate_location_relationship() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE kitchen_id uuid;
             BEGIN
                 IF TG_TABLE_NAME = 'location_management_assignments' THEN
@@ -115,7 +115,7 @@ return new class extends Migration
             CREATE TRIGGER supply_location_types BEFORE INSERT OR UPDATE ON location_supply_relationships
                 FOR EACH ROW EXECUTE FUNCTION validate_location_relationship();
 
-            CREATE FUNCTION preserve_management_history() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_management_history() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Management history cannot be deleted' USING ERRCODE = '23514';
@@ -134,7 +134,7 @@ return new class extends Migration
             CREATE TRIGGER management_preserve_history BEFORE UPDATE OR DELETE ON location_management_assignments
                 FOR EACH ROW EXECUTE FUNCTION preserve_management_history();
 
-            CREATE FUNCTION require_operational_management() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION require_operational_management() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF EXISTS (
                     SELECT 1 FROM locations restaurant

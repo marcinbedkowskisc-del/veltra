@@ -518,6 +518,61 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame('4.123456789012', $sync['data']['selected_rate']['pln_per_quote_unit']);
         $nbpRateId = $sync['data']['selected_rate']['id'];
 
+        Http::fake(['https://api.nbp.pl/*' => Http::response([], 503)]);
+        $syncReplay = $commercial->syncNbpRate(
+            $this->steward,
+            $this->location,
+            'USD',
+            '2026-11-01',
+            'nbp-sync-sunday-0001',
+        );
+        $this->assertEquals($sync, $syncReplay);
+        Http::assertNothingSent();
+        $legacyKey = 'nbp-sync-legacy-0001';
+        $legacyPayload = [
+            'currency_code' => 'USD',
+            'operation_date' => '2026-11-01',
+            'source_hashes' => [DB::table('organization_exchange_rate_events')
+                ->where('id', $nbpRateId)->value('source_payload_hash')],
+        ];
+        ksort($legacyPayload);
+        DB::table('raw_materials_commercial_idempotency')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->steward->organization_id,
+            'actor_user_id' => $this->steward->id,
+            'operation_code' => 'exchange-rate.nbp-sync',
+            'idempotency_key' => $legacyKey,
+            'request_hash' => hash_hmac(
+                'sha256',
+                json_encode($legacyPayload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                (string) config('app.key'),
+            ),
+            'response_body' => json_encode($sync, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        ]);
+        $legacyReplay = $commercial->syncNbpRate(
+            $this->steward,
+            $this->location,
+            'USD',
+            '2026-11-01',
+            $legacyKey,
+        );
+        $this->assertEquals($sync, $legacyReplay);
+        Http::assertNothingSent();
+        try {
+            $commercial->syncNbpRate(
+                $this->steward,
+                $this->location,
+                'EUR',
+                '2026-11-01',
+                'nbp-sync-sunday-0001',
+            );
+            $this->fail('An NBP idempotency key was reused with a different currency.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_IDEMPOTENCY_CONFLICT', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+        }
+        Http::assertNothingSent();
+
         $override = $commercial->overrideExchangeRate(
             $this->steward,
             $this->location,
@@ -602,7 +657,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
-    public function test_reference_price_view_does_not_disclose_cost_and_commercial_sources_must_be_eligible(): void
+    public function test_reference_price_view_does_not_disclose_purchasing_source_without_cost_permission(): void
     {
         $fixture = $this->createCommercialOfferFixture('Cena z oferty', 'SOURCE_01', 'SOURCE-1', 'source-disclosure');
         $commercial = app(RawMaterialCommercialService::class);
@@ -727,6 +782,93 @@ class RawMaterialsTest extends AuthorizationTestCase
         ]));
     }
 
+    public function test_supplier_product_revisions_require_active_supplier_and_product_in_api_and_postgresql(): void
+    {
+        $commercial = app(RawMaterialCommercialService::class);
+        $categoryId = $this->category()['id'];
+        $active = $this->createCommercialOfferFixture(
+            'Aktywny produkt', 'REVISION_ACTIVE', 'ACTIVE-1', 'revision-active', $categoryId,
+        );
+        $currentRevision = DB::table('supplier_product_revisions')
+            ->where('id', $active['product_revision_id'])->first();
+
+        $this->postJson('/api/v1/raw-materials/supplier-products/'.$active['product_id'].'/revisions', [
+            'supplier_id' => $active['supplier_id'],
+            'raw_material_revision_id' => $currentRevision->raw_material_revision_id,
+            'expected_revision_id' => $active['product_revision_id'],
+            'product_name' => 'Aktywny produkt - rewizja 2',
+            'supplier_sku' => 'ACTIVE-2',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '2',
+            'content_unit_code' => 'g',
+        ], ['Idempotency-Key' => 'active-product-revision-002'])->assertOk()
+            ->assertJsonPath('data.current_revision.revision_no', 2);
+        $this->assertSame(2, DB::table('supplier_product_revisions')
+            ->where('supplier_product_id', $active['product_id'])->count());
+
+        $archivedSupplier = $this->createCommercialOfferFixture(
+            'Produkt z archiwizowanym dostawcą', 'REVISION_ARCHIVED_SUPPLIER', 'ARCH-S-1', 'revision-archived-supplier',
+            $categoryId,
+        );
+        $commercial->archiveSupplier(
+            $this->steward,
+            $this->location,
+            $archivedSupplier['supplier_id'],
+            'Archiwizacja testowa',
+            'archived-supplier-revision-001',
+        );
+        $supplierRevision = DB::table('supplier_product_revisions')
+            ->where('id', $archivedSupplier['product_revision_id'])->first();
+        $this->postJson('/api/v1/raw-materials/supplier-products/'.$archivedSupplier['product_id'].'/revisions', [
+            'supplier_id' => $archivedSupplier['supplier_id'],
+            'raw_material_revision_id' => $supplierRevision->raw_material_revision_id,
+            'expected_revision_id' => $archivedSupplier['product_revision_id'],
+            'product_name' => 'Niedozwolona rewizja',
+            'supplier_sku' => 'ARCH-S-2',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '2',
+            'content_unit_code' => 'g',
+        ], ['Idempotency-Key' => 'archived-supplier-revision-002'])->assertNotFound();
+        $this->assertSame(1, DB::table('supplier_product_revisions')
+            ->where('supplier_product_id', $archivedSupplier['product_id'])->count());
+        $this->assertConstraintViolation('23514', fn () => $this->insertProductRevisionDirectly(
+            $archivedSupplier['product_id'],
+            $supplierRevision,
+            'ARCH-S-2',
+        ));
+
+        $archivedProduct = $this->createCommercialOfferFixture(
+            'Archiwizowany produkt', 'REVISION_ARCHIVED_PRODUCT', 'ARCH-P-1', 'revision-archived-product',
+            $categoryId,
+        );
+        $commercial->archiveProduct(
+            $this->steward,
+            $this->location,
+            $archivedProduct['product_id'],
+            'Archiwizacja testowa',
+            'archived-product-revision-001',
+        );
+        $productRevision = DB::table('supplier_product_revisions')
+            ->where('id', $archivedProduct['product_revision_id'])->first();
+        $this->postJson('/api/v1/raw-materials/supplier-products/'.$archivedProduct['product_id'].'/revisions', [
+            'supplier_id' => $archivedProduct['supplier_id'],
+            'raw_material_revision_id' => $productRevision->raw_material_revision_id,
+            'expected_revision_id' => $archivedProduct['product_revision_id'],
+            'product_name' => 'Niedozwolona rewizja',
+            'supplier_sku' => 'ARCH-P-2',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '2',
+            'content_unit_code' => 'g',
+        ], ['Idempotency-Key' => 'archived-product-revision-002'])->assertNotFound();
+        $this->assertSame(1, DB::table('supplier_product_revisions')
+            ->where('supplier_product_id', $archivedProduct['product_id'])->count());
+        $this->assertConstraintViolation('23514', fn () => $this->insertProductRevisionDirectly(
+            $archivedProduct['product_id'],
+            $productRevision,
+            'ARCH-P-2',
+        ));
+    }
+
     public function test_commercial_mutation_rolls_back_when_append_only_audit_fails(): void
     {
         DB::unprepared(<<<'SQL'
@@ -839,14 +981,41 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
+    private function insertProductRevisionDirectly(string $productId, object $revision, string $sku): void
+    {
+        DB::table('supplier_product_revisions')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->steward->organization_id,
+            'supplier_product_id' => $productId,
+            'revision_no' => 2,
+            'raw_material_id' => $revision->raw_material_id,
+            'raw_material_revision_id' => $revision->raw_material_revision_id,
+            'raw_material_revision_unit_id' => $revision->raw_material_revision_unit_id,
+            'supplier_sku' => $sku,
+            'product_name' => 'Bezpośredni zapis SQL',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '2',
+            'content_unit_code' => 'g',
+            'to_base_factor_snapshot' => $revision->to_base_factor_snapshot,
+            'base_quantity_snapshot' => $revision->base_quantity_snapshot,
+            'content_hash' => str_repeat('0', 64),
+            'created_by' => $this->steward->id,
+        ]);
+    }
+
     private function createCommercialOfferFixture(
         string $materialName,
         string $supplierCode,
         string $supplierSku,
         string $keyPrefix,
+        ?string $categoryId = null,
     ): array {
-        $category = $this->category();
-        $materialId = $this->declaredMaterial($category['id'], $materialName);
+        $categoryId ??= $this->category()['id'];
+        $materialCode = 'SUR-'.sprintf(
+            '%06d',
+            DB::table('raw_materials')->where('organization_id', $this->steward->organization_id)->count() + 99,
+        );
+        $materialId = $this->declaredMaterial($categoryId, $materialName, materialCode: $materialCode);
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
         $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza');
         $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
@@ -939,8 +1108,12 @@ class RawMaterialsTest extends AuthorizationTestCase
         }
     }
 
-    private function declaredMaterial(string $categoryId, string $name, array $additionalUnits = []): string
-    {
+    private function declaredMaterial(
+        string $categoryId,
+        string $name,
+        array $additionalUnits = [],
+        ?string $materialCode = null,
+    ): string {
         $materialId = Str::uuid()->toString();
         $revisionId = Str::uuid()->toString();
         $alias = mb_strtolower(trim($name), 'UTF-8');
@@ -969,7 +1142,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         DB::table('raw_materials')->insert([
             'id' => $materialId,
             'organization_id' => $this->steward->organization_id,
-            'code' => 'SUR-000099',
+            'code' => $materialCode ?? 'SUR-000099',
             'lifecycle_state' => 'DRAFT',
             'working_revision_id' => $revisionId,
             'created_by' => $this->steward->id,

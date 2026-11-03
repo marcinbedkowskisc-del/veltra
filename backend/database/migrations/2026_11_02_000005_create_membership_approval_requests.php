@@ -26,7 +26,7 @@ return new class extends Migration
             CREATE UNIQUE INDEX membership_requests_pending_unique ON membership_requests(user_id,location_id) WHERE decision IS NULL;
             CREATE TRIGGER membership_requests_serialize BEFORE INSERT OR UPDATE OR DELETE ON membership_requests
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
-            CREATE FUNCTION preserve_membership_request() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_membership_request() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Membership requests cannot be deleted' USING ERRCODE = '23514';

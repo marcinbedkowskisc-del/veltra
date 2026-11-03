@@ -23,7 +23,7 @@ return new class extends Migration
             CREATE INDEX account_email_ip_time_idx ON account_email_deliveries(ip_hash, sent_at);
             CREATE TRIGGER email_delivery_history BEFORE UPDATE OR DELETE ON account_email_deliveries
                 FOR EACH ROW EXECUTE FUNCTION preserve_security_event();
-            CREATE FUNCTION invalidate_changed_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION invalidate_changed_identity() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.email IS DISTINCT FROM OLD.email THEN
                     NEW.email_verified_at := NULL;

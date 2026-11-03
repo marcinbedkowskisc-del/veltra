@@ -44,7 +44,7 @@ return new class extends Migration
             CREATE UNIQUE INDEX memberships_unique_active_pair ON location_memberships(user_id, location_id) WHERE is_active;
             CREATE INDEX memberships_location_idx ON location_memberships(location_id);
 
-            CREATE FUNCTION preserve_user_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_user_identity() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'User identities cannot be deleted' USING ERRCODE = '23514';
@@ -58,7 +58,7 @@ return new class extends Migration
             CREATE TRIGGER users_preserve_identity BEFORE UPDATE OR DELETE ON users
                 FOR EACH ROW EXECUTE FUNCTION preserve_user_identity();
 
-            CREATE FUNCTION preserve_membership_history() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_membership_history() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Membership history cannot be deleted' USING ERRCODE = '23514';

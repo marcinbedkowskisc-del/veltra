@@ -245,7 +245,7 @@ return new class extends Migration
             CREATE INDEX organization_permission_grant_events_org_idx
                 ON organization_permission_grant_events(organization_id, grant_id);
 
-            CREATE FUNCTION raw_materials_serialize_organization() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_serialize_organization() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE organization_key uuid;
             BEGIN
                 IF TG_OP = 'DELETE' THEN
@@ -260,7 +260,7 @@ return new class extends Migration
                 RETURN NEW;
             END $$;
 
-            CREATE FUNCTION raw_materials_category_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_category_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE parent_depth smallint;
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
@@ -283,7 +283,7 @@ return new class extends Migration
             CREATE TRIGGER raw_material_categories_serialize
                 BEFORE INSERT OR UPDATE OR DELETE ON raw_material_categories
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_serialize_organization();
-            CREATE FUNCTION raw_material_categories_preserve_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_material_categories_preserve_identity() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Raw material categories cannot be deleted' USING ERRCODE = '23514';
@@ -300,7 +300,7 @@ return new class extends Migration
                 BEFORE UPDATE OR DELETE ON raw_material_categories
                 FOR EACH ROW EXECUTE FUNCTION raw_material_categories_preserve_identity();
 
-            CREATE FUNCTION raw_materials_preserve_master() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_preserve_master() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Raw materials cannot be deleted' USING ERRCODE = '23514';
@@ -353,14 +353,14 @@ return new class extends Migration
                 BEFORE INSERT OR UPDATE OR DELETE ON raw_materials
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_serialize_organization();
 
-            CREATE FUNCTION raw_materials_revision_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_revision_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 RAISE EXCEPTION 'Raw material revisions are immutable' USING ERRCODE = '23514';
             END $$;
             CREATE TRIGGER raw_material_revisions_immutable
                 BEFORE UPDATE OR DELETE ON raw_material_revisions
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_revision_immutable();
-            CREATE FUNCTION raw_materials_revision_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_revision_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
                 IF NOT EXISTS (
@@ -376,7 +376,7 @@ return new class extends Migration
                 BEFORE INSERT ON raw_material_revisions
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_revision_validate();
 
-            CREATE FUNCTION raw_materials_child_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_child_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
             DECLARE revision_key uuid;
             DECLARE material_key uuid;
             DECLARE organization_key uuid;
@@ -436,7 +436,7 @@ return new class extends Migration
                 BEFORE INSERT OR UPDATE OR DELETE ON raw_material_revision_units
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_child_immutable();
 
-            CREATE FUNCTION raw_material_alias_unique_for_organization() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_material_alias_unique_for_organization() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
                 IF EXISTS (
@@ -453,7 +453,7 @@ return new class extends Migration
                 BEFORE INSERT ON raw_material_aliases
                 FOR EACH ROW EXECUTE FUNCTION raw_material_alias_unique_for_organization();
 
-            CREATE FUNCTION raw_materials_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 RAISE EXCEPTION 'Raw material history is append-only' USING ERRCODE = '23514';
             END $$;
@@ -469,7 +469,7 @@ return new class extends Migration
             CREATE TRIGGER organization_permission_grants_append_only
                 BEFORE UPDATE OR DELETE ON organization_permission_grants
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_append_only();
-            CREATE FUNCTION raw_material_approval_validate() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_material_approval_validate() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
                 IF NOT EXISTS (
@@ -488,7 +488,7 @@ return new class extends Migration
             CREATE TRIGGER raw_material_approval_events_validate
                 BEFORE INSERT ON raw_material_revision_approval_events
                 FOR EACH ROW EXECUTE FUNCTION raw_material_approval_validate();
-            CREATE FUNCTION raw_materials_serialize_grant() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION raw_materials_serialize_grant() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 PERFORM id FROM organizations WHERE id = NEW.organization_id FOR UPDATE;
                 IF EXISTS (

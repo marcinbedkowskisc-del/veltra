@@ -36,7 +36,7 @@ return new class extends Migration
                 (user_id, role, coalesce(location_id, '00000000-0000-0000-0000-000000000000'::uuid))
                 WHERE revoked_at IS NULL;
             CREATE INDEX roles_organization_idx ON role_assignments(organization_id);
-            CREATE FUNCTION validate_role_assignment() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION validate_role_assignment() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.location_id IS NOT NULL THEN
                     IF NOT EXISTS (
@@ -53,7 +53,7 @@ return new class extends Migration
                 FOR EACH ROW EXECUTE FUNCTION validate_role_assignment();
             CREATE TRIGGER roles_serialize BEFORE INSERT OR UPDATE OR DELETE ON role_assignments
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
-            CREATE FUNCTION preserve_role_history() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_role_history() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF TG_OP = 'DELETE' THEN
                     RAISE EXCEPTION 'Role history cannot be deleted' USING ERRCODE = '23514';

@@ -21,7 +21,7 @@ return new class extends Migration
                 occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
             );
             CREATE INDEX security_events_organization_time_idx ON security_events(organization_id, occurred_at);
-            CREATE FUNCTION preserve_security_event() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION preserve_security_event() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 RAISE EXCEPTION 'Security history is append-only' USING ERRCODE = '23514';
             END $$;
@@ -31,7 +31,7 @@ return new class extends Migration
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
             CREATE TRIGGER memberships_serialize BEFORE INSERT OR UPDATE OR DELETE ON location_memberships
                 FOR EACH ROW EXECUTE FUNCTION serialize_installation_mutation();
-            CREATE FUNCTION protect_authorization_initialization() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION protect_authorization_initialization() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF OLD.authorization_initialized AND NOT NEW.authorization_initialized THEN
                     RAISE EXCEPTION 'Authorization initialization cannot be reversed' USING ERRCODE = '23514';
@@ -40,7 +40,7 @@ return new class extends Migration
             END $$;
             CREATE TRIGGER organizations_authorization_latch BEFORE UPDATE ON organizations
                 FOR EACH ROW EXECUTE FUNCTION protect_authorization_initialization();
-            CREATE FUNCTION require_active_administrator() RETURNS trigger LANGUAGE plpgsql AS $$
+            CREATE OR REPLACE FUNCTION require_active_administrator() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 IF EXISTS (SELECT 1 FROM organizations o WHERE o.authorization_initialized AND NOT EXISTS (
                     SELECT 1 FROM role_assignments r JOIN users u ON u.id = r.user_id

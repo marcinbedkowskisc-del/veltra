@@ -242,6 +242,176 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             ->effectiveGrantIds($recipient, RawMaterialPermission::PurchasingCostsView));
     }
 
+    public function test_permission_upgrade_revocation_propagates_through_nested_upgrades_and_postgresql(): void
+    {
+        $location = $this->activeRestaurant();
+        $bootstrapAdministrator = $this->user('nested-upgrade-bootstrap-admin@example.test');
+        $this->role($bootstrapAdministrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($bootstrapAdministrator, $location);
+        $steward = $this->user('nested-upgrade-steward@example.test');
+        $this->role($steward, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($steward, $location);
+        $delegatedAdministrator = $this->user('nested-upgrade-delegated-admin@example.test');
+        $this->role($delegatedAdministrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($delegatedAdministrator, $location);
+        $recipient = $this->user('nested-upgrade-recipient@example.test');
+        app(MembershipService::class)->assign($recipient, $location);
+        $directSqlRecipient = $this->user('nested-upgrade-sql-recipient@example.test');
+        app(MembershipService::class)->assign($directSqlRecipient, $location);
+        Organization::whereKey($bootstrapAdministrator->organization_id)
+            ->update(['authorization_initialized' => true]);
+        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
+        LocationModuleState::create([
+            'organization_id' => $bootstrapAdministrator->organization_id,
+            'location_id' => $location->id,
+            'module_key' => 'RAW_MATERIALS',
+            'enabled' => true,
+            'created_by' => $bootstrapAdministrator->id,
+            'updated_by' => $bootstrapAdministrator->id,
+        ]);
+
+        $initialGrants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $bootstrapAdministrator->id,
+            $steward->id,
+            [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+            'Jawne ustanowienie opiekuna',
+            self::PASSWORD,
+        );
+        $rootAuthority = collect($initialGrants)
+            ->firstWhere('permission', RawMaterialPermission::PermissionDelegate->value);
+        $upgrade = app(RawMaterialPermissionUpgrade::class);
+        $firstUpgrade = $upgrade->grant(
+            $steward->id,
+            $delegatedAdministrator->id,
+            [RawMaterialPermission::PermissionDelegate->value],
+            'Jawne przekazanie delegowania',
+            'nested-upgrade-first-001',
+            self::PASSWORD,
+        );
+        $delegatedAuthority = DB::table('organization_permission_grants')
+            ->where('bootstrap_operation_id', $firstUpgrade['operation_id'])
+            ->where('permission', RawMaterialPermission::PermissionDelegate->value)
+            ->first();
+        $secondUpgrade = $upgrade->grant(
+            $delegatedAdministrator->id,
+            $recipient->id,
+            [RawMaterialPermission::SupplierView->value],
+            'Jawne przekazanie odczytu danych dostawcy',
+            'nested-upgrade-second-001',
+            self::PASSWORD,
+        );
+        $authorization = app(RawMaterialAuthorization::class);
+
+        $this->assertNotEmpty($authorization->effectiveGrantIds(
+            $delegatedAdministrator,
+            RawMaterialPermission::PermissionDelegate,
+        ));
+        $this->assertNotEmpty($authorization->effectiveGrantIds(
+            $recipient,
+            RawMaterialPermission::SupplierView,
+        ));
+        $this->assertTrue((bool) DB::scalar(
+            'SELECT raw_materials_permission_upgrade_authority_is_effective(?, ?) ',
+            [$bootstrapAdministrator->organization_id, $secondUpgrade['operation_id']],
+        ));
+
+        app(OrganizationRawMaterialPermissionAdministration::class)->revoke(
+            $steward,
+            $location,
+            $rootAuthority['id'],
+            'Trwałe cofnięcie źródłowego prawa delegowania',
+        );
+
+        $this->assertEmpty($authorization->effectiveGrantIds(
+            $delegatedAdministrator->fresh(),
+            RawMaterialPermission::PermissionDelegate,
+        ));
+        $this->assertEmpty($authorization->effectiveGrantIds(
+            $recipient->fresh(),
+            RawMaterialPermission::SupplierView,
+        ));
+        $this->assertFalse((bool) DB::scalar(
+            'SELECT raw_materials_permission_upgrade_authority_is_effective(?, ?)',
+            [$bootstrapAdministrator->organization_id, $secondUpgrade['operation_id']],
+        ));
+
+        try {
+            $upgrade->grant(
+                $delegatedAdministrator->id,
+                $directSqlRecipient->id,
+                [RawMaterialPermission::SupplierManage->value],
+                'Próba po cofnięciu źródłowego prawa',
+                'nested-upgrade-denied-001',
+                self::PASSWORD,
+            );
+            $this->fail('An actor with revoked upstream authority completed another upgrade.');
+        } catch (AuthorizationException) {
+            $this->assertSame(2, DB::table('raw_material_permission_upgrade_operations')->count());
+        }
+
+        $forgedOperationId = (string) Str::uuid();
+        try {
+            DB::transaction(function () use (
+                $forgedOperationId,
+                $bootstrapAdministrator,
+                $delegatedAdministrator,
+                $directSqlRecipient,
+                $delegatedAuthority,
+            ): void {
+                DB::table('raw_material_permission_upgrade_operations')->insert([
+                    'id' => $forgedOperationId,
+                    'organization_id' => $bootstrapAdministrator->organization_id,
+                    'idempotency_key' => 'nested-upgrade-sql-001',
+                    'request_hash' => hash('sha256', 'direct SQL attempt'),
+                    'actor_user_id' => $delegatedAdministrator->id,
+                    'recipient_user_id' => $directSqlRecipient->id,
+                    'authority_grant_id' => $delegatedAuthority->id,
+                    'permissions' => json_encode(
+                        [RawMaterialPermission::SupplierManage->value],
+                        JSON_THROW_ON_ERROR,
+                    ),
+                    'reason' => 'Próba bezpośredniego SQL po cofnięciu authority',
+                    'created_at' => now(),
+                ]);
+                DB::table('raw_material_audit_events')->insert([
+                    'id' => (string) Str::uuid(),
+                    'organization_id' => $bootstrapAdministrator->organization_id,
+                    'operation_id' => $forgedOperationId,
+                    'actor_user_id' => $delegatedAdministrator->id,
+                    'subject_type' => 'ORGANIZATION',
+                    'subject_id' => $bootstrapAdministrator->organization_id,
+                    'event_code' => 'PERMISSION_UPGRADE',
+                    'outcome' => 'ACCEPTED',
+                    'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
+                    'metadata' => json_encode([
+                        'recipient_user_id' => $directSqlRecipient->id,
+                        'permissions' => [RawMaterialPermission::SupplierManage->value],
+                        'reason' => 'Próba bezpośredniego SQL po cofnięciu authority',
+                        'authority_grant_id' => $delegatedAuthority->id,
+                        'idempotency_key' => 'nested-upgrade-sql-001',
+                    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                ]);
+                DB::table('organization_permission_grants')->insert([
+                    'id' => (string) Str::uuid(),
+                    'organization_id' => $bootstrapAdministrator->organization_id,
+                    'user_id' => $directSqlRecipient->id,
+                    'permission' => RawMaterialPermission::SupplierManage->value,
+                    'granted_by' => $delegatedAdministrator->id,
+                    'valid_from' => now(),
+                    'delegation_source_id' => null,
+                    'bootstrap_operation_id' => $forgedOperationId,
+                    'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
+                ]);
+            });
+            $this->fail('PostgreSQL accepted a grant backed by revoked upstream authority.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
+            $this->assertSame(2, DB::table('raw_material_permission_upgrade_operations')->count());
+            $this->assertSame(2, DB::table('raw_material_audit_events')
+                ->where('event_code', 'PERMISSION_UPGRADE')->count());
+        }
+    }
+
     public function test_permission_upgrade_denies_administrators_without_delegate_authority_and_rejects_forged_sql_grants(): void
     {
         $location = $this->activeRestaurant();

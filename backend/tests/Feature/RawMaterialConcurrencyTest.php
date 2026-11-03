@@ -6,6 +6,8 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\InstallationService;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
+use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use App\Models\LocationModuleState;
@@ -95,6 +97,164 @@ class RawMaterialConcurrencyTest extends TestCase
         } finally {
             $this->cleanup($processes);
         }
+    }
+
+    public function test_concurrent_membership_and_user_suspension_permanently_revoke_delegated_grants(): void
+    {
+        $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
+        DB::statement('TRUNCATE organizations CASCADE');
+        $processes = [];
+
+        try {
+            $installation = app(InstallationService::class);
+            $organization = $installation->initializeOrganization(['name' => 'Suspension Concurrency', 'code' => 'SUSP']);
+            $kitchen = $installation->createLocation([
+                'name' => 'Kuchnia centralna',
+                'code' => 'CK1',
+                'type' => 'CENTRAL_KITCHEN',
+            ]);
+            $location = $installation->createLocation([
+                'name' => 'Restauracja',
+                'code' => 'R1',
+                'type' => 'RESTAURANT',
+            ]);
+            $installation->assignManagingKitchen($location, $kitchen);
+            $location = $installation->updateLocation($location, ['is_active' => true]);
+            $administrator = $this->user($organization, 'suspension-admin@example.test');
+            RoleAssignment::create([
+                'organization_id' => $organization->id,
+                'user_id' => $administrator->id,
+                'role' => BusinessRole::Administrator,
+            ]);
+            app(MembershipService::class)->assign($administrator, $location);
+            $steward = $this->user($organization, 'suspension-steward@example.test');
+            app(MembershipService::class)->assign($steward, $location);
+            $recipient = $this->user($organization, 'suspension-recipient@example.test');
+            $recipientMembership = app(MembershipService::class)->assign($recipient, $location);
+            Organization::whereKey($organization->id)->update(['authorization_initialized' => true]);
+            $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
+            LocationModuleState::create([
+                'organization_id' => $organization->id,
+                'location_id' => $location->id,
+                'module_key' => 'RAW_MATERIALS',
+                'enabled' => true,
+                'created_by' => $administrator->id,
+                'updated_by' => $administrator->id,
+            ]);
+            $this->bootstrapPermissions($administrator, $steward);
+            $sourceGrant = DB::table('organization_permission_grants')
+                ->where('user_id', $steward->id)
+                ->where('permission', RawMaterialPermission::View->value)
+                ->first();
+            $permissions = app(OrganizationRawMaterialPermissionAdministration::class);
+            $authorization = app(RawMaterialAuthorization::class);
+
+            DB::beginTransaction();
+            Organization::whereKey($organization->id)->lockForUpdate()->firstOrFail();
+            [$grantProcess, $grantProcessName] = $this->startGrantProcess(
+                $steward->id,
+                $location->id,
+                $recipient->id,
+                'rawmat-grant-race-',
+            );
+            $processes[] = $grantProcess;
+            $this->assertWaitingOnOrganizationLock($grantProcess, $grantProcessName);
+            app(MembershipService::class)->deactivate($recipientMembership, 'Członkostwo zawieszone współbieżnie');
+            DB::commit();
+            $this->assertSame(['denied' => true], $this->finishGrantProcess($grantProcess));
+            $this->assertSame(0, DB::table('organization_permission_grants')
+                ->where('user_id', $recipient->id)->count());
+            $this->assertSame(0, DB::table('raw_material_audit_events')
+                ->where('event_code', 'PERMISSION_GRANTED')
+                ->whereJsonContains('metadata', ['recipient_user_id' => $recipient->id])->count());
+            $this->assertEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::View));
+
+            app(MembershipService::class)->assign($recipient->fresh(), $location);
+            $secondChildGrant = $permissions->grant(
+                $steward,
+                $location,
+                $recipient->fresh(),
+                RawMaterialPermission::View,
+                'Jawne ponowne nadanie po zawieszeniu członkostwa',
+            );
+            $this->assertNotEmpty($secondChildGrant['id']);
+            $this->assertNotEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::View));
+
+            DB::beginTransaction();
+            Organization::whereKey($organization->id)->lockForUpdate()->firstOrFail();
+            [$userProcess, $userProcessName] = $this->startSuspensionProcess(
+                'user',
+                $recipient->id,
+                'rawmat-user-suspension-',
+            );
+            $processes[] = $userProcess;
+            $this->assertWaitingOnOrganizationLock($userProcess, $userProcessName);
+            DB::commit();
+            $this->finishSuspensionProcess($userProcess);
+
+            $this->assertSame(1, DB::table('organization_permission_grant_events')
+                ->where('grant_id', $secondChildGrant['id'])
+                ->where('reason_code', 'USER_DEACTIVATED')->count());
+            $this->assertSame(0, DB::table('organization_permission_grant_events')
+                ->where('grant_id', $sourceGrant->id)->count());
+
+            User::whereKey($recipient->id)->update(['is_active' => true]);
+            $this->assertEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::View));
+        } finally {
+            $this->cleanup($processes);
+        }
+    }
+
+    private function startSuspensionProcess(string $subjectType, string $subjectId, string $prefix): array
+    {
+        $applicationName = $prefix.Str::lower(Str::random(8));
+        $process = new Process([
+            PHP_BINARY,
+            base_path('tests/Support/concurrent_raw_material_suspend.php'),
+            $subjectType,
+            $subjectId,
+            $applicationName,
+        ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+        $process->setTimeout(30);
+        $process->start();
+
+        return [$process, $applicationName];
+    }
+
+    private function startGrantProcess(
+        string $actorId,
+        string $locationId,
+        string $recipientId,
+        string $prefix,
+    ): array {
+        $applicationName = $prefix.Str::lower(Str::random(8));
+        $process = new Process([
+            PHP_BINARY,
+            base_path('tests/Support/concurrent_raw_material_grant.php'),
+            $actorId,
+            $locationId,
+            $recipientId,
+            $applicationName,
+        ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+        $process->setTimeout(30);
+        $process->start();
+
+        return [$process, $applicationName];
+    }
+
+    private function finishGrantProcess(Process $process): array
+    {
+        $process->wait();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+
+        return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+    }
+
+    private function finishSuspensionProcess(Process $process): void
+    {
+        $process->wait();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+        $this->assertSame(['completed' => true], json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR));
     }
 
     private function user(Organization $organization, string $email): User

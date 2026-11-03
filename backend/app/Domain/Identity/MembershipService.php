@@ -41,8 +41,9 @@ class MembershipService
     {
         validator(['reason' => $reason], ['reason' => ['required', 'string', 'max:250']])->validate();
         DB::transaction(function () use ($membership, $reason): void {
-            Organization::lockForUpdate()->firstOrFail();
             $membership = LocationMembership::findOrFail($membership->id);
+            Organization::whereKey($membership->organization_id)->lockForUpdate()->firstOrFail();
+            $membership->refresh();
             if ($membership->is_active) {
                 $membership->update([
                     'is_active' => false,

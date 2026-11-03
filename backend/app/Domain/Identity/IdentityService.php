@@ -53,6 +53,13 @@ class IdentityService
 
     public function disable(User $user): void
     {
-        $user->update(['is_active' => false]);
+        DB::transaction(function () use ($user): void {
+            $freshUser = User::findOrFail($user->id);
+            Organization::whereKey($freshUser->organization_id)->lockForUpdate()->firstOrFail();
+            $freshUser->refresh();
+            if ($freshUser->is_active) {
+                $freshUser->update(['is_active' => false]);
+            }
+        });
     }
 }

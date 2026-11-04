@@ -79,6 +79,7 @@ services:
       DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
       APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
     command: ["php", "artisan", "test"]
 
@@ -90,6 +91,8 @@ services:
       DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
       APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      APP_DB_AUTHORIZATION_HISTORY_ATTESTATION: ${APP_DB_AUTHORIZATION_HISTORY_ATTESTATION:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,6 +107,7 @@ services:
       DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
       APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
     depends_on:
       postgres:
         condition: service_healthy

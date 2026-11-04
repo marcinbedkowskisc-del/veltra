@@ -2,6 +2,7 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Organization;
@@ -16,6 +17,8 @@ use SensitiveParameter;
 
 final class RawMaterialPermissionUpgrade
 {
+    public function __construct(private AuthorizationMutationContext $contexts) {}
+
     /**
      * @param  list<string>  $permissions
      * @return array{operation_id: string, replayed: bool, grants: list<array{id: string, user_id: string, permission: string}>}
@@ -54,7 +57,7 @@ final class RawMaterialPermissionUpgrade
             'reason' => $reason,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
-        return DB::transaction(function () use (
+        return $this->contexts->run('permission.upgrade', $actorId, fn (): array => DB::transaction(function () use (
             $actor,
             $actorId,
             $recipientId,
@@ -158,7 +161,7 @@ final class RawMaterialPermissionUpgrade
             }
 
             return $this->result($operationId, false);
-        });
+        }));
     }
 
     private function assertAuthorizedAdministrator(User $actor, Organization $organization, #[SensitiveParameter] string $password): void

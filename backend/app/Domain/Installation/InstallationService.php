@@ -2,6 +2,7 @@
 
 namespace App\Domain\Installation;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Models\Location;
 use App\Models\LocationManagementAssignment;
 use App\Models\LocationSupplyRelationship;
@@ -13,9 +14,11 @@ use Illuminate\Validation\ValidationException;
 
 class InstallationService
 {
+    public function __construct(private AuthorizationMutationContext $contexts) {}
+
     public function initializeOrganization(array $attributes): Organization
     {
-        return DB::transaction(function () use ($attributes): Organization {
+        return $this->contexts->run('installation.initialize', null, fn (): Organization => DB::transaction(function () use ($attributes): Organization {
             // Also serializes initialization before an organization row exists.
             DB::select('SELECT pg_advisory_xact_lock(8612001)');
             if (Organization::exists()) {
@@ -23,12 +26,12 @@ class InstallationService
             }
 
             return Organization::create($attributes);
-        });
+        }));
     }
 
     public function createLocation(array $attributes): Location
     {
-        return DB::transaction(function () use ($attributes): Location {
+        return $this->contexts->run('installation.location.create', null, fn (): Location => DB::transaction(function () use ($attributes): Location {
             $organization = $this->lockOrganization();
             $attributes['is_active'] ??= $attributes['type'] === LocationType::CentralKitchen->value;
             if ($attributes['type'] === LocationType::Restaurant->value && $attributes['is_active']) {
@@ -37,12 +40,12 @@ class InstallationService
             $this->ensureCodeAvailable($organization, $attributes['code']);
 
             return $organization->locations()->create($attributes);
-        });
+        }));
     }
 
     public function updateLocation(Location $location, array $attributes): Location
     {
-        return DB::transaction(function () use ($location, $attributes): Location {
+        return $this->contexts->run('installation.location.update', null, fn (): Location => DB::transaction(function () use ($location, $attributes): Location {
             $organization = $this->lockOrganization();
             $location = Location::findOrFail($location->id);
             $this->ensureOwned($organization, $location);
@@ -63,12 +66,12 @@ class InstallationService
             $location->update($attributes);
 
             return $location->refresh();
-        });
+        }));
     }
 
     public function assignManagingKitchen(Location $restaurant, Location $kitchen, bool $replace = false): LocationManagementAssignment
     {
-        return DB::transaction(function () use ($restaurant, $kitchen, $replace): LocationManagementAssignment {
+        return $this->contexts->run('installation.management.assign', null, fn (): LocationManagementAssignment => DB::transaction(function () use ($restaurant, $kitchen, $replace): LocationManagementAssignment {
             $organization = $this->lockOrganization();
             $restaurant = Location::findOrFail($restaurant->id);
             $kitchen = Location::findOrFail($kitchen->id);
@@ -98,12 +101,12 @@ class InstallationService
                 'managing_kitchen_id' => $kitchen->id,
                 'effective_from' => $boundary,
             ]);
-        });
+        }));
     }
 
     public function establishSupply(Location $restaurant, Location $kitchen): LocationSupplyRelationship
     {
-        return DB::transaction(function () use ($restaurant, $kitchen): LocationSupplyRelationship {
+        return $this->contexts->run('installation.supply.establish', null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($restaurant, $kitchen): LocationSupplyRelationship {
             $organization = $this->lockOrganization();
             $restaurant = Location::findOrFail($restaurant->id);
             $kitchen = Location::findOrFail($kitchen->id);
@@ -118,12 +121,12 @@ class InstallationService
                 'supplier_kitchen_id' => $kitchen->id,
                 'is_active' => true,
             ]);
-        });
+        }));
     }
 
     public function disableSupply(LocationSupplyRelationship $relationship): LocationSupplyRelationship
     {
-        return DB::transaction(function () use ($relationship): LocationSupplyRelationship {
+        return $this->contexts->run('installation.supply.disable', null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($relationship): LocationSupplyRelationship {
             $organization = $this->lockOrganization();
             $relationship = LocationSupplyRelationship::findOrFail($relationship->id);
             if ($relationship->organization_id !== $organization->id) {
@@ -132,7 +135,7 @@ class InstallationService
             $relationship->update(['is_active' => false]);
 
             return $relationship->refresh();
-        });
+        }));
     }
 
     public function managedRestaurants(Location $kitchen, int $perPage): LengthAwarePaginator

@@ -2,6 +2,7 @@
 
 namespace App\Domain\Identity;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\SecurityMutation;
@@ -26,7 +27,11 @@ use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 
 class AccountLinks
 {
-    public function __construct(private BusinessAuthorization $authorization, private SecurityMutation $mutations) {}
+    public function __construct(
+        private BusinessAuthorization $authorization,
+        private SecurityMutation $mutations,
+        private AuthorizationMutationContext $contexts,
+    ) {}
 
     private function repository(string $kind): DatabaseTokenRepository
     {
@@ -69,7 +74,7 @@ class AccountLinks
     public function issue(User $target, string $kind, string $ip, ?User $actor = null, ?Location $context = null, bool $bootstrap = false): void
     {
         $repository = $this->repository($kind);
-        $delivery = DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $repository): ?array {
+        $delivery = $this->contexts->run('account.issue', $actor?->id, fn (): ?array => DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $repository): ?array {
             $organization = Organization::whereKey($target->organization_id)->lockForUpdate()->firstOrFail();
             $target = $target->fresh();
             $allowed = $bootstrap
@@ -98,7 +103,7 @@ class AccountLinks
             $this->mutations->record($actor, $target, $context, $kind.'.initiate', 'accepted');
 
             return ['email' => $target->email, 'token' => $token];
-        });
+        }));
         if ($delivery === null) {
             throw new BusinessRuleViolation(__('messages.identity_rate_limited'));
         }
@@ -121,7 +126,7 @@ class AccountLinks
             fn ($attribute, $value, $fail) => strlen($value) > 72 ? $fail(__('messages.password_must_not_exceed_72_bytes')) : null,
         ]])->validate();
         $email = User::normalizeEmail($email);
-        $consumed = DB::transaction(function () use ($kind, $email, $token, $password, $repository): bool {
+        $consumed = $this->contexts->run('account.consume', null, fn (): bool => DB::transaction(function () use ($kind, $email, $token, $password, $repository): bool {
             Organization::lockForUpdate()->firstOrFail();
             $target = User::where('email', $email)->first();
             if (! $target || ! $target->is_active || ! $target->organization->is_active
@@ -142,7 +147,7 @@ class AccountLinks
             $this->mutations->record(null, $target, null, $kind.'.complete', 'accepted');
 
             return true;
-        });
+        }));
         if (! $consumed) {
             throw ValidationException::withMessages(['link' => __('messages.account_link_invalid')]);
         }

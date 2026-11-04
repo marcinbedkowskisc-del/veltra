@@ -2,6 +2,7 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Organization;
@@ -15,6 +16,8 @@ use SensitiveParameter;
 
 final class RawMaterialPermissionBootstrap
 {
+    public function __construct(private AuthorizationMutationContext $contexts) {}
+
     /**
      * @param  list<string>  $permissions
      * @return list<array{id: string, user_id: string, permission: string}>
@@ -48,7 +51,7 @@ final class RawMaterialPermissionBootstrap
             throw new AuthorizationException(__('messages.raw_material_bootstrap_denied'));
         }
 
-        return DB::transaction(function () use ($actor, $recipient, $permissions, $reason, $password): array {
+        return $this->contexts->run('permission.bootstrap', $actor->id, fn (): array => DB::transaction(function () use ($actor, $recipient, $permissions, $reason, $password): array {
             $organization = Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $freshActor = User::with('organization')->find($actor->id);
             $freshRecipient = User::find($recipient->id);
@@ -104,6 +107,6 @@ final class RawMaterialPermissionBootstrap
             }
 
             return $grants;
-        });
+        }));
     }
 }

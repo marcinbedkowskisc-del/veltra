@@ -2,6 +2,7 @@
 
 namespace App\Domain\Identity;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Location;
 use App\Models\LocationMembership;
@@ -12,9 +13,11 @@ use Illuminate\Support\Facades\DB;
 
 class MembershipService
 {
+    public function __construct(private AuthorizationMutationContext $contexts) {}
+
     public function assign(User $user, Location $location): LocationMembership
     {
-        return DB::transaction(function () use ($user, $location): LocationMembership {
+        return $this->contexts->run('membership.assign', null, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
             $organization = Organization::lockForUpdate()->firstOrFail();
             $user = $user->fresh();
             $location = $location->fresh();
@@ -34,23 +37,25 @@ class MembershipService
                 'location_id' => $location->id, 'is_active' => true,
                 'assigned_at' => DB::scalar('SELECT clock_timestamp()'),
             ]);
-        });
+        }));
     }
 
     public function deactivate(LocationMembership $membership, string $reason): void
     {
         validator(['reason' => $reason], ['reason' => ['required', 'string', 'max:250']])->validate();
-        DB::transaction(function () use ($membership, $reason): void {
-            $membership = LocationMembership::findOrFail($membership->id);
-            Organization::whereKey($membership->organization_id)->lockForUpdate()->firstOrFail();
-            $membership->refresh();
-            if ($membership->is_active) {
-                $membership->update([
-                    'is_active' => false,
-                    'deactivated_at' => DB::scalar('SELECT clock_timestamp()'),
-                    'deactivation_reason' => $reason,
-                ]);
-            }
+        $this->contexts->run('membership.deactivate', null, function () use ($membership, $reason): void {
+            DB::transaction(function () use ($membership, $reason): void {
+                $membership = LocationMembership::findOrFail($membership->id);
+                Organization::whereKey($membership->organization_id)->lockForUpdate()->firstOrFail();
+                $membership->refresh();
+                if ($membership->is_active) {
+                    $membership->update([
+                        'is_active' => false,
+                        'deactivated_at' => DB::scalar('SELECT clock_timestamp()'),
+                        'deactivation_reason' => $reason,
+                    ]);
+                }
+            });
         });
     }
 

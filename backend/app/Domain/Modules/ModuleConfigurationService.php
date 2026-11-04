@@ -2,6 +2,7 @@
 
 namespace App\Domain\Modules;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
@@ -30,6 +31,7 @@ final class ModuleConfigurationService
         private ModuleCatalog $catalog,
         private BusinessAuthorization $authorization,
         private SecurityMutation $mutations,
+        private AuthorizationMutationContext $contexts,
     ) {}
 
     /**
@@ -78,7 +80,7 @@ final class ModuleConfigurationService
         $failureCode = 'operation_rejected';
 
         try {
-            return DB::transaction(function () use (
+            return $this->contexts->run('module.configure', $actor->id, function () use (
                 $actor,
                 $context,
                 $enabled,
@@ -90,190 +92,203 @@ final class ModuleConfigurationService
                 &$auditPairs,
                 &$failureCode,
             ): array {
-                $organization = Organization::whereKey($actor->organization_id)->lockForUpdate()->first();
-                if (! $organization) {
-                    $failureCode = 'organization_unavailable';
-                    throw new BusinessRuleViolation(__('messages.module_configuration_organization_unavailable'));
-                }
-
-                $freshActor = User::with('organization')->find($actor->id);
-                $freshContext = Location::find($context->id);
-                if (! $freshActor || ! $freshContext || ! $this->authorization->eligible($freshActor, $freshContext)
-                    || ! $this->authorization->hasRole($freshActor, BusinessRole::Administrator)) {
-                    $failureCode = 'administrator_authorization_failed';
-                    throw new AuthorizationException;
-                }
-
-                $definitions = [];
-                $unknownModules = [];
-                foreach ($moduleKeys as $key) {
-                    $definition = $this->catalog->find($key);
-                    if (! $definition) {
-                        $unknownModules[] = $key;
-
-                        continue;
-                    }
-                    $definitions[$key] = $definition;
-                }
-
-                [$locations, $selectionResolved] = $this->resolveLocations(
-                    $organization->id,
+                return DB::transaction(function () use (
+                    $actor,
+                    $context,
+                    $enabled,
+                    $moduleKeys,
                     $locationIds,
                     $allCompatible,
-                );
-                $pairs = [];
-                $moduleHasTargets = [];
-                foreach ($moduleKeys as $key) {
-                    $definition = $definitions[$key] ?? null;
-                    $targets = $allCompatible && $definition
-                        ? $locations->filter(fn (Location $location): bool => $definition->supports($location->type))
-                        : ($allCompatible ? collect() : $locations);
-                    $moduleHasTargets[$key] = $targets->isNotEmpty();
-                    foreach ($targets as $location) {
-                        $pairs[] = ['location' => $location, 'module' => $key];
+                    $password,
+                    $operationId,
+                    &$auditPairs,
+                    &$failureCode,
+                ): array {
+                    $organization = Organization::whereKey($actor->organization_id)->lockForUpdate()->first();
+                    if (! $organization) {
+                        $failureCode = 'organization_unavailable';
+                        throw new BusinessRuleViolation(__('messages.module_configuration_organization_unavailable'));
                     }
-                }
 
-                $stateRows = LocationModuleState::query()
-                    ->where('organization_id', $organization->id)
-                    ->whereIn('location_id', $locations->modelKeys())
-                    ->orderBy('location_id')->orderBy('module_key')->lockForUpdate()->get();
-                $stateByKey = $stateRows->keyBy(fn (LocationModuleState $state): string => $state->location_id.'|'.$state->module_key);
-                foreach ($pairs as $pair) {
-                    $location = $pair['location'];
-                    $state = $stateByKey->get($location->id.'|'.$pair['module']);
-                    $auditPairs[] = [
-                        'location' => $location,
-                        'module' => $pair['module'],
-                        'previous' => (bool) ($state?->enabled ?? false),
-                    ];
-                }
+                    $freshActor = User::with('organization')->find($actor->id);
+                    $freshContext = Location::find($context->id);
+                    if (! $freshActor || ! $freshContext || ! $this->authorization->eligible($freshActor, $freshContext)
+                        || ! $this->authorization->hasRole($freshActor, BusinessRole::Administrator)) {
+                        $failureCode = 'administrator_authorization_failed';
+                        throw new AuthorizationException;
+                    }
 
-                $this->confirmPassword($freshActor, $password, $failureCode);
-                if ($unknownModules !== []) {
-                    $failureCode = 'unknown_module';
-                    throw ValidationException::withMessages(['module_ids' => array_map(
-                        fn (string $key): string => __('messages.module_unknown', ['module' => $key]),
-                        $unknownModules,
-                    )]);
-                }
-                if (! $selectionResolved) {
-                    $failureCode = 'target_location_not_found';
-                    throw new BusinessRuleViolation(__('messages.module_targets_invalid'));
-                }
-                foreach ($moduleHasTargets as $key => $hasTargets) {
-                    if (! $hasTargets) {
-                        $failureCode = 'no_compatible_locations';
-                        throw new BusinessRuleViolation(__('messages.module_no_compatible_locations', ['module' => $definitions[$key]->name]));
-                    }
-                }
+                    $definitions = [];
+                    $unknownModules = [];
+                    foreach ($moduleKeys as $key) {
+                        $definition = $this->catalog->find($key);
+                        if (! $definition) {
+                            $unknownModules[] = $key;
 
-                foreach ($pairs as $pair) {
-                    /** @var Location $location */
-                    $location = $pair['location'];
-                    /** @var ModuleDefinition $definition */
-                    $definition = $definitions[$pair['module']];
-                    if (! $this->authorization->eligible($freshActor, $freshContext, $location)) {
-                        $failureCode = 'target_location_unauthorized';
-                        throw new AuthorizationException(__('messages.module_target_authorization_required'));
-                    }
-                    if (! $definition->supports($location->type)) {
-                        $failureCode = 'incompatible_location';
-                        throw new BusinessRuleViolation(__('messages.module_incompatible_location', ['module' => $definition->name]));
-                    }
-                    if ($enabled && ! $definition->ready) {
-                        $failureCode = 'module_not_ready';
-                        throw new BusinessRuleViolation(__('messages.module_not_ready', ['module' => $definition->name]));
-                    }
-                }
-
-                if ($enabled) {
-                    foreach ($auditPairs as $pair) {
-                        $definition = $definitions[$pair['module']];
-                        foreach ($definition->dependencies as $dependencyKey) {
-                            $dependency = $this->catalog->find($dependencyKey);
-                            if (! $dependency || ! $dependency->ready || ! $dependency->supports($pair['location']->type)
-                                || ! $this->configuredEnabled($pair['location'], $dependencyKey, $stateByKey)) {
-                                $failureCode = 'dependency_missing';
-                                $dependencyName = $dependency?->name ?? $dependencyKey;
-                                throw new BusinessRuleViolation(__('messages.module_dependency_missing', [
-                                    'module' => $definition->name,
-                                    'dependency' => $dependencyName,
-                                ]));
-                            }
+                            continue;
                         }
-                    }
-                } else {
-                    foreach ($auditPairs as $pair) {
-                        foreach ($this->catalog->all() as $dependent) {
-                            if ($this->dependsTransitivelyOn($dependent, $pair['module'])
-                                && $this->configuredEnabled($pair['location'], $dependent->key, $stateByKey)) {
-                                $failureCode = 'enabled_dependent';
-                                throw new BusinessRuleViolation(__('messages.cannot_disable_module', [
-                                    'module' => $pair['module'],
-                                    'dependent' => $dependent->name,
-                                ]));
-                            }
-                        }
-                    }
-                }
-
-                $timestamp = DB::scalar('SELECT clock_timestamp()');
-                $results = [];
-                $changedCount = 0;
-                foreach ($auditPairs as $pair) {
-                    /** @var Location $location */
-                    $location = $pair['location'];
-                    $key = $location->id.'|'.$pair['module'];
-                    $previous = $pair['previous'];
-                    $state = $stateByKey->get($key);
-                    $changed = $previous !== $enabled;
-
-                    if ($changed) {
-                        if ($state) {
-                            $state->update(['enabled' => $enabled, 'updated_by' => $freshActor->id, 'updated_at' => $timestamp]);
-                        } elseif ($enabled) {
-                            $state = LocationModuleState::create([
-                                'organization_id' => $organization->id,
-                                'location_id' => $location->id,
-                                'module_key' => $pair['module'],
-                                'enabled' => true,
-                                'created_by' => $freshActor->id,
-                                'updated_by' => $freshActor->id,
-                                'created_at' => $timestamp,
-                                'updated_at' => $timestamp,
-                            ]);
-                            $stateByKey->put($key, $state);
-                        }
-                        $changedCount++;
+                        $definitions[$key] = $definition;
                     }
 
-                    $this->mutations->recordModuleEvent(
-                        $freshActor, $location, $pair['module'], $previous, $enabled, $enabled,
-                        'accepted', $operationId, 'module_attempt', 'accepted',
+                    [$locations, $selectionResolved] = $this->resolveLocations(
+                        $organization->id,
+                        $locationIds,
+                        $allCompatible,
                     );
-                    if ($changed) {
+                    $pairs = [];
+                    $moduleHasTargets = [];
+                    foreach ($moduleKeys as $key) {
+                        $definition = $definitions[$key] ?? null;
+                        $targets = $allCompatible && $definition
+                            ? $locations->filter(fn (Location $location): bool => $definition->supports($location->type))
+                            : ($allCompatible ? collect() : $locations);
+                        $moduleHasTargets[$key] = $targets->isNotEmpty();
+                        foreach ($targets as $location) {
+                            $pairs[] = ['location' => $location, 'module' => $key];
+                        }
+                    }
+
+                    $stateRows = LocationModuleState::query()
+                        ->where('organization_id', $organization->id)
+                        ->whereIn('location_id', $locations->modelKeys())
+                        ->orderBy('location_id')->orderBy('module_key')->lockForUpdate()->get();
+                    $stateByKey = $stateRows->keyBy(fn (LocationModuleState $state): string => $state->location_id.'|'.$state->module_key);
+                    foreach ($pairs as $pair) {
+                        $location = $pair['location'];
+                        $state = $stateByKey->get($location->id.'|'.$pair['module']);
+                        $auditPairs[] = [
+                            'location' => $location,
+                            'module' => $pair['module'],
+                            'previous' => (bool) ($state?->enabled ?? false),
+                        ];
+                    }
+
+                    $this->confirmPassword($freshActor, $password, $failureCode);
+                    if ($unknownModules !== []) {
+                        $failureCode = 'unknown_module';
+                        throw ValidationException::withMessages(['module_ids' => array_map(
+                            fn (string $key): string => __('messages.module_unknown', ['module' => $key]),
+                            $unknownModules,
+                        )]);
+                    }
+                    if (! $selectionResolved) {
+                        $failureCode = 'target_location_not_found';
+                        throw new BusinessRuleViolation(__('messages.module_targets_invalid'));
+                    }
+                    foreach ($moduleHasTargets as $key => $hasTargets) {
+                        if (! $hasTargets) {
+                            $failureCode = 'no_compatible_locations';
+                            throw new BusinessRuleViolation(__('messages.module_no_compatible_locations', ['module' => $definitions[$key]->name]));
+                        }
+                    }
+
+                    foreach ($pairs as $pair) {
+                        /** @var Location $location */
+                        $location = $pair['location'];
+                        /** @var ModuleDefinition $definition */
+                        $definition = $definitions[$pair['module']];
+                        if (! $this->authorization->eligible($freshActor, $freshContext, $location)) {
+                            $failureCode = 'target_location_unauthorized';
+                            throw new AuthorizationException(__('messages.module_target_authorization_required'));
+                        }
+                        if (! $definition->supports($location->type)) {
+                            $failureCode = 'incompatible_location';
+                            throw new BusinessRuleViolation(__('messages.module_incompatible_location', ['module' => $definition->name]));
+                        }
+                        if ($enabled && ! $definition->ready) {
+                            $failureCode = 'module_not_ready';
+                            throw new BusinessRuleViolation(__('messages.module_not_ready', ['module' => $definition->name]));
+                        }
+                    }
+
+                    if ($enabled) {
+                        foreach ($auditPairs as $pair) {
+                            $definition = $definitions[$pair['module']];
+                            foreach ($definition->dependencies as $dependencyKey) {
+                                $dependency = $this->catalog->find($dependencyKey);
+                                if (! $dependency || ! $dependency->ready || ! $dependency->supports($pair['location']->type)
+                                    || ! $this->configuredEnabled($pair['location'], $dependencyKey, $stateByKey)) {
+                                    $failureCode = 'dependency_missing';
+                                    $dependencyName = $dependency?->name ?? $dependencyKey;
+                                    throw new BusinessRuleViolation(__('messages.module_dependency_missing', [
+                                        'module' => $definition->name,
+                                        'dependency' => $dependencyName,
+                                    ]));
+                                }
+                            }
+                        }
+                    } else {
+                        foreach ($auditPairs as $pair) {
+                            foreach ($this->catalog->all() as $dependent) {
+                                if ($this->dependsTransitivelyOn($dependent, $pair['module'])
+                                    && $this->configuredEnabled($pair['location'], $dependent->key, $stateByKey)) {
+                                    $failureCode = 'enabled_dependent';
+                                    throw new BusinessRuleViolation(__('messages.cannot_disable_module', [
+                                        'module' => $pair['module'],
+                                        'dependent' => $dependent->name,
+                                    ]));
+                                }
+                            }
+                        }
+                    }
+
+                    $timestamp = DB::scalar('SELECT clock_timestamp()');
+                    $results = [];
+                    $changedCount = 0;
+                    foreach ($auditPairs as $pair) {
+                        /** @var Location $location */
+                        $location = $pair['location'];
+                        $key = $location->id.'|'.$pair['module'];
+                        $previous = $pair['previous'];
+                        $state = $stateByKey->get($key);
+                        $changed = $previous !== $enabled;
+
+                        if ($changed) {
+                            if ($state) {
+                                $state->update(['enabled' => $enabled, 'updated_by' => $freshActor->id, 'updated_at' => $timestamp]);
+                            } elseif ($enabled) {
+                                $state = LocationModuleState::create([
+                                    'organization_id' => $organization->id,
+                                    'location_id' => $location->id,
+                                    'module_key' => $pair['module'],
+                                    'enabled' => true,
+                                    'created_by' => $freshActor->id,
+                                    'updated_by' => $freshActor->id,
+                                    'created_at' => $timestamp,
+                                    'updated_at' => $timestamp,
+                                ]);
+                                $stateByKey->put($key, $state);
+                            }
+                            $changedCount++;
+                        }
+
                         $this->mutations->recordModuleEvent(
                             $freshActor, $location, $pair['module'], $previous, $enabled, $enabled,
-                            'accepted', $operationId, 'module_transition', 'state_changed',
+                            'accepted', $operationId, 'module_attempt', 'accepted',
                         );
+                        if ($changed) {
+                            $this->mutations->recordModuleEvent(
+                                $freshActor, $location, $pair['module'], $previous, $enabled, $enabled,
+                                'accepted', $operationId, 'module_transition', 'state_changed',
+                            );
+                        }
+                        $results[] = [
+                            'location_id' => $location->id,
+                            'module' => $pair['module'],
+                            'previous_state' => $previous ? 'ENABLED' : 'DISABLED',
+                            'effective_state' => $enabled ? 'ENABLED' : 'DISABLED',
+                            'changed' => $changed,
+                        ];
                     }
-                    $results[] = [
-                        'location_id' => $location->id,
-                        'module' => $pair['module'],
-                        'previous_state' => $previous ? 'ENABLED' : 'DISABLED',
-                        'effective_state' => $enabled ? 'ENABLED' : 'DISABLED',
-                        'changed' => $changed,
-                    ];
-                }
 
-                return [
-                    'operation_id' => $operationId,
-                    'requested_state' => $enabled ? 'ENABLED' : 'DISABLED',
-                    'changed_count' => $changedCount,
-                    'unchanged_count' => count($results) - $changedCount,
-                    'targets' => $results,
-                ];
+                    return [
+                        'operation_id' => $operationId,
+                        'requested_state' => $enabled ? 'ENABLED' : 'DISABLED',
+                        'changed_count' => $changedCount,
+                        'unchanged_count' => count($results) - $changedCount,
+                        'targets' => $results,
+                    ];
+                });
             });
         } catch (AuthorizationException|BusinessRuleViolation|QueryException|TooManyRequestsHttpException|ValidationException $exception) {
             $this->recordRejected($actor, $operationId, $moduleKeys, $enabled, $auditPairs, $failureCode);

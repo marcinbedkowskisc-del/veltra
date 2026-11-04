@@ -2,6 +2,7 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
@@ -11,7 +12,10 @@ use Illuminate\Validation\ValidationException;
 
 final class RawMaterialService
 {
-    public function __construct(private RawMaterialAuthorization $authorization) {}
+    public function __construct(
+        private RawMaterialAuthorization $authorization,
+        private AuthorizationMutationContext $contexts,
+    ) {}
 
     public function categories(User $actor, Location $context): array
     {
@@ -25,7 +29,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
 
-        return DB::transaction(function () use ($actor, $context, $input): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
             $parent = null;
@@ -58,14 +62,14 @@ final class RawMaterialService
             $this->audit($actor, $context, 'CATEGORY', $id, 'CATEGORY_CREATED', null, ['code' => $input['code']]);
 
             return (array) DB::table('raw_material_categories')->where('id', $id)->first();
-        });
+        }));
     }
 
     public function renameCategory(User $actor, Location $context, string $categoryId, string $name): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
 
-        return DB::transaction(function () use ($actor, $context, $categoryId, $name): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $categoryId, $name): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
             $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
@@ -77,7 +81,7 @@ final class RawMaterialService
             $this->audit($actor, $context, 'CATEGORY', $categoryId, 'CATEGORY_RENAMED', null, ['code' => $category->code]);
 
             return (array) DB::table('raw_material_categories')->where('id', $categoryId)->first();
-        });
+        }));
     }
 
     public function list(User $actor, Location $context, array $filters): array
@@ -198,7 +202,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
 
-        return DB::transaction(function () use ($actor, $context, $input): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
             $this->requireCategory($actor, $input['category_id']);
@@ -250,14 +254,14 @@ final class RawMaterialService
             ]);
 
             return $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
-        });
+        }));
     }
 
     public function revise(User $actor, Location $context, string $materialId, array $input): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $input): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
             $material = $this->material($actor, $materialId, true);
@@ -318,14 +322,14 @@ final class RawMaterialService
             ]);
 
             return $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
-        });
+        }));
     }
 
     public function submit(User $actor, Location $context, string $materialId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
 
-        return DB::transaction(function () use ($actor, $context, $materialId): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
             $material = $this->material($actor, $materialId, true);
@@ -345,14 +349,14 @@ final class RawMaterialService
             ]);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function returnForChanges(User $actor, Location $context, string $materialId, string $reason): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
             $material = $this->material($actor, $materialId, true);
@@ -384,14 +388,14 @@ final class RawMaterialService
             ], $reason, $operationId);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function approve(User $actor, Location $context, string $materialId, string $reason): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
             $material = $this->material($actor, $materialId, true);
@@ -439,14 +443,14 @@ final class RawMaterialService
             ], $reason, $operationId);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function block(User $actor, Location $context, string $materialId, string $reason): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
             $material = $this->material($actor, $materialId, true);
@@ -464,7 +468,7 @@ final class RawMaterialService
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'BLOCKED', $previous, [], $reason);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function unblock(User $actor, Location $context, string $materialId, string $reason): array
@@ -472,7 +476,7 @@ final class RawMaterialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
@@ -491,14 +495,14 @@ final class RawMaterialService
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'UNBLOCKED', $previous, [], $reason);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function archive(User $actor, Location $context, string $materialId, string $reason): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
             $material = $this->material($actor, $materialId, true);
@@ -519,14 +523,14 @@ final class RawMaterialService
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'ARCHIVED', $previous, [], $reason);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     public function restore(User $actor, Location $context, string $materialId, string $reason): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
 
-        return DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
             $material = $this->material($actor, $materialId, true);
@@ -589,7 +593,7 @@ final class RawMaterialService
             ], $reason);
 
             return $this->presentCurrent($actor, $materialId);
-        });
+        }));
     }
 
     private function insertRevision(

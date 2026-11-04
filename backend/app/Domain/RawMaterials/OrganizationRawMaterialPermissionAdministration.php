@@ -2,6 +2,7 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\Organization;
@@ -13,7 +14,10 @@ use Illuminate\Support\Str;
 
 final class OrganizationRawMaterialPermissionAdministration
 {
-    public function __construct(private RawMaterialAuthorization $authorization) {}
+    public function __construct(
+        private RawMaterialAuthorization $authorization,
+        private AuthorizationMutationContext $contexts,
+    ) {}
 
     /**
      * @return array{id: string, user_id: string, permission: string, valid_from: string, valid_until: ?string}
@@ -36,7 +40,7 @@ final class OrganizationRawMaterialPermissionAdministration
             throw new AuthorizationException(__('messages.unauthorized'));
         }
 
-        return DB::transaction(function () use ($actor, $context, $recipient, $permission, $reason, $validFrom, $validUntil): array {
+        return $this->contexts->run('permission.grant', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $recipient, $permission, $reason, $validFrom, $validUntil): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
             if ($actor->is($recipient) || $recipient->organization_id !== $actor->organization_id
@@ -107,7 +111,7 @@ final class OrganizationRawMaterialPermissionAdministration
                 'valid_from' => $requestedFrom->toISOString(),
                 'valid_until' => $validUntil,
             ];
-        });
+        }));
     }
 
     public function revoke(
@@ -118,53 +122,55 @@ final class OrganizationRawMaterialPermissionAdministration
     ): void {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
 
-        DB::transaction(function () use ($actor, $context, $grantId, $reason): void {
-            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
-            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
-            $grant = DB::table('organization_permission_grants')
-                ->where('organization_id', $actor->organization_id)
-                ->where('id', $grantId)
-                ->first();
+        $this->contexts->run('permission.revoke', $actor->id, function () use ($actor, $context, $grantId, $reason): void {
+            DB::transaction(function () use ($actor, $context, $grantId, $reason): void {
+                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+                $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
+                $grant = DB::table('organization_permission_grants')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('id', $grantId)
+                    ->first();
 
-            if (! $grant) {
-                throw new AuthorizationException(__('messages.unauthorized'));
-            }
+                if (! $grant) {
+                    throw new AuthorizationException(__('messages.unauthorized'));
+                }
 
-            $alreadyRevoked = DB::table('organization_permission_grant_events')
-                ->where('grant_id', $grant->id)->where('event_type', 'REVOKED')->exists();
-            if ($alreadyRevoked) {
-                throw new RawMaterialException(
-                    'RAW_MATERIAL_PERMISSION_ALREADY_REVOKED',
-                    __('messages.raw_material_permission_already_revoked'),
-                );
-            }
+                $alreadyRevoked = DB::table('organization_permission_grant_events')
+                    ->where('grant_id', $grant->id)->where('event_type', 'REVOKED')->exists();
+                if ($alreadyRevoked) {
+                    throw new RawMaterialException(
+                        'RAW_MATERIAL_PERMISSION_ALREADY_REVOKED',
+                        __('messages.raw_material_permission_already_revoked'),
+                    );
+                }
 
-            $operationId = Str::uuid()->toString();
-            DB::table('organization_permission_grant_events')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $actor->organization_id,
-                'grant_id' => $grant->id,
-                'event_type' => 'REVOKED',
-                'actor_user_id' => $actor->id,
-                'reason_code' => 'USER_PROVIDED',
-            ]);
-            DB::table('raw_material_audit_events')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $actor->organization_id,
-                'operation_id' => $operationId,
-                'actor_user_id' => $actor->id,
-                'actor_location_id' => $context->id,
-                'subject_type' => 'ORGANIZATION_PERMISSION_GRANT',
-                'subject_id' => $grant->id,
-                'event_code' => 'PERMISSION_REVOKED',
-                'outcome' => 'ACCEPTED',
-                'reason_code' => 'USER_PROVIDED',
-                'metadata' => json_encode([
-                    'user_id' => $grant->user_id,
-                    'permission' => $grant->permission,
-                    'reason' => $reason,
-                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-            ]);
+                $operationId = Str::uuid()->toString();
+                DB::table('organization_permission_grant_events')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'grant_id' => $grant->id,
+                    'event_type' => 'REVOKED',
+                    'actor_user_id' => $actor->id,
+                    'reason_code' => 'USER_PROVIDED',
+                ]);
+                DB::table('raw_material_audit_events')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'operation_id' => $operationId,
+                    'actor_user_id' => $actor->id,
+                    'actor_location_id' => $context->id,
+                    'subject_type' => 'ORGANIZATION_PERMISSION_GRANT',
+                    'subject_id' => $grant->id,
+                    'event_code' => 'PERMISSION_REVOKED',
+                    'outcome' => 'ACCEPTED',
+                    'reason_code' => 'USER_PROVIDED',
+                    'metadata' => json_encode([
+                        'user_id' => $grant->user_id,
+                        'permission' => $grant->permission,
+                        'reason' => $reason,
+                    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                ]);
+            });
         });
     }
 }

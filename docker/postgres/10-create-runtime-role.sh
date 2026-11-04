@@ -130,30 +130,70 @@ BEGIN;
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'app_db_username') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'migration_username') \gexec
 SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'app_db_username') \gexec
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+SELECT format('REVOKE CREATE ON SCHEMA public FROM %I', :'app_db_username') \gexec
 SELECT format(
-    'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %I',
+    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM PUBLIC, %I',
     :'app_db_username'
 ) \gexec
 SELECT format(
-    'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
+    'REVOKE USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, %I',
     :'app_db_username'
 ) \gexec
 SELECT format(
-    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I',
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE INSERT, UPDATE, DELETE ON TABLES FROM PUBLIC, %I',
     :'migration_username',
     :'app_db_username'
 ) \gexec
 SELECT format(
-    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I',
+    'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM PUBLIC, %I',
     :'migration_username',
     :'app_db_username'
 ) \gexec
-SELECT format(
-    'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON TABLE %s FROM %I',
-    to_regclass('public.raw_material_permission_grant_operation_uses'),
-    :'app_db_username'
-)
-WHERE to_regclass('public.raw_material_permission_grant_operation_uses') IS NOT NULL
-\gexec
+SELECT set_config('veltra.runtime_role', :'app_db_username', true);
+DO $$
+DECLARE
+    object_name name;
+    runtime_role name := current_setting('veltra.runtime_role');
+BEGIN
+    IF to_regclass('veltra_private.runtime_table_allowlist') IS NOT NULL THEN
+        FOR object_name IN EXECUTE
+            'SELECT table_name FROM veltra_private.runtime_table_allowlist ORDER BY table_name'
+        LOOP
+            EXECUTE format(
+                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO %I',
+                object_name,
+                runtime_role
+            );
+        END LOOP;
+    END IF;
+
+    IF to_regclass('public.raw_material_permission_grant_operation_uses') IS NOT NULL THEN
+        EXECUTE format(
+            'GRANT SELECT ON TABLE public.raw_material_permission_grant_operation_uses TO %I',
+            runtime_role
+        );
+    END IF;
+
+    IF to_regclass('public.raw_materials_currency_codes') IS NOT NULL THEN
+        EXECUTE format(
+            'GRANT SELECT ON TABLE public.raw_materials_currency_codes TO %I',
+            runtime_role
+        );
+    END IF;
+
+    IF to_regclass('veltra_private.runtime_sequence_allowlist') IS NOT NULL THEN
+        FOR object_name IN EXECUTE
+            'SELECT sequence_name FROM veltra_private.runtime_sequence_allowlist ORDER BY sequence_name'
+        LOOP
+            EXECUTE format(
+                'GRANT USAGE, SELECT, UPDATE ON SEQUENCE public.%I TO %I',
+                object_name,
+                runtime_role
+            );
+        END LOOP;
+    END IF;
+END
+$$;
 COMMIT;
 SQL

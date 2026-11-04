@@ -2,6 +2,7 @@
 
 namespace App\Domain\Identity;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Organization;
 use App\Models\User;
@@ -12,6 +13,8 @@ use SensitiveParameter;
 
 class IdentityService
 {
+    public function __construct(private AuthorizationMutationContext $contexts) {}
+
     public function provisionInitial(array $profile, #[SensitiveParameter] string $password): User
     {
         $profile['email'] = User::normalizeEmail($profile['email'] ?? '');
@@ -29,7 +32,7 @@ class IdentityService
             ],
         ])->validate();
 
-        return DB::transaction(function () use ($profile, $password): User {
+        return $this->contexts->run('identity.bootstrap', null, fn (): User => DB::transaction(function () use ($profile, $password): User {
             DB::select('SELECT pg_advisory_xact_lock(8612002)');
             $organization = Organization::lockForUpdate()->first();
             if (! $organization || ! $organization->is_active) {
@@ -48,18 +51,20 @@ class IdentityService
                 'is_active' => true,
                 'is_initial_identity' => true,
             ]);
-        });
+        }));
     }
 
     public function disable(User $user): void
     {
-        DB::transaction(function () use ($user): void {
-            $freshUser = User::findOrFail($user->id);
-            Organization::whereKey($freshUser->organization_id)->lockForUpdate()->firstOrFail();
-            $freshUser->refresh();
-            if ($freshUser->is_active) {
-                $freshUser->update(['is_active' => false]);
-            }
+        $this->contexts->run('identity.disable', null, function () use ($user): void {
+            DB::transaction(function () use ($user): void {
+                $freshUser = User::findOrFail($user->id);
+                Organization::whereKey($freshUser->organization_id)->lockForUpdate()->firstOrFail();
+                $freshUser->refresh();
+                if ($freshUser->is_active) {
+                    $freshUser->update(['is_active' => false]);
+                }
+            });
         });
     }
 }

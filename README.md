@@ -72,7 +72,10 @@ przekazywany kontenerom aplikacji ani usludze migracji. Konto runtime ma tylko
 odczyt rejestru uzyc operacji uprawnien. Wpisy do niego dopisuje trigger
 uruchamiany przez PostgreSQL podczas autoryzowanego bootstrapu; rola runtime
 nie ma prawa `EXECUTE` do funkcji `SECURITY DEFINER` i nie moze podpiac jej
-do wlasnej tabeli tymczasowej.
+do wlasnej tabeli tymczasowej. Migracja 022 wymaga podpisanego, krotko waznego
+kontekstu transakcji dla wszystkich mutowalnych tabel aplikacji. Tabele
+referencyjne walut i rejestr operacji sa tylko do odczytu dla runtime; nowe
+obiekty nie otrzymuja domyslnie praw DML.
 
 Profil `testing` uruchamia migracje i testy jako rola migracyjna na osobnej
 bazie `veltra_testing`, a testy sprawdzaja jej nazwe przed zapisem. Skrypt
@@ -94,6 +97,25 @@ wylacznie biezacej bazy na te role. Nie uruchamiaj go na wspoldzielonej bazie
 ani bez uprzedniej weryfikacji konfiguracji. Dopiero po provisioningu mozna
 uruchomic jawna migracje. Sama edycja `.env` nie zmienia ról ani hasel w bazie.
 
+Przed migracja 022 na istniejacej bazie przejrzyj historyczne dane autoryzacyjne
+i audytowe. Jesli ktorakolwiek chroniona tabela zawiera dane, migracja przerwie
+sie atomowo, dopoki administrator nie potwierdzi recznego przegladu. Ustaw
+zmienna tylko dla jednorazowego uruchomienia `migrate` i podstaw rzeczywista
+nazwe bazy:
+
+```bash
+APP_DB_AUTHORIZATION_HISTORY_ATTESTATION="REVIEWED:veltra:2026_11_05_000022" \
+  docker compose run --rm migrate
+```
+
+Wartosc musi odpowiadac dokladnie nazwie bazy i migracji. Migracja zapisuje
+potwierdzenie, role wykonujaca migracje oraz liste tabel zawierajacych dane
+przed zmiana w niedostepnym dla runtime schemacie `veltra_private`. Po migracji
+usun zmienna z powloki/srodowiska. Nie ustawiaj jej bez recznego przegladu.
+Pusta nowa instalacja nie wymaga potwierdzenia; rejestruje brak danych
+historycznych. Ponowne uruchomienie skryptu provisioningu nie przywraca
+runtime praw zapisu do rejestru operacji ani tabel referencyjnych.
+
 ## Konfiguracja
 
 - [`.env.example`](.env.example): parametry Compose; puste miejsca na sekrety.
@@ -103,6 +125,9 @@ uruchomic jawna migracje. Sama edycja `.env` nie zmienia ról ani hasel w bazie.
   uzywaj ich jako roli migracyjnej ani administratora.
 - `APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD`: osobna rola
   nie-superuzytkownikowa uzywana tylko przez jawne migracje i testy.
+- `APP_DB_AUTHORIZATION_HISTORY_ATTESTATION`: jednorazowe potwierdzenie
+  recznego przegladu danych istniejacej bazy przed migracja 022; pozostaw puste
+  poza kontrolowanym uruchomieniem migracji.
 
 Compose przekazuje konfiguracje bezposrednio do Laravel; nie trzeba tworzyc
 `backend/.env` ani `frontend/.env`. Wygenerowany glowny `.env` zawiera sekrety

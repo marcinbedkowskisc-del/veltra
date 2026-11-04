@@ -9,6 +9,7 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\RoleAssignment;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Tests\AuthorizationTestCase;
 
@@ -17,13 +18,24 @@ class RoleAdministrationTest extends AuthorizationTestCase
     public function test_admin_grants_require_fresh_password_and_rejections_are_durable(): void
     {
         $actor = app(IdentityService::class)->provisionInitial(['first_name' => 'Initial', 'last_name' => 'Admin', 'email' => 'admin@example.test'], self::PASSWORD);
-        $actor->forceFill(['email_verified_at' => now()])->save();
+        $actor = $this->updateFixture($actor, ['email_verified_at' => now()]);
         $roles = app(RoleAdministration::class);
-        $roles->bootstrapInitial($actor);
+        try {
+            $roles->bootstrapInitial($actor);
+            $this->fail('A verified initial administrator was activated without an operating membership.');
+        } catch (BusinessRuleViolation $exception) {
+            $this->assertSame(__('messages.initial_administrator_membership_required'), $exception->getMessage());
+        }
+        $this->assertFalse($actor->organization->fresh()->authorization_initialized);
+        $this->assertFalse(RoleAssignment::where('user_id', $actor->id)->where('role', BusinessRole::Administrator)->exists());
+
         $context = $this->kitchen();
         app(MembershipService::class)->assign($actor, $context);
+        $roles->bootstrapInitial($actor);
+        $this->assertTrue($actor->organization->fresh()->authorization_initialized);
+
         $other = $this->user();
-        $other->forceFill(['email_verified_at' => now()])->save();
+        $other = $this->updateFixture($other, ['email_verified_at' => now()]);
         try {
             $roles->grant($actor, $context, $other, BusinessRole::Administrator, null, 'wrong');
             $this->fail('Fresh password confirmation was bypassed.');
@@ -35,15 +47,15 @@ class RoleAdministrationTest extends AuthorizationTestCase
         $roles->revoke($actor, $context, RoleAssignment::where('user_id', $actor->id)->firstOrFail(), self::PASSWORD);
         $this->assertNotNull(RoleAssignment::where('user_id', $actor->id)->firstOrFail()->revoked_at);
         $this->assertNull($second->fresh()->revoked_at);
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')->update(['outcome' => 'accepted']));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')->update(['outcome' => 'accepted']));
     }
 
     public function test_last_administrator_cannot_be_revoked_disabled_or_bypassed_by_sql(): void
     {
         $actor = $this->user();
-        $actor->forceFill(['email_verified_at' => now()])->save();
+        $actor = $this->updateFixture($actor, ['email_verified_at' => now()]);
         $role = $this->role($actor, BusinessRole::Administrator);
-        $actor->organization->forceFill(['authorization_initialized' => true])->save();
+        $this->updateFixture($actor->organization, ['authorization_initialized' => true]);
         $context = $this->kitchen();
         app(MembershipService::class)->assign($actor, $context);
         $roles = app(RoleAdministration::class);
@@ -59,12 +71,12 @@ class RoleAdministrationTest extends AuthorizationTestCase
                 $this->assertNull($role->fresh()->revoked_at);
             }
         }
-        $this->assertDatabaseRejects('23514', fn () => $actor->update(['is_active' => false]));
-        $this->assertDatabaseRejects('23514', fn () => $role->update(['revoked_at' => now()]));
-        $this->assertDatabaseRejects('23514', fn () => $actor->organization->forceFill(['authorization_initialized' => false])->save());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($actor)->update(['is_active' => false]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($role)->update(['revoked_at' => now()]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($actor->organization)->forceFill(['authorization_initialized' => false])->save());
         $membership = $actor->memberships()->firstOrFail();
-        $this->assertDatabaseRejects('23514', fn () => app(MembershipService::class)->deactivate($membership, 'Attempted context removal'));
-        $this->assertDatabaseRejects('23514', fn () => $context->update(['is_active' => false]));
+        $this->assertRuntimeDatabaseRejects('23514', fn () => app(MembershipService::class)->deactivate($membership, 'Attempted context removal'));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($context)->update(['is_active' => false]));
     }
 
     public function test_manager_and_kitchen_hierarchy_and_protected_roles_across_locations(): void
@@ -72,7 +84,7 @@ class RoleAdministrationTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $other = $this->activeRestaurant('R2');
         $manager = $this->user('manager@example.test');
-        $manager->forceFill(['email_verified_at' => now()])->save();
+        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
         $this->role($manager, BusinessRole::RestaurantManager, $location);
         $worker = $this->user();
         app(MembershipService::class)->assign($worker, $location);

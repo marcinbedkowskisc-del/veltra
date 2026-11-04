@@ -297,7 +297,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $replacement = $this->user('replacement-admin@example.test');
         $this->role($replacement, BusinessRole::Administrator);
         app(MembershipService::class)->assign($replacement, $this->kitchen);
-        $this->administrator->forceFill(['is_active' => false])->save();
+        $this->administrator = $this->updateFixture($this->administrator, ['is_active' => false]);
 
         $this->getJson('/api/v1/security/modules/catalog')->assertUnauthorized();
         $this->assertSame(0, DB::table('location_module_states')->count());

@@ -8,6 +8,7 @@ use App\Models\Location;
 use App\Models\LocationManagementAssignment;
 use App\Models\LocationSupplyRelationship;
 use App\Models\Organization;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\InstallationTestCase;
@@ -25,7 +26,7 @@ class InstallationDomainTest extends InstallationTestCase
     public function test_service_rejects_a_second_organization_even_when_the_first_is_inactive(): void
     {
         $organization = $this->initialize();
-        $organization->update(['is_active' => false]);
+        $this->updateFixture($organization, ['is_active' => false]);
         $this->expectException(BusinessRuleViolation::class);
         $this->service->initializeOrganization(['name' => 'Second', 'code' => 'SECOND']);
     }
@@ -33,7 +34,7 @@ class InstallationDomainTest extends InstallationTestCase
     public function test_postgresql_also_prevents_a_second_organization(): void
     {
         $this->initialize();
-        $this->assertDatabaseRejects('23505', fn () => Organization::create(['name' => 'Second', 'code' => 'SECOND']));
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => Organization::on('pgsql_setup')->create(['name' => 'Second', 'code' => 'SECOND']));
     }
 
     public function test_locations_have_explicit_types_and_eloquent_relationships(): void
@@ -55,15 +56,15 @@ class InstallationDomainTest extends InstallationTestCase
     {
         $organization = $this->initialize();
         $kitchen = $this->kitchen();
-        $this->assertDatabaseRejects('23514', fn () => DB::table('locations')->insert([
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('locations')->insert([
             'id' => Str::uuid()->toString(), 'organization_id' => $organization->id,
             'name' => 'Invalid', 'code' => 'INVALID', 'type' => 'WAREHOUSE',
             'created_at' => now(), 'updated_at' => now(),
         ]));
-        $this->assertDatabaseRejects('23505', fn () => Location::create([
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => Location::on('pgsql_setup')->create([
             'organization_id' => $organization->id, 'name' => 'Duplicate', 'code' => 'CK1', 'type' => 'RESTAURANT',
         ]));
-        $this->assertDatabaseRejects('23514', fn () => $kitchen->update(['type' => 'RESTAURANT']));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($kitchen)->update(['type' => 'RESTAURANT']));
     }
 
     public function test_initial_restaurant_can_be_unassigned_but_cannot_be_activated(): void
@@ -80,11 +81,11 @@ class InstallationDomainTest extends InstallationTestCase
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $this->assertDatabaseRejects('23514', fn () => DB::table('locations')->where('id', $restaurant->id)->update(['is_active' => true]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('locations')->where('id', $restaurant->id)->update(['is_active' => true]));
 
         DB::transaction(function () use ($restaurant, $kitchen): void {
-            DB::table('locations')->where('id', $restaurant->id)->update(['is_active' => true]);
             $this->service->assignManagingKitchen($restaurant, $kitchen);
+            $this->service->updateLocation($restaurant, ['is_active' => true]);
             DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
         });
         $this->assertTrue($restaurant->fresh()->is_active);
@@ -129,7 +130,7 @@ class InstallationDomainTest extends InstallationTestCase
         $restaurant = $this->restaurant();
         $first = $this->service->assignManagingKitchen($restaurant, $this->kitchen());
         $second = $this->kitchen('CK2');
-        $this->assertDatabaseRejects('23P01', fn () => LocationManagementAssignment::create([
+        $this->assertDatabaseRejects('23P01', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
             'organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id,
             'managing_kitchen_id' => $second->id, 'effective_from' => $first->effective_from->addSecond(),
         ]));
@@ -141,11 +142,11 @@ class InstallationDomainTest extends InstallationTestCase
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
         $base = ['organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id, 'managing_kitchen_id' => $kitchen->id];
-        LocationManagementAssignment::create([...$base, 'effective_from' => '2025-01-01T00:00:00Z', 'effective_until' => '2025-02-01T00:00:00Z']);
-        $this->assertDatabaseRejects('23P01', fn () => LocationManagementAssignment::create([
+        LocationManagementAssignment::on('pgsql_setup')->create([...$base, 'effective_from' => '2025-01-01T00:00:00Z', 'effective_until' => '2025-02-01T00:00:00Z']);
+        $this->assertDatabaseRejects('23P01', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
             ...$base, 'effective_from' => '2025-01-15T00:00:00Z', 'effective_until' => '2025-03-01T00:00:00Z',
         ]));
-        LocationManagementAssignment::create([...$base, 'effective_from' => '2025-02-01T00:00:00Z', 'effective_until' => '2025-03-01T00:00:00Z']);
+        LocationManagementAssignment::on('pgsql_setup')->create([...$base, 'effective_from' => '2025-02-01T00:00:00Z', 'effective_until' => '2025-03-01T00:00:00Z']);
         $this->assertSame(2, $restaurant->managementAssignments()->count());
     }
 
@@ -155,11 +156,11 @@ class InstallationDomainTest extends InstallationTestCase
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
         $first = $this->service->assignManagingKitchen($restaurant, $kitchen);
-        $this->assertDatabaseRejects('23514', fn () => $first->delete());
-        $this->assertDatabaseRejects('23514', fn () => $first->update(['effective_from' => now()->subDay()]));
-        $this->assertDatabaseRejects('23514', fn () => $first->fresh()->update(['effective_until' => $first->effective_from]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->update(['effective_from' => now()->subDay()]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->fresh()->update(['effective_until' => $first->effective_from]));
         $this->service->assignManagingKitchen($restaurant, $this->kitchen('CK2'), replace: true);
-        $this->assertDatabaseRejects('23514', fn () => $first->fresh()->update(['effective_until' => now()->addDay()]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->fresh()->update(['effective_until' => now()->addDay()]));
     }
 
     public function test_only_active_kitchens_can_manage_operational_restaurants(): void
@@ -169,7 +170,7 @@ class InstallationDomainTest extends InstallationTestCase
         $kitchen = $this->kitchen();
         $this->service->assignManagingKitchen($restaurant, $kitchen);
         $this->service->updateLocation($restaurant, ['is_active' => true]);
-        $this->assertDatabaseRejects('23514', fn () => DB::table('locations')->where('id', $kitchen->id)->update(['is_active' => false]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('locations')->where('id', $kitchen->id)->update(['is_active' => false]));
         $this->expectException(BusinessRuleViolation::class);
         $this->service->updateLocation($kitchen, ['is_active' => false]);
     }
@@ -179,7 +180,7 @@ class InstallationDomainTest extends InstallationTestCase
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $this->assertDatabaseRejects('23514', fn () => LocationManagementAssignment::create([
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
             'organization_id' => $restaurant->organization_id, 'restaurant_id' => $kitchen->id,
             'managing_kitchen_id' => $restaurant->id, 'effective_from' => now(),
         ]));
@@ -219,7 +220,7 @@ class InstallationDomainTest extends InstallationTestCase
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
         $this->service->establishSupply($restaurant, $kitchen);
-        $this->assertDatabaseRejects('23505', fn () => LocationSupplyRelationship::create([
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => LocationSupplyRelationship::on('pgsql_setup')->create([
             'organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id,
             'supplier_kitchen_id' => $kitchen->id, 'is_active' => true,
         ]));
@@ -232,7 +233,7 @@ class InstallationDomainTest extends InstallationTestCase
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $this->assertDatabaseRejects('23514', fn () => LocationSupplyRelationship::create([
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => LocationSupplyRelationship::on('pgsql_setup')->create([
             'organization_id' => $restaurant->organization_id, 'restaurant_id' => $kitchen->id,
             'supplier_kitchen_id' => $restaurant->id, 'is_active' => true,
         ]));
@@ -244,30 +245,23 @@ class InstallationDomainTest extends InstallationTestCase
     {
         $organization = $this->initialize();
         $restaurant = $this->restaurant();
-        // A rolled-back adversarial fixture bypasses ONLY the singleton constraint.
-        // Relationship constraints and application validation remain enabled.
-        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
-        DB::statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
-        $other = Organization::create(['name' => 'Adversarial fixture', 'code' => 'OTHER', 'is_active' => false]);
-        $foreignKitchen = Location::create([
-            'organization_id' => $other->id, 'name' => 'Foreign', 'code' => 'FOREIGN',
-            'type' => 'CENTRAL_KITCHEN', 'is_active' => true,
-        ]);
-        $this->assertDatabaseRejects('23503', fn () => LocationManagementAssignment::create([
-            'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
-            'managing_kitchen_id' => $foreignKitchen->id, 'effective_from' => now(),
-        ]));
-        $this->assertDatabaseRejects('23503', fn () => LocationSupplyRelationship::create([
-            'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
-            'supplier_kitchen_id' => $foreignKitchen->id, 'is_active' => true,
-        ]));
-        foreach (['assignManagingKitchen', 'establishSupply'] as $method) {
-            try {
-                $this->service->$method($restaurant, $foreignKitchen);
-                $this->fail('Cross-organization relationship was accepted.');
-            } catch (BusinessRuleViolation $exception) {
-                $this->assertSame(__('messages.location_must_belong_to_organization'), $exception->getMessage());
+        $this->withForeignOrganizationFixture(function (Location $foreignKitchen) use ($organization, $restaurant): void {
+            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
+                'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
+                'managing_kitchen_id' => $foreignKitchen->id, 'effective_from' => now(),
+            ]));
+            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationSupplyRelationship::on('pgsql_setup')->create([
+                'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
+                'supplier_kitchen_id' => $foreignKitchen->id, 'is_active' => true,
+            ]));
+            foreach (['assignManagingKitchen', 'establishSupply'] as $method) {
+                try {
+                    $this->service->$method($restaurant, $foreignKitchen);
+                    $this->fail('Cross-organization relationship was accepted.');
+                } catch (BusinessRuleViolation $exception) {
+                    $this->assertSame(__('messages.location_must_belong_to_organization'), $exception->getMessage());
+                }
             }
-        }
+        });
     }
 }

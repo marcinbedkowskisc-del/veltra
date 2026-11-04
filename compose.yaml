@@ -77,11 +77,13 @@ services:
     environment:
       <<: *backend-environment
       DB_DATABASE: veltra_testing
-      DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
-      DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
+      DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
       APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
       APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
+      TEST_DB_SETUP_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      TEST_DB_SETUP_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
     command: ["php", "artisan", "test"]
 
   migrate:

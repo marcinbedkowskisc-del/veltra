@@ -15,7 +15,7 @@ class ManagementConcurrencyTest extends TestCase
     public function test_a_second_real_connection_waits_for_the_transaction_and_rechecks_management(bool $commit, bool $change): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $process = null;
         try {
             $service = app(InstallationService::class);
@@ -69,7 +69,7 @@ class ManagementConcurrencyTest extends TestCase
             if ($process?->isRunning()) {
                 $process->stop();
             }
-            DB::statement('TRUNCATE organizations CASCADE');
+            $this->resetTestDatabase();
         }
     }
 

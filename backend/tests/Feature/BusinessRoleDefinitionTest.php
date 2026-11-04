@@ -9,6 +9,7 @@ use App\Domain\Authorization\Permission;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\RoleAssignment;
+use Illuminate\Database\Connection;
 use Tests\AuthorizationTestCase;
 
 class BusinessRoleDefinitionTest extends AuthorizationTestCase
@@ -20,21 +21,30 @@ class BusinessRoleDefinitionTest extends AuthorizationTestCase
         $user = $this->user();
         $kitchen = $this->kitchen();
         $role = $this->role($user, BusinessRole::CentralKitchenChef, $kitchen);
-        $this->assertDatabaseRejects('23505', fn () => RoleAssignment::create($role->getAttributes()));
-        $this->assertDatabaseRejects('23514', fn () => $role->delete());
-        $this->assertDatabaseRejects('23514', fn () => $role->update(['role' => BusinessRole::Employee]));
-        $this->assertDatabaseRejects('23514', fn () => $this->role($this->user('other@example.test'), BusinessRole::RestaurantManager, $kitchen));
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => RoleAssignment::on('pgsql_setup')->create($role->getAttributes()));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($role)->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($role)->update(['role' => BusinessRole::Employee]));
+
+        $other = $this->user('other@example.test');
+        $membership = app(MembershipService::class)->assign($other, $kitchen);
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => RoleAssignment::on('pgsql_setup')->create([
+            'organization_id' => $other->organization_id,
+            'user_id' => $other->id,
+            'role' => BusinessRole::RestaurantManager,
+            'location_id' => $kitchen->id,
+            'membership_id' => $membership->id,
+        ]));
     }
 
     public function test_authorization_denies_unverified_identity_and_membership_without_role(): void
     {
         $user = $this->user();
-        $user->forceFill(['email_verified_at' => null])->save();
+        $user = $this->updateFixture($user, ['email_verified_at' => null]);
         $location = $this->kitchen();
         app(MembershipService::class)->assign($user, $location);
         $authorization = app(BusinessAuthorization::class);
         $this->assertFalse($authorization->eligible($user, $location));
-        $user->forceFill(['email_verified_at' => now()])->save();
+        $user = $this->updateFixture($user, ['email_verified_at' => now()]);
         $this->assertTrue($authorization->eligible($user, $location));
         foreach (Permission::cases() as $permission) {
             $this->assertFalse($authorization->allows($user, $location, $location, $permission));
@@ -44,7 +54,7 @@ class BusinessRoleDefinitionTest extends AuthorizationTestCase
     public function test_chef_scope_follows_management_never_supply_and_revocation_is_immediate(): void
     {
         $user = $this->user();
-        $user->forceFill(['email_verified_at' => now()])->save();
+        $user = $this->updateFixture($user, ['email_verified_at' => now()]);
         $restaurant = $this->activeRestaurant();
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
         $other = $this->kitchen('CK2');
@@ -61,7 +71,7 @@ class BusinessRoleDefinitionTest extends AuthorizationTestCase
     public function test_boss_sees_future_restaurants_but_not_central_sources_or_financial_permissions(): void
     {
         $user = $this->user();
-        $user->forceFill(['email_verified_at' => now()])->save();
+        $user = $this->updateFixture($user, ['email_verified_at' => now()]);
         $first = $this->activeRestaurant();
         app(MembershipService::class)->assign($user, $first);
         $this->role($user, BusinessRole::Boss);
@@ -100,7 +110,7 @@ class BusinessRoleDefinitionTest extends AuthorizationTestCase
         $authorization = app(BusinessAuthorization::class);
         foreach ([BusinessRole::RestaurantManager, BusinessRole::RestaurantChef, BusinessRole::Employee] as $i => $role) {
             $user = $this->user("role{$i}@example.test");
-            $user->forceFill(['email_verified_at' => now()])->save();
+            $user = $this->updateFixture($user, ['email_verified_at' => now()]);
             $this->role($user, $role, $location);
             $this->assertTrue($authorization->allows($user, $location, $location, Permission::LocationView));
             $this->assertFalse($authorization->allows($user, $location, $location, Permission::FoodcostView));

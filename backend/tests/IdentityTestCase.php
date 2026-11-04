@@ -21,14 +21,14 @@ abstract class IdentityTestCase extends InstallationTestCase
 
     protected function user(string $email = 'person@example.test'): User
     {
-        $user = User::create([
+        $user = User::on('pgsql_setup')->create([
             'organization_id' => Organization::firstOrFail()->id,
             'first_name' => 'Test', 'last_name' => 'Person',
             'email' => $email, 'password' => self::PASSWORD, 'is_active' => true,
         ]);
         $user->forceFill(['email_verified_at' => now()])->save();
 
-        return $user->refresh();
+        return User::on('pgsql')->findOrFail($user->getKey());
     }
 
     public function actingAs(Authenticatable $user, $guard = null)

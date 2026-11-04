@@ -14,8 +14,8 @@ use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
 use App\Models\LocationModuleState;
-use App\Models\Organization;
 use App\Models\User;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -45,9 +45,9 @@ class RawMaterialsTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($this->bootstrapAdministrator, $this->location);
         $this->steward = $this->user('raw-material-steward@example.test');
         app(MembershipService::class)->assign($this->steward, $this->location);
-        Organization::query()->whereKey($this->steward->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-        LocationModuleState::create([
+        LocationModuleState::on('pgsql_setup')->create([
             'organization_id' => $this->steward->organization_id,
             'location_id' => $this->location->id,
             'module_key' => 'RAW_MATERIALS',
@@ -589,20 +589,10 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->getJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events')->assertForbidden();
         $this->getJson('/api/v1/raw-materials/supplier-offers/'.Str::uuid().'/price-events')->assertForbidden();
 
-        try {
-            DB::transaction(fn () => DB::table('supplier_product_revisions')->where('id', $productRevisionId)
-                ->update(['product_name' => 'Niedozwolona zmiana']));
-            $this->fail('A supplier-product revision was mutable.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
-        }
-        try {
-            DB::transaction(fn () => DB::table('supplier_offer_events')->where('id', $eventId)
-                ->update(['net_amount_per_purchase_unit' => '100']));
-            $this->fail('A supplier-price event was mutable.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
-        }
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('supplier_product_revisions')
+            ->where('id', $productRevisionId)->update(['product_name' => 'Niedozwolona zmiana']));
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('supplier_offer_events')
+            ->where('id', $eventId)->update(['net_amount_per_purchase_unit' => '100']));
     }
 
     public function test_nbp_as_of_overrides_half_even_restatements_and_idempotency(): void
@@ -649,7 +639,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                 ->where('id', $nbpRateId)->value('source_payload_hash')],
         ];
         ksort($legacyPayload);
-        DB::table('raw_materials_commercial_idempotency')->insert([
+        DB::connection('pgsql_setup')->table('raw_materials_commercial_idempotency')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'actor_user_id' => $this->steward->id,
@@ -856,13 +846,13 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(1, DB::table('supplier_offers')->where('supplier_product_id', $fixture['product_id'])->count());
         $this->assertSame(1, DB::table('supplier_offer_events')->where('offer_id', $fixture['offer_id'])->count());
 
-        $this->assertConstraintViolation('23514', fn () => DB::table('supplier_offers')->insert([
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('supplier_offers')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'supplier_product_id' => $fixture['product_id'],
             'created_by' => $this->steward->id,
         ]));
-        $this->assertConstraintViolation('23514', fn () => DB::table('supplier_offer_events')->insert([
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('supplier_offer_events')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'offer_id' => $fixture['offer_id'],
@@ -902,7 +892,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('raw_material_reference_price_events')
             ->where('raw_material_id', $fixture['material_id'])->count());
 
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_reference_price_events')->insert([
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_material_reference_price_events')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'raw_material_id' => $fixture['material_id'],
@@ -972,7 +962,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         ], ['Idempotency-Key' => 'archived-supplier-revision-002'])->assertNotFound();
         $this->assertSame(1, DB::table('supplier_product_revisions')
             ->where('supplier_product_id', $archivedSupplier['product_id'])->count());
-        $this->assertConstraintViolation('23514', fn () => $this->insertProductRevisionDirectly(
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $this->insertProductRevisionDirectly(
+            $connection,
             $archivedSupplier['product_id'],
             $supplierRevision,
             'ARCH-S-2',
@@ -1003,7 +994,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         ], ['Idempotency-Key' => 'archived-product-revision-002'])->assertNotFound();
         $this->assertSame(1, DB::table('supplier_product_revisions')
             ->where('supplier_product_id', $archivedProduct['product_id'])->count());
-        $this->assertConstraintViolation('23514', fn () => $this->insertProductRevisionDirectly(
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $this->insertProductRevisionDirectly(
+            $connection,
             $archivedProduct['product_id'],
             $productRevision,
             'ARCH-P-2',
@@ -1012,7 +1004,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_commercial_mutation_rolls_back_when_append_only_audit_fails(): void
     {
-        DB::unprepared(<<<'SQL'
+        $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
             CREATE FUNCTION raw_materials_test_fail_commercial_audit() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
                 RAISE EXCEPTION 'Injected audit failure' USING ERRCODE = 'P0001';
@@ -1021,7 +1013,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             CREATE TRIGGER raw_materials_test_fail_commercial_audit
                 BEFORE INSERT ON raw_materials_commercial_audit_events
                 FOR EACH ROW EXECUTE FUNCTION raw_materials_test_fail_commercial_audit();
-            SQL);
+            SQL));
 
         try {
             app(RawMaterialCommercialService::class)->createSupplier(
@@ -1034,8 +1026,10 @@ class RawMaterialsTest extends AuthorizationTestCase
         } catch (QueryException $exception) {
             $this->assertSame('P0001', $exception->errorInfo[0] ?? null);
         } finally {
-            DB::unprepared('DROP TRIGGER raw_materials_test_fail_commercial_audit ON raw_materials_commercial_audit_events');
-            DB::unprepared('DROP FUNCTION raw_materials_test_fail_commercial_audit()');
+            $this->withSetupConnection(function (Connection $connection): void {
+                $connection->unprepared('DROP TRIGGER raw_materials_test_fail_commercial_audit ON raw_materials_commercial_audit_events');
+                $connection->unprepared('DROP FUNCTION raw_materials_test_fail_commercial_audit()');
+            });
         }
 
         $this->assertDatabaseMissing('organization_suppliers', [
@@ -1091,17 +1085,17 @@ class RawMaterialsTest extends AuthorizationTestCase
             'base_unit_code' => 'kg',
             'conversions' => [['unit_code' => 'g']],
         ]);
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_materials')
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_materials')
             ->where('id', $material['id'])->update(['code' => 'SUR-999999']));
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_revisions')
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_material_revisions')
             ->where('id', $material['revision']['id'])->update(['name' => 'Zmieniona nazwa']));
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_audit_events')
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_material_audit_events')
             ->where('subject_id', $material['id'])->update(['outcome' => 'REJECTED']));
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_audit_events')
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_material_audit_events')
             ->where('subject_id', $material['id'])->delete());
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_materials')
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_materials')
             ->where('id', $material['id'])->delete());
-        $this->assertConstraintViolation('23514', fn () => DB::table('raw_material_revision_units')->insert([
+        $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_material_revision_units')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'revision_id' => $material['revision']['id'],
@@ -1115,16 +1109,16 @@ class RawMaterialsTest extends AuthorizationTestCase
     private function assertConstraintViolation(string $sqlState, callable $operation): void
     {
         try {
-            DB::transaction($operation);
+            $this->withSetupTransaction(fn (Connection $connection) => $operation($connection));
             $this->fail('Expected PostgreSQL to reject the invalid operation.');
         } catch (QueryException $exception) {
             $this->assertSame($sqlState, $exception->errorInfo[0] ?? null);
         }
     }
 
-    private function insertProductRevisionDirectly(string $productId, object $revision, string $sku): void
+    private function insertProductRevisionDirectly(Connection $connection, string $productId, object $revision, string $sku): void
     {
-        DB::table('supplier_product_revisions')->insert([
+        $connection->table('supplier_product_revisions')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $this->steward->organization_id,
             'supplier_product_id' => $productId,
@@ -1219,34 +1213,36 @@ class RawMaterialsTest extends AuthorizationTestCase
             RawMaterialPermission::cases(),
         );
         $operationId = Str::uuid()->toString();
-        DB::table('raw_material_audit_events')->insert([
-            'id' => Str::uuid()->toString(),
-            'organization_id' => $actor->organization_id,
-            'operation_id' => $operationId,
-            'actor_user_id' => $actor->id,
-            'subject_type' => 'ORGANIZATION',
-            'subject_id' => $actor->organization_id,
-            'event_code' => 'PERMISSION_BOOTSTRAP',
-            'outcome' => 'ACCEPTED',
-            'reason_code' => 'INITIAL_STEWARD',
-            'metadata' => json_encode([
-                'recipient_user_id' => $recipient->id,
-                'permissions' => $permissions,
-            ], JSON_THROW_ON_ERROR),
-        ]);
-        foreach ($permissions as $permission) {
-            DB::table('organization_permission_grants')->insert([
+        $this->withSetupTransaction(function (Connection $connection) use ($actor, $recipient, $permissions, $operationId): void {
+            $connection->table('raw_material_audit_events')->insert([
                 'id' => Str::uuid()->toString(),
                 'organization_id' => $actor->organization_id,
-                'user_id' => $recipient->id,
-                'permission' => $permission,
-                'granted_by' => $actor->id,
-                'valid_from' => now(),
-                'delegation_source_id' => null,
-                'bootstrap_operation_id' => $operationId,
+                'operation_id' => $operationId,
+                'actor_user_id' => $actor->id,
+                'subject_type' => 'ORGANIZATION',
+                'subject_id' => $actor->organization_id,
+                'event_code' => 'PERMISSION_BOOTSTRAP',
+                'outcome' => 'ACCEPTED',
                 'reason_code' => 'INITIAL_STEWARD',
+                'metadata' => json_encode([
+                    'recipient_user_id' => $recipient->id,
+                    'permissions' => $permissions,
+                ], JSON_THROW_ON_ERROR),
             ]);
-        }
+            foreach ($permissions as $permission) {
+                $connection->table('organization_permission_grants')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'user_id' => $recipient->id,
+                    'permission' => $permission,
+                    'granted_by' => $actor->id,
+                    'valid_from' => now(),
+                    'delegation_source_id' => null,
+                    'bootstrap_operation_id' => $operationId,
+                    'reason_code' => 'INITIAL_STEWARD',
+                ]);
+            }
+        });
     }
 
     private function declaredMaterial(
@@ -1284,64 +1280,77 @@ class RawMaterialsTest extends AuthorizationTestCase
         if (! preg_match('/^SUR-([0-9]{6,9})$/D', $materialCode, $codeParts)) {
             throw new \LogicException('The raw material fixture code is invalid.');
         }
-        $counterQuery = DB::table('raw_material_code_counters')
-            ->where('organization_id', $this->steward->organization_id)
-            ->where('prefix', 'SUR');
-        $counter = $counterQuery->lockForUpdate()->first();
-        if (! $counter) {
-            DB::table('raw_material_code_counters')->insert([
+
+        return $this->withSetupTransaction(function (Connection $connection) use (
+            $materialId,
+            $revisionId,
+            $categoryId,
+            $name,
+            $materialCode,
+            $codeParts,
+            $units,
+            $aliases,
+            $hash,
+        ): string {
+            $counterQuery = $connection->table('raw_material_code_counters')
+                ->where('organization_id', $this->steward->organization_id)
+                ->where('prefix', 'SUR');
+            $counter = $counterQuery->lockForUpdate()->first();
+            if (! $counter) {
+                $connection->table('raw_material_code_counters')->insert([
+                    'organization_id' => $this->steward->organization_id,
+                    'prefix' => 'SUR',
+                    'last_value' => 0,
+                ]);
+                $counter = (object) ['last_value' => 0];
+            }
+            $targetCounterValue = (int) $codeParts[1];
+            if ($targetCounterValue < (int) $counter->last_value) {
+                throw new \LogicException('The raw material fixture code must advance the sequence.');
+            }
+            while ((int) $counter->last_value < $targetCounterValue) {
+                $counterQuery->update(['last_value' => DB::raw('last_value + 1')]);
+                $counter->last_value++;
+            }
+            $connection->table('raw_materials')->insert([
+                'id' => $materialId,
                 'organization_id' => $this->steward->organization_id,
-                'prefix' => 'SUR',
-                'last_value' => 0,
+                'code' => $materialCode,
+                'lifecycle_state' => 'DRAFT',
+                'working_revision_id' => $revisionId,
+                'created_by' => $this->steward->id,
             ]);
-            $counter = (object) ['last_value' => 0];
-        }
-        $targetCounterValue = (int) $codeParts[1];
-        if ($targetCounterValue < (int) $counter->last_value) {
-            throw new \LogicException('The raw material fixture code must advance the sequence.');
-        }
-        while ((int) $counter->last_value < $targetCounterValue) {
-            $counterQuery->update(['last_value' => DB::raw('last_value + 1')]);
-            $counter->last_value++;
-        }
-        DB::table('raw_materials')->insert([
-            'id' => $materialId,
-            'organization_id' => $this->steward->organization_id,
-            'code' => $materialCode,
-            'lifecycle_state' => 'DRAFT',
-            'working_revision_id' => $revisionId,
-            'created_by' => $this->steward->id,
-        ]);
-        DB::table('raw_material_revisions')->insert([
-            'id' => $revisionId,
-            'organization_id' => $this->steward->organization_id,
-            'raw_material_id' => $materialId,
-            'revision_no' => 1,
-            'category_id' => $categoryId,
-            'name' => $name,
-            'base_unit_code' => 'g',
-            'base_unit_dimension' => 'MASS',
-            'allergen_state' => 'DECLARED',
-            'critical_change' => false,
-            'created_by' => $this->steward->id,
-            'content_hash' => $hash,
-        ]);
-        foreach ($units as $unit) {
-            DB::table('raw_material_revision_units')->insert([
+            $connection->table('raw_material_revisions')->insert([
+                'id' => $revisionId,
+                'organization_id' => $this->steward->organization_id,
+                'raw_material_id' => $materialId,
+                'revision_no' => 1,
+                'category_id' => $categoryId,
+                'name' => $name,
+                'base_unit_code' => 'g',
+                'base_unit_dimension' => 'MASS',
+                'allergen_state' => 'DECLARED',
+                'critical_change' => false,
+                'created_by' => $this->steward->id,
+                'content_hash' => $hash,
+            ]);
+            foreach ($units as $unit) {
+                $connection->table('raw_material_revision_units')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $this->steward->organization_id,
+                    'revision_id' => $revisionId,
+                    ...$unit,
+                ]);
+            }
+            $connection->table('raw_material_aliases')->insert([
                 'id' => Str::uuid()->toString(),
                 'organization_id' => $this->steward->organization_id,
+                'raw_material_id' => $materialId,
                 'revision_id' => $revisionId,
-                ...$unit,
+                ...$aliases[0],
             ]);
-        }
-        DB::table('raw_material_aliases')->insert([
-            'id' => Str::uuid()->toString(),
-            'organization_id' => $this->steward->organization_id,
-            'raw_material_id' => $materialId,
-            'revision_id' => $revisionId,
-            ...$aliases[0],
-        ]);
 
-        return $materialId;
+            return $materialId;
+        });
     }
 }

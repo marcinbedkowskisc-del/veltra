@@ -11,7 +11,6 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Mail\IdentityLink;
 use App\Models\RoleAssignment;
-use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -158,7 +157,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         $this->role($target, BusinessRole::RestaurantManager, $other);
         $this->assertFalse(app(AccountLinks::class)->canSend($manager, $location, $target));
         $old = $target->auth_version;
-        $target->update(['email' => 'changed@example.test']);
+        $target = $this->updateFixture($target, ['email' => 'changed@example.test']);
         $this->assertNull($target->fresh()->email_verified_at);
         $this->assertGreaterThan($old, $target->fresh()->auth_version);
     }
@@ -170,7 +169,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         $manager = $this->user('manager@example.test');
         $this->role($manager, BusinessRole::RestaurantManager, $restaurant);
         $target = $this->user();
-        $target->forceFill(['email_verified_at' => null])->save();
+        $target = $this->updateFixture($target, ['email_verified_at' => null]);
         $this->role($target, BusinessRole::Employee, $restaurant);
         $links = app(AccountLinks::class);
         $links->issue($target, 'activation', '127.0.0.1', $manager, $restaurant);
@@ -196,7 +195,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         $this->role($manager, BusinessRole::RestaurantManager, $location);
         $target = $this->user();
         $this->role($target, BusinessRole::Employee, $location);
-        User::whereKey($target->id)->update(['email' => 'changed@example.test']);
+        $this->updateFixture($target, ['email' => 'changed@example.test']);
         app(AccountLinks::class)->issue($target, 'activation', '127.0.0.1', $manager, $location);
         Mail::assertSent(IdentityLink::class, fn (IdentityLink $mail) => $mail->hasTo('changed@example.test') && ! $mail->hasTo($target->email));
     }

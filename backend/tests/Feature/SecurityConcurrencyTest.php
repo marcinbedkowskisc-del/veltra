@@ -13,6 +13,7 @@ use App\Models\Location;
 use App\Models\PermissionGrant;
 use App\Models\RoleAssignment;
 use App\Models\User;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -25,7 +26,7 @@ class SecurityConcurrencyTest extends TestCase
     public function test_permissions_and_email_limits_serialize_real_postgresql_connections(string $operation, bool $commit): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $process = null;
         try {
             Mail::fake();
@@ -37,10 +38,11 @@ class SecurityConcurrencyTest extends TestCase
             $installation->updateLocation($location, ['is_active' => true]);
             $users = [];
             foreach ([BusinessRole::RestaurantManager, BusinessRole::Employee] as $i => $role) {
-                $user = User::create(['organization_id' => $organization->id, 'first_name' => 'Fixture', 'last_name' => 'Person', 'email' => "fixture{$i}@example.test", 'password' => 'Test-Only-Password!42']);
+                $user = User::on('pgsql_setup')->create(['organization_id' => $organization->id, 'first_name' => 'Fixture', 'last_name' => 'Person', 'email' => "fixture{$i}@example.test", 'password' => 'Test-Only-Password!42']);
                 $user->forceFill(['email_verified_at' => now()])->save();
+                $user = User::on('pgsql')->findOrFail($user->getKey());
                 $membership = app(MembershipService::class)->assign($user, $location);
-                RoleAssignment::create(['organization_id' => $organization->id, 'user_id' => $user->id, 'role' => $role, 'location_id' => $location->id, 'membership_id' => $membership->id]);
+                RoleAssignment::on('pgsql_setup')->create(['organization_id' => $organization->id, 'user_id' => $user->id, 'role' => $role, 'location_id' => $location->id, 'membership_id' => $membership->id]);
                 $users[] = $user;
             }
             [$actor, $target] = $users;
@@ -95,9 +97,11 @@ class SecurityConcurrencyTest extends TestCase
             if ($process?->isRunning()) {
                 $process->stop();
             }
-            DB::statement('TRUNCATE organizations CASCADE');
-            DB::table('activation_tokens')->delete();
-            DB::table('password_reset_tokens')->delete();
+            $this->withSetupConnection(function (Connection $connection): void {
+                $connection->statement('TRUNCATE TABLE public.organizations CASCADE');
+                $connection->table('activation_tokens')->delete();
+                $connection->table('password_reset_tokens')->delete();
+            });
         }
     }
 

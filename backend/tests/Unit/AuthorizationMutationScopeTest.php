@@ -10,6 +10,8 @@ class AuthorizationMutationScopeTest extends TestCase
 {
     public function test_security_mutation_scopes_are_selected_from_a_closed_catalog(): void
     {
+        $this->assertSame('membership.deactivate', AuthorizationMutationScope::membershipDeactivate()->value());
+
         foreach ([
             'personnel.request',
             'membership.approve',

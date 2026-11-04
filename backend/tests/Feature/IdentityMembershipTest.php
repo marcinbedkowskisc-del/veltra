@@ -6,9 +6,8 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Location;
 use App\Models\LocationMembership;
-use App\Models\Organization;
 use App\Models\User;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Str;
 use Tests\IdentityTestCase;
 
@@ -18,10 +17,10 @@ class IdentityMembershipTest extends IdentityTestCase
     {
         $user = $this->user(' PERSON@EXAMPLE.TEST ');
         $this->assertSame('person@example.test', $user->email);
-        $this->assertDatabaseRejects('23505', fn () => $this->user('PERSON@EXAMPLE.TEST'));
-        $this->assertDatabaseRejects('23514', fn () => DB::table('users')->where('id', $user->id)->update(['email' => 'Mixed@Example.Test']));
-        $this->assertDatabaseRejects('23514', fn () => $user->delete());
-        $this->assertDatabaseRejects('23514', fn () => $user->update(['organization_id' => Str::uuid()->toString()]));
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => $this->user('PERSON@EXAMPLE.TEST'));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('users')->where('id', $user->id)->update(['email' => 'Mixed@Example.Test']));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($user)->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($user)->update(['organization_id' => Str::uuid()->toString()]));
     }
 
     public function test_one_user_has_independent_memberships_at_multiple_restaurants_and_a_kitchen(): void
@@ -47,7 +46,7 @@ class IdentityMembershipTest extends IdentityTestCase
         $kitchen = $this->kitchen();
         $service = app(MembershipService::class);
         $service->assign($user, $kitchen);
-        $this->assertDatabaseRejects('23505', fn () => LocationMembership::create([
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => LocationMembership::on('pgsql_setup')->create([
             'organization_id' => $user->organization_id, 'user_id' => $user->id, 'location_id' => $kitchen->id, 'is_active' => true,
         ]));
         $this->expectException(BusinessRuleViolation::class);
@@ -72,8 +71,8 @@ class IdentityMembershipTest extends IdentityTestCase
         $this->assertSame(2, $user->memberships()->count());
         $this->assertNotNull($membership->fresh()->deactivated_at);
         $this->assertSame('Assignment ended', $membership->fresh()->deactivation_reason);
-        $this->assertDatabaseRejects('23514', fn () => $membership->fresh()->delete());
-        $this->assertDatabaseRejects('23514', fn () => $membership->fresh()->update(['is_active' => true]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($membership)->fresh()->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($membership)->fresh()->update(['is_active' => true]));
         $this->assertSame(1, User::count());
     }
 
@@ -126,7 +125,7 @@ class IdentityMembershipTest extends IdentityTestCase
     {
         $user = $this->user();
         $location = $this->kitchen();
-        $location->update(['is_active' => false]);
+        $location = $this->updateFixture($location, ['is_active' => false]);
         $this->expectException(BusinessRuleViolation::class);
         app(MembershipService::class)->assign($user, $location);
     }
@@ -134,7 +133,7 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_disabled_user_cannot_receive_an_active_membership(): void
     {
         $user = $this->user();
-        $user->update(['is_active' => false]);
+        $user = $this->updateFixture($user, ['is_active' => false]);
         $location = $this->kitchen();
         $this->expectException(BusinessRuleViolation::class);
         app(MembershipService::class)->assign($user, $location);
@@ -153,22 +152,17 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_cross_organization_memberships_fail_at_database_and_service_boundaries(): void
     {
         $user = $this->user();
-        DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
-        DB::statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
-        $other = Organization::create(['name' => 'Adversarial fixture', 'code' => 'OTHER']);
-        $foreign = Location::create([
-            'organization_id' => $other->id, 'name' => 'Foreign', 'code' => 'FOREIGN',
-            'type' => 'CENTRAL_KITCHEN', 'is_active' => true,
-        ]);
-        $this->assertDatabaseRejects('23503', fn () => LocationMembership::create([
-            'organization_id' => $user->organization_id, 'user_id' => $user->id, 'location_id' => $foreign->id, 'is_active' => true,
-        ]));
-        try {
-            app(MembershipService::class)->assign($user, $foreign);
-            $this->fail('Cross-organization membership accepted.');
-        } catch (BusinessRuleViolation $exception) {
-            $this->assertSame(__('messages.membership_must_belong_to_organization'), $exception->getMessage());
-        }
-        $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $foreign->id])->assertForbidden();
+        $this->withForeignOrganizationFixture(function (Location $foreign) use ($user): void {
+            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationMembership::on('pgsql_setup')->create([
+                'organization_id' => $user->organization_id, 'user_id' => $user->id, 'location_id' => $foreign->id, 'is_active' => true,
+            ]));
+            try {
+                app(MembershipService::class)->assign($user, $foreign);
+                $this->fail('Cross-organization membership accepted.');
+            } catch (BusinessRuleViolation $exception) {
+                $this->assertSame(__('messages.membership_must_belong_to_organization'), $exception->getMessage());
+            }
+            $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $foreign->id])->assertForbidden();
+        });
     }
 }

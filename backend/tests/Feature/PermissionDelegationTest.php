@@ -11,6 +11,7 @@ use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\PermissionGrant;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Tests\AuthorizationTestCase;
 
 class PermissionDelegationTest extends AuthorizationTestCase
@@ -20,10 +21,10 @@ class PermissionDelegationTest extends AuthorizationTestCase
         $restaurant = $this->activeRestaurant();
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
         $chef = $this->user('central@example.test');
-        $chef->forceFill(['email_verified_at' => now()])->save();
+        $chef = $this->updateFixture($chef, ['email_verified_at' => now()]);
         $this->role($chef, BusinessRole::CentralKitchenChef, $kitchen);
         $target = $this->user();
-        $target->forceFill(['email_verified_at' => now()])->save();
+        $target = $this->updateFixture($target, ['email_verified_at' => now()]);
         $this->role($target, BusinessRole::RestaurantChef, $restaurant);
         $service = app(PermissionAdministration::class);
         $authorization = app(BusinessAuthorization::class);
@@ -42,10 +43,10 @@ class PermissionDelegationTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         $manager = $this->user('manager@example.test');
-        $manager->forceFill(['email_verified_at' => now()])->save();
+        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
         $this->role($manager, BusinessRole::RestaurantManager, $location);
         $target = $this->user();
-        $target->forceFill(['email_verified_at' => now()])->save();
+        $target = $this->updateFixture($target, ['email_verified_at' => now()]);
         $this->role($target, BusinessRole::Employee, $location);
         $this->app->bind(ModuleAvailability::class, fn () => new class implements ModuleAvailability
         {
@@ -76,14 +77,14 @@ class PermissionDelegationTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($target, $location);
         $this->role($target, BusinessRole::Employee, $location);
         $this->assertFalse($authorization->allows($target, $location, $location, $permission));
-        $this->assertDatabaseRejects('23514', fn () => PermissionGrant::firstOrFail()->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => PermissionGrant::on('pgsql_setup')->firstOrFail()->delete());
     }
 
     public function test_manager_cannot_grant_financial_permissions_or_delegate_unavailable_modules(): void
     {
         $location = $this->activeRestaurant();
         $manager = $this->user('manager@example.test');
-        $manager->forceFill(['email_verified_at' => now()])->save();
+        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
         $this->role($manager, BusinessRole::RestaurantManager, $location);
         $target = $this->user();
         $this->role($target, BusinessRole::Employee, $location);

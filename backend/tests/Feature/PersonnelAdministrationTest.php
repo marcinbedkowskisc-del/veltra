@@ -9,6 +9,7 @@ use App\Models\Location;
 use App\Models\MembershipRequest;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Tests\AuthorizationTestCase;
 
 class PersonnelAdministrationTest extends AuthorizationTestCase
@@ -17,7 +18,7 @@ class PersonnelAdministrationTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         $manager = $this->user('manager@example.test');
-        $manager->forceFill(['email_verified_at' => now()])->save();
+        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
         $this->role($manager, BusinessRole::RestaurantManager, $location);
         $service = app(PersonnelAdministration::class);
         $new = $service->requestPersonnel($manager, $location, $location, ['first_name' => 'New', 'last_name' => 'Person', 'email' => 'new@example.test']);
@@ -37,13 +38,13 @@ class PersonnelAdministrationTest extends AuthorizationTestCase
             $this->assertNull($request->fresh()->decision);
         }
         $chef = $this->user('central@example.test');
-        $chef->forceFill(['email_verified_at' => now()])->save();
+        $chef = $this->updateFixture($chef, ['email_verified_at' => now()]);
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
         $this->role($chef, BusinessRole::CentralKitchenChef, $kitchen);
         $service->decide($chef, $kitchen, $request, true);
         $this->assertSame('approved', $request->fresh()->decision);
         $this->assertSame(1, $existing->memberships()->where('is_active', true)->count());
-        $this->assertDatabaseRejects('23514', fn () => $request->fresh()->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($request)->fresh()->delete());
     }
 
     public function test_manager_removes_only_unprotected_local_memberships_and_keeps_other_locations(): void
@@ -51,7 +52,7 @@ class PersonnelAdministrationTest extends AuthorizationTestCase
         $first = $this->activeRestaurant();
         $other = $this->activeRestaurant('R2');
         $manager = $this->user('manager@example.test');
-        $manager->forceFill(['email_verified_at' => now()])->save();
+        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
         $this->role($manager, BusinessRole::RestaurantManager, $first);
         $target = $this->user();
         $role = $this->role($target, BusinessRole::RestaurantChef, $first);

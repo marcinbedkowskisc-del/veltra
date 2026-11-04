@@ -15,9 +15,11 @@ abstract class AuthorizationTestCase extends IdentityTestCase
         $membership = $location ? app(MembershipService::class)->available($user)->where('location_id', $location->id)->first()
             ?? app(MembershipService::class)->assign($user, $location) : null;
 
-        return RoleAssignment::create([
+        $assignment = RoleAssignment::on('pgsql_setup')->create([
             'organization_id' => $user->organization_id, 'user_id' => $user->id,
             'role' => $role, 'location_id' => $location?->id, 'membership_id' => $membership?->id,
         ]);
+
+        return RoleAssignment::on('pgsql')->findOrFail($assignment->getKey());
     }
 }

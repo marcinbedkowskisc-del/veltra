@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -19,10 +20,10 @@ class IdentityAuthenticationTest extends IdentityTestCase
             'first_name' => 'Unicode', 'last_name' => 'Fixture', 'email' => ' ŻÓŁĆ@EXAMPLE.TEST ',
         ], self::PASSWORD);
         $this->assertSame('żółć@example.test', $user->email);
-        $user->forceFill(['email_verified_at' => now()])->save();
+        $user = $this->updateFixture($user, ['email_verified_at' => now()]);
         $this->postJson('/api/v1/auth/login', ['email' => ' ŻÓŁĆ@EXAMPLE.TEST ', 'password' => self::PASSWORD])
             ->assertOk()->assertJsonPath('data.email', 'żółć@example.test');
-        $this->assertDatabaseRejects('23505', fn () => $this->user('ŻÓŁĆ@EXAMPLE.TEST'));
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => $this->user('ŻÓŁĆ@EXAMPLE.TEST'));
     }
 
     public function test_unauthenticated_api_returns_json_without_an_accept_header(): void
@@ -143,7 +144,7 @@ class IdentityAuthenticationTest extends IdentityTestCase
     {
         $user = $this->user();
         $this->actingAs($user, 'web')->getJson('/api/v1/auth/me')->assertOk();
-        $user->organization->update(['is_active' => false]);
+        $this->updateFixture($user->organization, ['is_active' => false]);
         $this->getJson('/api/v1/auth/me')->assertUnauthorized();
         $this->assertGuest('web');
     }

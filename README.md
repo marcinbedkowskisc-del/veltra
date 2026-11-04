@@ -77,15 +77,21 @@ kontekstu transakcji dla wszystkich mutowalnych tabel aplikacji. Tabele
 referencyjne walut i rejestr operacji sa tylko do odczytu dla runtime; nowe
 obiekty nie otrzymuja domyslnie praw DML.
 
-Profil `testing` uruchamia migracje i testy jako rola migracyjna na osobnej
-bazie `veltra_testing`, a testy sprawdzaja jej nazwe przed zapisem. Skrypt
-PostgreSQL przygotowuje role i ich domyslne granty tylko przy inicjalizacji
-pustego wolumenu. Skrypty `docker-entrypoint-initdb.d` nie sa uruchamiane
-ponownie na istniejacym wolumenie. Przy istniejacej instalacji administrator
-musi jawnie uzupelnic `.env` o `APP_DB_MIGRATION_USERNAME` i
-`APP_DB_MIGRATION_PASSWORD`, a nastepnie — po kopii zapasowej i w zatwierdzonym
-oknie serwisowym — odtworzyc kontener PostgreSQL z nowymi zmiennymi i uruchomic
-skrypt provisioningu dla biezacej bazy:
+Profil `testing` uzywa osobnej bazy `veltra_testing`. Migracje wykonuje
+`veltra_migrator`, a PHPUnit laczy sie domyslnie jako ograniczona rola
+`veltra_app`. Jawne fixture'y, asercje integralnosci i czyszczenie bazy uzywaja
+oddzielnego polaczenia `pgsql_setup` jako `veltra_migrator`; to polaczenie nie
+staje sie domyslne dla aplikacji. Testy koncza sie bledem, jesli role, wlasciciel
+schematu, baza lub wymagane dane setup nie zgadzaja sie z ta konfiguracja.
+Nie uruchamiaj testow na bazie produkcyjnej ani nie przekazuj do nich
+produkcyjnych sekretow. Skrypt PostgreSQL przygotowuje role i ich domyslne
+granty tylko przy inicjalizacji pustego wolumenu. Skrypty
+`docker-entrypoint-initdb.d` nie sa uruchamiane ponownie na istniejacym
+wolumenie. Przy istniejacej instalacji administrator musi jawnie uzupelnic
+`.env` o `APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD`, a nastepnie
+— po kopii zapasowej i w zatwierdzonym oknie serwisowym — odtworzyc kontener
+PostgreSQL z nowymi zmiennymi i uruchomic skrypt provisioningu dla biezacej
+bazy:
 
 ```bash
 docker compose up -d --no-deps --force-recreate postgres
@@ -255,12 +261,17 @@ provisioningu na tej bazie osobno:
 docker compose exec -T postgres sh -c 'POSTGRES_DB=veltra_testing sh /docker-entrypoint-initdb.d/10-create-runtime-role.sh'
 ```
 
-PHPUnit wymusza `veltra_testing` zarowno w zmiennych srodowiskowych, jak i
-serwerowych PHP. Testy domenowe sprawdzaja nazwe bazy przed zapisem. Nie uzywaj
-tej nazwy dla bazy z rzeczywistymi danymi. Testy wspolbieznosci wykonuja
-`TRUNCATE organizations CASCADE` **wylacznie w tej bazie**; uruchamiaj suite
-sekwencyjnie, nie przez `--parallel`. Pozostale testy domenowe i API sa wycofywane
-transakcjami. Baza instalacji `veltra` nie jest czyszczona przez testy.
+Usługa `migrate-test` stosuje migracje jako `veltra_migrator`. Usługa
+`backend-test` ustawia runtime na `veltra_app`, a dane setup pobiera z
+`APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD` przez zmienne
+`TEST_DB_SETUP_USERNAME` i `TEST_DB_SETUP_PASSWORD`. Testy domenowe sprawdzaja
+nazwe bazy, role runtime i wlasciciela tabel przed zapisem. Nie uzywaj
+`veltra_testing` dla danych rzeczywistych. Fixture'y sa zatwierdzane przez
+`pgsql_setup`, a aplikacyjne operacje testu pozostaja na `pgsql` jako
+`veltra_app`. Reset `TRUNCATE organizations CASCADE` jest wykonywany wylacznie
+przez setup role w tej bazie przed i po testach. Testy wspolbieznosci uruchamiaj
+sekwencyjnie, nie przez `--parallel`, poniewaz korzystaja z tej samej bazy
+testowej. Baza instalacji `veltra` nie jest czyszczona przez testy.
 
 Nastepnie:
 

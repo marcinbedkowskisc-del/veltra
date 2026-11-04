@@ -120,9 +120,14 @@ class RoleAdministration
     {
         return app(AuthorizationMutationContext::class)->run(AuthorizationMutationScope::administratorBootstrap(), $user->id, fn (): RoleAssignment => DB::transaction(function () use ($user): RoleAssignment {
             $organization = Organization::whereKey($user->organization_id)->lockForUpdate()->firstOrFail();
+            $user = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
             if (! $user->is_initial_identity || ! $user->is_active || $organization->authorization_initialized
                 || RoleAssignment::where('role', BusinessRole::Administrator)->exists()) {
                 throw new BusinessRuleViolation(__('messages.initial_authorization_unavailable'));
+            }
+            if ($user->email_verified_at !== null
+                && ! app(MembershipService::class)->available($user)->exists()) {
+                throw new BusinessRuleViolation(__('messages.initial_administrator_membership_required'));
             }
             $role = RoleAssignment::create(['organization_id' => $user->organization_id, 'user_id' => $user->id, 'role' => BusinessRole::Administrator]);
             if ($user->email_verified_at !== null) {

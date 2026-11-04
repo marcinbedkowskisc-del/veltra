@@ -23,7 +23,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
     public function test_overlapping_postgresql_updates_serialize_and_retry_idempotently(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -56,7 +56,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
     public function test_simultaneous_enable_and_disable_operations_preserve_serial_state_and_audit(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -95,7 +95,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
     public function test_partially_overlapping_bulk_requests_write_each_transition_once(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -135,7 +135,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
         bool $commitConfiguration,
     ): void {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -178,7 +178,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
         bool $commitCreation,
     ): void {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
         $readyFile = sys_get_temp_dir().'/module-location-ready-'.Str::lower(Str::random(12));
         $releaseFile = $readyFile.'.release';
@@ -269,7 +269,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             $restaurants[] = $installation->updateLocation($restaurant, ['is_active' => true]);
         }
 
-        $actor = User::create([
+        $actor = User::on('pgsql_setup')->create([
             'organization_id' => $organization->id,
             'first_name' => 'Concurrency',
             'last_name' => 'Administrator',
@@ -277,8 +277,9 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             'password' => 'Test-Only-Password!42',
         ]);
         $actor->forceFill(['email_verified_at' => now()])->save();
+        $actor = User::on('pgsql')->findOrFail($actor->getKey());
         app(MembershipService::class)->assign($actor, $kitchen);
-        RoleAssignment::create([
+        RoleAssignment::on('pgsql_setup')->create([
             'organization_id' => $organization->id,
             'user_id' => $actor->id,
             'role' => BusinessRole::Administrator,
@@ -460,6 +461,6 @@ class ModuleConfigurationConcurrencyTest extends TestCase
         while (DB::transactionLevel() > 0) {
             DB::rollBack();
         }
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
     }
 }

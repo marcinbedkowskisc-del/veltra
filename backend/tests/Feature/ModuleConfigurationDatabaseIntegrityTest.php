@@ -9,6 +9,7 @@ use App\Domain\Modules\ModuleConfigurationService;
 use App\Models\Location;
 use App\Models\RoleAssignment;
 use App\Models\User;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
@@ -29,7 +30,7 @@ class ModuleConfigurationDatabaseIntegrityTest extends AuthorizationTestCase
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
         $this->administrator = $this->user('module-integrity@example.test');
         app(MembershipService::class)->assign($this->administrator, $this->kitchen);
-        RoleAssignment::create([
+        RoleAssignment::on('pgsql_setup')->create([
             'organization_id' => $this->administrator->organization_id,
             'user_id' => $this->administrator->id,
             'role' => BusinessRole::Administrator,
@@ -58,17 +59,17 @@ class ModuleConfigurationDatabaseIntegrityTest extends AuthorizationTestCase
         $malformed['previous_enabled'] = true;
         $malformed['requested_enabled'] = true;
         $malformed['effective_enabled'] = null;
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')->insert($malformed));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')->insert($malformed));
 
         $malformed['id'] = Str::uuid()->toString();
         $malformed['effective_enabled'] = true;
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')->insert($malformed));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')->insert($malformed));
 
         $malformed['id'] = Str::uuid()->toString();
         $malformed['previous_enabled'] = false;
         $malformed['requested_enabled'] = false;
         $malformed['effective_enabled'] = true;
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')->insert($malformed));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')->insert($malformed));
     }
 
     public function test_postgresql_security_events_remain_append_only(): void
@@ -76,9 +77,9 @@ class ModuleConfigurationDatabaseIntegrityTest extends AuthorizationTestCase
         $result = $this->configure(true);
         $event = $this->transitionEvent();
 
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')
             ->where('id', $event->id)->update(['action' => 'tampered']));
-        $this->assertDatabaseRejects('23514', fn () => DB::table('security_events')
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')
             ->where('id', $event->id)->delete());
 
         $this->assertSame(1, DB::table('security_events')->where('id', $event->id)->count());
@@ -90,18 +91,18 @@ class ModuleConfigurationDatabaseIntegrityTest extends AuthorizationTestCase
         $this->configure(true);
         $state = (array) DB::table('location_module_states')->where('module_key', 'TEMPERATURES')->firstOrFail();
 
-        $this->assertDatabaseRejects('23514', fn () => DB::table('location_module_states')
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('location_module_states')
             ->where('id', $state['id'])->update(['location_id' => $this->kitchen->id]));
 
         $duplicate = $state;
         $duplicate['id'] = Str::uuid()->toString();
-        $this->assertDatabaseRejects('23505', fn () => DB::table('location_module_states')->insert($duplicate));
+        $this->assertDatabaseRejects('23505', fn (Connection $connection) => $connection->table('location_module_states')->insert($duplicate));
 
         $mismatchedOrganization = $state;
         $mismatchedOrganization['id'] = Str::uuid()->toString();
         $mismatchedOrganization['module_key'] = 'CLEANING';
         $mismatchedOrganization['organization_id'] = Str::uuid()->toString();
-        $this->assertDatabaseRejects('23503', fn () => DB::table('location_module_states')->insert($mismatchedOrganization));
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection->table('location_module_states')->insert($mismatchedOrganization));
     }
 
     /**

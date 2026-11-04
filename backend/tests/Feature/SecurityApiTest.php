@@ -87,7 +87,7 @@ class SecurityApiTest extends AuthorizationTestCase
         $admin = $this->user('admin@example.test');
         $this->role($admin, BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
-        $admin->organization->forceFill(['authorization_initialized' => true])->save();
+        $this->updateFixture($admin->organization, ['authorization_initialized' => true]);
         $this->selectContext($admin, $location);
         $this->postJson("/api/v1/security/locations/{$location->id}/personnel", ['first_name' => 'New', 'last_name' => 'Chef', 'email' => 'newchef@example.test'])->assertAccepted();
         $new = User::where('email', 'newchef@example.test')->firstOrFail();

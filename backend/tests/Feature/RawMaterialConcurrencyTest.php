@@ -14,6 +14,7 @@ use App\Models\LocationModuleState;
 use App\Models\Organization;
 use App\Models\RoleAssignment;
 use App\Models\User;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
@@ -25,7 +26,7 @@ class RawMaterialConcurrencyTest extends TestCase
     public function test_parallel_creates_serialize_code_allocation_and_audit(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -44,7 +45,7 @@ class RawMaterialConcurrencyTest extends TestCase
             $installation->assignManagingKitchen($location, $kitchen);
             $location = $installation->updateLocation($location, ['is_active' => true]);
             $administrator = $this->user($organization, 'concurrency-admin@example.test');
-            RoleAssignment::create([
+            RoleAssignment::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
                 'user_id' => $administrator->id,
                 'role' => BusinessRole::Administrator,
@@ -52,9 +53,9 @@ class RawMaterialConcurrencyTest extends TestCase
             app(MembershipService::class)->assign($administrator, $location);
             $steward = $this->user($organization, 'concurrency-steward@example.test');
             app(MembershipService::class)->assign($steward, $location);
-            Organization::whereKey($organization->id)->update(['authorization_initialized' => true]);
+            $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-            LocationModuleState::create([
+            LocationModuleState::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
                 'location_id' => $location->id,
                 'module_key' => 'RAW_MATERIALS',
@@ -64,7 +65,7 @@ class RawMaterialConcurrencyTest extends TestCase
             ]);
             $this->bootstrapPermissions($administrator, $steward);
             $categoryId = Str::uuid()->toString();
-            DB::table('raw_material_categories')->insert([
+            DB::connection('pgsql_setup')->table('raw_material_categories')->insert([
                 'id' => $categoryId,
                 'organization_id' => $organization->id,
                 'code' => 'BASIC',
@@ -102,7 +103,7 @@ class RawMaterialConcurrencyTest extends TestCase
     public function test_concurrent_membership_and_user_suspension_permanently_revoke_delegated_grants(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $processes = [];
 
         try {
@@ -121,7 +122,7 @@ class RawMaterialConcurrencyTest extends TestCase
             $installation->assignManagingKitchen($location, $kitchen);
             $location = $installation->updateLocation($location, ['is_active' => true]);
             $administrator = $this->user($organization, 'suspension-admin@example.test');
-            RoleAssignment::create([
+            RoleAssignment::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
                 'user_id' => $administrator->id,
                 'role' => BusinessRole::Administrator,
@@ -131,9 +132,9 @@ class RawMaterialConcurrencyTest extends TestCase
             app(MembershipService::class)->assign($steward, $location);
             $recipient = $this->user($organization, 'suspension-recipient@example.test');
             $recipientMembership = app(MembershipService::class)->assign($recipient, $location);
-            Organization::whereKey($organization->id)->update(['authorization_initialized' => true]);
+            $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-            LocationModuleState::create([
+            LocationModuleState::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
                 'location_id' => $location->id,
                 'module_key' => 'RAW_MATERIALS',
@@ -198,7 +199,7 @@ class RawMaterialConcurrencyTest extends TestCase
             $this->assertSame(0, DB::table('organization_permission_grant_events')
                 ->where('grant_id', $sourceGrant->id)->count());
 
-            User::whereKey($recipient->id)->update(['is_active' => true]);
+            $this->updateFixture($recipient, ['is_active' => true]);
             $this->assertEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::View));
         } finally {
             $this->cleanup($processes);
@@ -259,7 +260,7 @@ class RawMaterialConcurrencyTest extends TestCase
 
     private function user(Organization $organization, string $email): User
     {
-        $user = User::create([
+        $user = User::on('pgsql_setup')->create([
             'organization_id' => $organization->id,
             'first_name' => 'Test',
             'last_name' => 'Concurrency',
@@ -269,7 +270,7 @@ class RawMaterialConcurrencyTest extends TestCase
         ]);
         $user->forceFill(['email_verified_at' => now()])->save();
 
-        return $user->refresh();
+        return User::on('pgsql')->findOrFail($user->getKey());
     }
 
     private function bootstrapPermissions(User $actor, User $recipient): void
@@ -279,33 +280,35 @@ class RawMaterialConcurrencyTest extends TestCase
             RawMaterialPermission::cases(),
         );
         $operationId = Str::uuid()->toString();
-        DB::table('raw_material_audit_events')->insert([
-            'id' => Str::uuid()->toString(),
-            'organization_id' => $actor->organization_id,
-            'operation_id' => $operationId,
-            'actor_user_id' => $actor->id,
-            'subject_type' => 'ORGANIZATION',
-            'subject_id' => $actor->organization_id,
-            'event_code' => 'PERMISSION_BOOTSTRAP',
-            'outcome' => 'ACCEPTED',
-            'reason_code' => 'TEST_FIXTURE',
-            'metadata' => json_encode([
-                'recipient_user_id' => $recipient->id,
-                'permissions' => $permissions,
-            ], JSON_THROW_ON_ERROR),
-        ]);
-        foreach ($permissions as $permission) {
-            DB::table('organization_permission_grants')->insert([
+        $this->withSetupTransaction(function (Connection $connection) use ($actor, $recipient, $permissions, $operationId): void {
+            $connection->table('raw_material_audit_events')->insert([
                 'id' => Str::uuid()->toString(),
                 'organization_id' => $actor->organization_id,
-                'user_id' => $recipient->id,
-                'permission' => $permission,
-                'granted_by' => $actor->id,
-                'valid_from' => now(),
-                'bootstrap_operation_id' => $operationId,
+                'operation_id' => $operationId,
+                'actor_user_id' => $actor->id,
+                'subject_type' => 'ORGANIZATION',
+                'subject_id' => $actor->organization_id,
+                'event_code' => 'PERMISSION_BOOTSTRAP',
+                'outcome' => 'ACCEPTED',
                 'reason_code' => 'TEST_FIXTURE',
+                'metadata' => json_encode([
+                    'recipient_user_id' => $recipient->id,
+                    'permissions' => $permissions,
+                ], JSON_THROW_ON_ERROR),
             ]);
-        }
+            foreach ($permissions as $permission) {
+                $connection->table('organization_permission_grants')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'user_id' => $recipient->id,
+                    'permission' => $permission,
+                    'granted_by' => $actor->id,
+                    'valid_from' => now(),
+                    'bootstrap_operation_id' => $operationId,
+                    'reason_code' => 'TEST_FIXTURE',
+                ]);
+            }
+        });
     }
 
     private function startCreateProcess(
@@ -367,6 +370,6 @@ class RawMaterialConcurrencyTest extends TestCase
         while (DB::transactionLevel() > 0) {
             DB::rollBack();
         }
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
     }
 }

@@ -20,20 +20,21 @@ class AdministratorConcurrencyTest extends TestCase
     public function test_last_admin_is_preserved_between_independent_postgresql_transactions(bool $commit, string $operation): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
-        DB::statement('TRUNCATE organizations CASCADE');
+        $this->resetTestDatabase();
         $process = null;
         try {
             $installation = app(InstallationService::class);
             $installation->initializeOrganization(['name' => 'Concurrency', 'code' => 'CONCURRENCY']);
             $kitchen = $installation->createLocation(['name' => 'Kitchen', 'code' => 'CK', 'type' => 'CENTRAL_KITCHEN']);
             $first = app(IdentityService::class)->provisionInitial(['first_name' => 'First', 'last_name' => 'Admin', 'email' => 'first@example.test'], 'Test-Only-Password!42');
-            $first->forceFill(['email_verified_at' => now()])->save();
+            $first = $this->updateFixture($first, ['email_verified_at' => now()]);
             $memberships = app(MembershipService::class);
             $memberships->assign($first, $kitchen);
             $roles = app(RoleAdministration::class);
             $firstRole = $roles->bootstrapInitial($first);
-            $second = User::create(['organization_id' => $first->organization_id, 'first_name' => 'Second', 'last_name' => 'Admin', 'email' => 'second@example.test', 'password' => 'Test-Only-Password!42']);
+            $second = User::on('pgsql_setup')->create(['organization_id' => $first->organization_id, 'first_name' => 'Second', 'last_name' => 'Admin', 'email' => 'second@example.test', 'password' => 'Test-Only-Password!42']);
             $second->forceFill(['email_verified_at' => now()])->save();
+            $second = User::on('pgsql')->findOrFail($second->getKey());
             $memberships->assign($second, $kitchen);
             $roles->grant($first, $kitchen, $second, BusinessRole::Administrator, null, 'Test-Only-Password!42');
             DB::beginTransaction();
@@ -66,7 +67,7 @@ class AdministratorConcurrencyTest extends TestCase
             if ($process?->isRunning()) {
                 $process->stop();
             }
-            DB::statement('TRUNCATE organizations CASCADE');
+            $this->resetTestDatabase();
         }
     }
 

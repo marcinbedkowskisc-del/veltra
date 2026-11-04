@@ -31,6 +31,7 @@ return [
     'identity_provisioning_organization_required' => 'Najpierw skonfiguruj aktywną organizację.',
     'identity_rate_limited' => 'Wysłano zbyt wiele wiadomości dotyczących konta. Spróbuj ponownie później.',
     'identity_smtp_delivery_failed' => 'Nie udało się dostarczyć wiadomości. Sprawdź konfigurację poczty i po upływie limitu poproś o nowy link.',
+    'initial_administrator_membership_required' => 'Przed aktywacją uprawnień początkowego administratora przypisz mu aktywną lokalizację operacyjną.',
     'initial_authorization_unavailable' => 'Nie można teraz skonfigurować początkowych uprawnień.',
     'installation_organization_required' => 'Najpierw skonfiguruj organizację.',
     'invalid_credentials' => 'Podany adres e-mail lub hasło są nieprawidłowe.',

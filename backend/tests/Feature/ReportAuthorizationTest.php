@@ -10,6 +10,7 @@ use App\Domain\Authorization\ReportCatalog;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
 
@@ -42,7 +43,7 @@ class ReportAuthorizationTest extends AuthorizationTestCase
         $this->assertFalse(app(BusinessAuthorization::class)->allows($boss, $restaurant, $kitchen, Permission::LocationView));
         $service->revoke($chef, $kitchen, $share);
         $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
-        $this->assertDatabaseRejects('23514', fn () => $share->fresh()->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($share)->fresh()->delete());
         $service->authorizeExport($boss, $restaurant, $restaurant, Permission::LocationView);
         $this->expectException(AuthorizationException::class);
         $service->authorizeExport($boss, $restaurant, $restaurant, Permission::PurchasePricesView);

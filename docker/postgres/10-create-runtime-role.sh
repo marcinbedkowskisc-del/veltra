@@ -126,6 +126,7 @@ WHERE n.nspname = 'public'
         AND d.deptype = 'e'
   )
 \gexec
+BEGIN;
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'app_db_username') \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'migration_username') \gexec
 SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'app_db_username') \gexec
@@ -154,4 +155,5 @@ SELECT format(
 )
 WHERE to_regclass('public.raw_material_permission_grant_operation_uses') IS NOT NULL
 \gexec
+COMMIT;
 SQL

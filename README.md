@@ -222,6 +222,21 @@ polaczenia, cache Redis, dostepnosc kolejki oraz brak tabel infrastrukturalnych
 tozsamosci. Test nie wymaga pustego schematu `public`.
 Testy nie uruchamiaja migracji i usuwaja swoj losowy klucz cache.
 
+Regresja przeslaniania walidatora uprawnien przez `pg_temp` musi byc uruchomiona
+z rzeczywistym kontem runtime, aby testowac efektywne ograniczenia PostgreSQL:
+
+```bash
+docker compose run --rm \
+  -e DB_USERNAME="${APP_DB_USERNAME:-veltra_app}" \
+  -e DB_PASSWORD="${APP_DB_PASSWORD:?Uruchom inicjalizacje srodowiska opisana w README}" \
+  backend-test php artisan test \
+  --filter=test_runtime_cannot_shadow_bootstrap_validation_relations_with_temporary_tables
+```
+
+Migracja `021` blokuje zapisy grantow podczas rekonsyliacji ledgeru. Jesli
+wykryje osierocone wpisy, duplikaty lub granty bez zgodnej historii audytowej,
+zatrzymuje sie bez zmian i wymaga recznego przegladu danych przed ponowieniem.
+
 Testy wspolbieznosci uruchamiaja osobny proces PHP z niezaleznym polaczeniem
 PostgreSQL. Sprawdzaja rzeczywisty stan oczekiwania `Lock` w `pg_stat_activity`,
 a nastepnie rezultat po COMMIT i ROLLBACK pierwszej transakcji: zarowno pierwsze

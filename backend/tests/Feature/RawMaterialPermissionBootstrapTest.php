@@ -187,6 +187,115 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         );
     }
 
+    public function test_permission_grant_validators_pin_public_before_temporary_schemas(): void
+    {
+        foreach ([
+            'public.raw_materials_serialize_grant()' => 'raw_materials_serialize_grant',
+            'public.raw_materials_permission_upgrade_authority_is_effective(uuid,uuid)' => 'raw_materials_permission_upgrade_authority_is_effective',
+            'public.raw_materials_revoke_grants_on_suspension()' => 'raw_materials_revoke_grants_on_suspension',
+            'public.raw_materials_reject_bootstrap_grant_replay()' => 'raw_materials_reject_bootstrap_grant_replay',
+        ] as $function => $name) {
+            $config = DB::selectOne(
+                'SELECT array_to_string(proconfig, \',\') AS settings FROM pg_proc WHERE oid = ?::regprocedure',
+                [$function],
+            )->settings;
+
+            $this->assertSame(
+                'search_path=pg_catalog, public, pg_temp',
+                $config,
+                "The {$name} function must resolve public relations before pg_temp.",
+            );
+        }
+    }
+
+    public function test_runtime_cannot_shadow_bootstrap_validation_relations_with_temporary_tables(): void
+    {
+        $connection = DB::connection();
+        $runtimeUsername = (string) env('APP_DB_USERNAME', '');
+        if ($connection->getConfig('username') !== $runtimeUsername) {
+            $this->markTestSkipped('Uruchom test z połączeniem DB_USERNAME ustawionym na rolę runtime.');
+        }
+
+        $actor = $this->user('temp-shadow-actor@example.test');
+        $recipient = $this->user('temp-shadow-recipient@example.test');
+        $operationId = (string) Str::uuid();
+        $grantId = (string) Str::uuid();
+        $pdo = $connection->getPdo();
+
+        $pdo->exec(<<<'SQL'
+            CREATE TEMP TABLE organization_permission_grants (
+                id uuid, organization_id uuid, user_id uuid, permission varchar(80),
+                granted_by uuid, valid_from timestamptz, valid_until timestamptz,
+                delegation_source_id uuid, bootstrap_operation_id uuid
+            )
+            SQL);
+        $pdo->exec(<<<'SQL'
+            CREATE TEMP TABLE raw_material_audit_events (
+                organization_id uuid, operation_id uuid, actor_user_id uuid,
+                event_code varchar(80), outcome varchar(16), metadata jsonb
+            )
+            SQL);
+
+        $audit = $pdo->prepare(<<<'SQL'
+            INSERT INTO raw_material_audit_events (
+                organization_id, operation_id, actor_user_id, event_code, outcome, metadata
+            ) VALUES (?, ?, ?, 'PERMISSION_BOOTSTRAP', 'ACCEPTED', ?::jsonb)
+            SQL);
+        $audit->execute([
+            $actor->organization_id,
+            $operationId,
+            $actor->id,
+            json_encode([
+                'recipient_user_id' => $recipient->id,
+                'permissions' => [RawMaterialPermission::PermissionDelegate->value],
+            ], JSON_THROW_ON_ERROR),
+        ]);
+
+        $pdo->exec('SAVEPOINT m020_temp_shadow_validation');
+        $pdo->exec('SET LOCAL search_path = pg_temp, public');
+        $accepted = false;
+        $sqlState = null;
+        try {
+            $grant = $pdo->prepare(<<<'SQL'
+                INSERT INTO public.organization_permission_grants (
+                    id, organization_id, user_id, permission, granted_by,
+                    valid_from, bootstrap_operation_id, reason_code
+                ) VALUES (?, ?, ?, ?, ?, clock_timestamp(), ?, 'TEMP_SHADOW_REGRESSION')
+                SQL);
+            $grant->execute([
+                $grantId,
+                $actor->organization_id,
+                $recipient->id,
+                RawMaterialPermission::PermissionDelegate->value,
+                $actor->id,
+                $operationId,
+            ]);
+            $accepted = true;
+        } catch (PDOException $exception) {
+            $sqlState = (string) $exception->getCode();
+        } finally {
+            $pdo->exec('ROLLBACK TO SAVEPOINT m020_temp_shadow_validation');
+        }
+
+        $this->assertFalse($accepted, 'A temporary audit relation must not authorize a persistent grant.');
+        $this->assertSame('23514', $sqlState);
+        $grantCount = $pdo->prepare('SELECT count(*) FROM public.organization_permission_grants WHERE id = ?');
+        $grantCount->execute([$grantId]);
+        $this->assertSame(0, (int) $grantCount->fetchColumn());
+
+        $ledgerCount = $pdo->prepare(
+            'SELECT count(*) FROM public.raw_material_permission_grant_operation_uses WHERE bootstrap_operation_id = ?',
+        );
+        $ledgerCount->execute([$operationId]);
+        $this->assertSame(0, (int) $ledgerCount->fetchColumn());
+
+        $auditCount = $pdo->prepare(
+            'SELECT count(*) FROM public.raw_material_audit_events WHERE operation_id = ?',
+        );
+        $auditCount->execute([$operationId]);
+        $this->assertSame(0, (int) $auditCount->fetchColumn());
+    }
+
     public function test_initial_grant_is_explicit_audited_one_time_and_never_self_granted(): void
     {
         $location = $this->activeRestaurant();

@@ -21,11 +21,172 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use PDO;
+use PDOException;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
 
 class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
 {
+    public function test_migration_role_is_not_superuser_or_database_owner(): void
+    {
+        $role = DB::selectOne(<<<'SQL'
+            SELECT
+                CASE WHEN rol.rolsuper THEN 1 ELSE 0 END AS superuser,
+                CASE WHEN rol.rolcreatedb THEN 1 ELSE 0 END AS createdb,
+                CASE WHEN rol.rolcreaterole THEN 1 ELSE 0 END AS createrole,
+                CASE WHEN db.datdba = rol.oid THEN 1 ELSE 0 END AS database_owner,
+                CASE WHEN has_database_privilege(current_user, current_database(), 'CREATE') THEN 1 ELSE 0 END AS can_create_schema_objects
+            FROM pg_roles rol
+            JOIN pg_database db ON db.datname = current_database()
+            WHERE rol.rolname = current_user
+            SQL);
+
+        $this->assertSame(0, (int) $role->superuser);
+        $this->assertSame(0, (int) $role->createdb);
+        $this->assertSame(0, (int) $role->createrole);
+        $this->assertSame(0, (int) $role->database_owner);
+        $this->assertSame(1, (int) $role->can_create_schema_objects);
+    }
+
+    public function test_runtime_cannot_write_to_permission_operation_ledger_directly(): void
+    {
+        $runtimeUsername = (string) env('APP_DB_USERNAME', '');
+        $runtimePassword = (string) env('APP_DB_PASSWORD', '');
+        $this->assertNotSame('', $runtimeUsername);
+        $this->assertNotSame('', $runtimePassword);
+        $this->assertNotSame(
+            config('database.connections.pgsql.username'),
+            $runtimeUsername,
+            'The test connection must use a separate migration role.',
+        );
+
+        $connection = config('database.connections.pgsql');
+        $pdo = new PDO(
+            sprintf(
+                'pgsql:host=%s;port=%s;dbname=%s',
+                $connection['host'],
+                $connection['port'],
+                $connection['database'],
+            ),
+            $runtimeUsername,
+            $runtimePassword,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
+        );
+
+        $privileges = $pdo->query(<<<'SQL'
+            SELECT
+                has_table_privilege(current_user, 'public.raw_material_permission_grant_operation_uses', 'SELECT') AS can_select,
+                has_table_privilege(current_user, 'public.raw_material_permission_grant_operation_uses', 'INSERT') AS can_insert,
+                has_table_privilege(current_user, 'public.raw_material_permission_grant_operation_uses', 'UPDATE') AS can_update,
+                has_table_privilege(current_user, 'public.raw_material_permission_grant_operation_uses', 'DELETE') AS can_delete,
+                has_table_privilege(current_user, 'public.raw_material_permission_grant_operation_uses', 'TRUNCATE') AS can_truncate
+            SQL)->fetch(PDO::FETCH_ASSOC);
+
+        $this->assertTrue($privileges['can_select']);
+        $this->assertFalse($privileges['can_insert']);
+        $this->assertFalse($privileges['can_update']);
+        $this->assertFalse($privileges['can_delete']);
+        $this->assertFalse($privileges['can_truncate']);
+        $this->assertSame(
+            0,
+            (int) $pdo->query(
+                'SELECT count(*) FROM pg_auth_members WHERE member = (SELECT oid FROM pg_roles WHERE rolname = current_user)',
+            )->fetchColumn(),
+        );
+
+        $function = $pdo->query(<<<'SQL'
+            SELECT prosecdef, array_to_string(proconfig, ',') AS function_config
+            FROM pg_proc
+            WHERE oid = 'public.raw_materials_reject_bootstrap_grant_replay()'::regprocedure
+            SQL)->fetch(PDO::FETCH_ASSOC);
+
+        $this->assertTrue($function['prosecdef']);
+        $this->assertStringContainsString('search_path=pg_catalog, public', $function['function_config']);
+        $this->assertFalse($pdo->query(
+            "SELECT has_function_privilege(current_user, 'public.raw_materials_reject_bootstrap_grant_replay()', 'EXECUTE')",
+        )->fetchColumn());
+
+        try {
+            $pdo->exec(<<<'SQL'
+                INSERT INTO public.raw_material_permission_grant_operation_uses (
+                    id, organization_id, bootstrap_operation_id, permission, created_at
+                ) VALUES (
+                    gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                    'FORGED_LEDGER_ENTRY', clock_timestamp()
+                )
+                SQL);
+            $this->fail('Runtime credentials must not append entries to the permission operation ledger.');
+        } catch (PDOException $exception) {
+            $this->assertSame('42501', (string) $exception->getCode());
+        }
+    }
+
+    public function test_runtime_cannot_attach_the_bootstrap_security_definer_to_a_temporary_table(): void
+    {
+        $runtimeUsername = (string) env('APP_DB_USERNAME', '');
+        $runtimePassword = (string) env('APP_DB_PASSWORD', '');
+        $connection = config('database.connections.pgsql');
+        $pdo = new PDO(
+            sprintf(
+                'pgsql:host=%s;port=%s;dbname=%s',
+                $connection['host'],
+                $connection['port'],
+                $connection['database'],
+            ),
+            $runtimeUsername,
+            $runtimePassword,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
+        );
+        $operationId = (string) Str::uuid();
+        $before = (int) $pdo->query(
+            'SELECT count(*) FROM public.raw_material_permission_grant_operation_uses',
+        )->fetchColumn();
+
+        $pdo->exec(<<<'SQL'
+            CREATE TEMP TABLE m019_forgery (
+                organization_id uuid,
+                bootstrap_operation_id uuid,
+                permission varchar(80)
+            )
+            SQL);
+
+        try {
+            $pdo->exec(<<<'SQL'
+                CREATE TRIGGER m019_forgery_trigger
+                    BEFORE INSERT ON m019_forgery
+                    FOR EACH ROW
+                    EXECUTE FUNCTION public.raw_materials_reject_bootstrap_grant_replay()
+                SQL);
+            $this->fail('Runtime credentials must not attach the privileged trigger function to a temporary table.');
+        } catch (PDOException $exception) {
+            $this->assertSame('42501', (string) $exception->getCode());
+        }
+
+        try {
+            $statement = $pdo->prepare(
+                'SELECT public.raw_materials_reject_bootstrap_grant_replay()',
+            );
+            $statement->execute();
+            $this->fail('Runtime credentials must not invoke the trigger function directly.');
+        } catch (PDOException $exception) {
+            $this->assertSame('42501', (string) $exception->getCode());
+        }
+
+        $this->assertSame(
+            $before,
+            (int) $pdo->query(
+                'SELECT count(*) FROM public.raw_material_permission_grant_operation_uses',
+            )->fetchColumn(),
+        );
+        $this->assertSame(
+            0,
+            (int) $pdo->query(
+                'SELECT count(*) FROM public.raw_material_permission_grant_operation_uses WHERE bootstrap_operation_id = '.$pdo->quote($operationId),
+            )->fetchColumn(),
+        );
+    }
+
     public function test_initial_grant_is_explicit_audited_one_time_and_never_self_granted(): void
     {
         $location = $this->activeRestaurant();
@@ -78,6 +239,121 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
                 $this->assertSame(2, DB::table('organization_permission_grants')
                     ->where('organization_id', $administrator->organization_id)->count());
             }
+        }
+    }
+
+    public function test_revoked_bootstrap_permission_cannot_be_restored_by_replaying_its_operation_id_in_sql(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->user('bootstrap-replay-admin@example.test');
+        $this->role($administrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($administrator, $location);
+        $steward = $this->user('bootstrap-replay-steward@example.test');
+        app(MembershipService::class)->assign($steward, $location);
+        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->enableRawMaterials($administrator, $location);
+
+        $grants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $administrator->id,
+            $steward->id,
+            [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+            'Jawne ustanowienie opiekuna',
+            self::PASSWORD,
+        );
+        $viewGrant = collect($grants)->firstWhere('permission', RawMaterialPermission::View->value);
+        $operationId = DB::table('organization_permission_grants')
+            ->where('id', $viewGrant['id'])->value('bootstrap_operation_id');
+        $administration = app(OrganizationRawMaterialPermissionAdministration::class);
+        $administration->revoke($steward, $location, $viewGrant['id'], 'Cofnięcie prawa do testu replay');
+
+        $auditCountAfterRevocation = DB::table('raw_material_audit_events')
+            ->where('organization_id', $administrator->organization_id)->count();
+        $this->assertSame([], app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($steward, RawMaterialPermission::View));
+
+        try {
+            DB::transaction(fn () => DB::table('organization_permission_grants')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $administrator->organization_id,
+                'user_id' => $steward->id,
+                'permission' => RawMaterialPermission::View->value,
+                'granted_by' => $administrator->id,
+                'valid_from' => now(),
+                'delegation_source_id' => null,
+                'bootstrap_operation_id' => $operationId,
+                'reason_code' => 'INITIAL_STEWARD',
+            ]));
+            $this->fail('A historical bootstrap operation ID must not restore a revoked permission.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0]);
+        }
+
+        $this->assertSame(1, DB::table('organization_permission_grants')
+            ->where('id', $viewGrant['id'])->count());
+        $this->assertSame(1, DB::table('organization_permission_grant_events')
+            ->where('grant_id', $viewGrant['id'])->where('event_type', 'REVOKED')->count());
+        $this->assertSame($auditCountAfterRevocation, DB::table('raw_material_audit_events')
+            ->where('organization_id', $administrator->organization_id)->count());
+        $this->assertSame([], app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($steward, RawMaterialPermission::View));
+    }
+
+    public function test_migration_guard_fails_closed_for_an_active_historical_duplicate(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->user('bootstrap-legacy-duplicate-admin@example.test');
+        $this->role($administrator, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($administrator, $location);
+        $recipient = $this->user('bootstrap-legacy-duplicate-recipient@example.test');
+        app(MembershipService::class)->assign($recipient, $location);
+        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+
+        $grants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $administrator->id,
+            $recipient->id,
+            [
+                RawMaterialPermission::View->value,
+                RawMaterialPermission::PermissionDelegate->value,
+            ],
+            'Jawne ustanowienie opiekuna',
+            self::PASSWORD,
+        );
+        $grant = DB::table('organization_permission_grants')->where('id', $grants[0]['id'])->first();
+
+        try {
+            DB::statement(
+                'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_validate'
+            );
+            DB::statement(
+                'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
+            );
+            DB::table('organization_permission_grants')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $grant->organization_id,
+                'user_id' => $grant->user_id,
+                'permission' => $grant->permission,
+                'granted_by' => $grant->granted_by,
+                'valid_from' => $grant->valid_from,
+                'valid_until' => $grant->valid_until,
+                'delegation_source_id' => $grant->delegation_source_id,
+                'bootstrap_operation_id' => $grant->bootstrap_operation_id,
+                'reason_code' => $grant->reason_code,
+            ]);
+        } finally {
+            DB::statement(
+                'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
+            );
+            DB::statement(
+                'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_validate'
+            );
+        }
+
+        try {
+            DB::select('SELECT raw_materials_assert_no_active_bootstrap_replays()');
+            $this->fail('The migration guard must reject active historical duplicate grants.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0]);
+            $this->assertStringContainsString('manual review', $exception->getMessage());
         }
     }
 

@@ -37,7 +37,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD:/app" -w /app composer:2 php scripts/init-env.php
 
 docker compose up -d --build
-docker compose exec -T backend php artisan migrate --force
+docker compose run --rm migrate
 docker compose ps
 ```
 
@@ -63,11 +63,46 @@ Nie sa dodawane przykladowe dane ani organizacja.
 Migracja Stage 1C dodaje `users` i `location_memberships`, zachowujac
 ograniczenia oraz historie zarzadzania Stage 1B.
 
+Backend i worker lacza sie jako nieuprzywilejowana rola `APP_DB_USERNAME`.
+Migracje wykonuje oddzielna, nie-superuzytkownikowa rola `APP_DB_MIGRATION_USERNAME`,
+wlasciciel schematu i obiektow aplikacji; ma tylko `CONNECT` i `CREATE` w bazie
+aplikacji i nie jest jej wlascicielem.
+`POSTGRES_USER` pozostaje kontem bootstrap/administrowania i nie jest
+przekazywany kontenerom aplikacji ani usludze migracji. Konto runtime ma tylko
+odczyt rejestru uzyc operacji uprawnien. Wpisy do niego dopisuje trigger
+uruchamiany przez PostgreSQL podczas autoryzowanego bootstrapu; rola runtime
+nie ma prawa `EXECUTE` do funkcji `SECURITY DEFINER` i nie moze podpiac jej
+do wlasnej tabeli tymczasowej.
+
+Profil `testing` uruchamia migracje i testy jako rola migracyjna na osobnej
+bazie `veltra_testing`, a testy sprawdzaja jej nazwe przed zapisem. Skrypt
+PostgreSQL przygotowuje role i ich domyslne granty tylko przy inicjalizacji
+pustego wolumenu. Skrypty `docker-entrypoint-initdb.d` nie sa uruchamiane
+ponownie na istniejacym wolumenie. Przy istniejacej instalacji administrator
+musi jawnie uzupelnic `.env` o `APP_DB_MIGRATION_USERNAME` i
+`APP_DB_MIGRATION_PASSWORD`, a nastepnie — po kopii zapasowej i w zatwierdzonym
+oknie serwisowym — odtworzyc kontener PostgreSQL z nowymi zmiennymi i uruchomic
+skrypt provisioningu dla biezacej bazy:
+
+```bash
+docker compose up -d --no-deps --force-recreate postgres
+docker compose exec -T postgres sh /docker-entrypoint-initdb.d/10-create-runtime-role.sh
+```
+
+Skrypt tworzy role migracyjna i przenosi wlasnosc obiektow schematu `public`
+wylacznie biezacej bazy na te role. Nie uruchamiaj go na wspoldzielonej bazie
+ani bez uprzedniej weryfikacji konfiguracji. Dopiero po provisioningu mozna
+uruchomic jawna migracje. Sama edycja `.env` nie zmienia ról ani hasel w bazie.
+
 ## Konfiguracja
 
 - [`.env.example`](.env.example): parametry Compose; puste miejsca na sekrety.
 - [`backend/.env.example`](backend/.env.example): dokumentacja konfiguracji Laravel.
 - [`frontend/.env.example`](frontend/.env.example): publiczny URL API i cel proxy Vite.
+- `APP_DB_USERNAME` i `APP_DB_PASSWORD`: osobne dane logowania runtime; nie
+  uzywaj ich jako roli migracyjnej ani administratora.
+- `APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD`: osobna rola
+  nie-superuzytkownikowa uzywana tylko przez jawne migracje i testy.
 
 Compose przekazuje konfiguracje bezposrednio do Laravel; nie trzeba tworzyc
 `backend/.env` ani `frontend/.env`. Wygenerowany glowny `.env` zawiera sekrety
@@ -120,7 +155,26 @@ Po uruchomieniu kontenerow przygotuj **osobna baze testowa**:
 ```bash
 # Jednorazowo; przy ponownym wykonaniu sprawdz, czy baza juz istnieje.
 docker compose exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" veltra_testing'
-docker compose exec -T -e DB_DATABASE=veltra_testing backend php artisan migrate --force
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d veltra_testing \
+  --set=migration_username="$APP_DB_MIGRATION_USERNAME" \
+  --set=app_db_username="$APP_DB_USERNAME"' <<'SQL'
+GRANT CONNECT, CREATE ON DATABASE veltra_testing TO :"migration_username";
+ALTER SCHEMA public OWNER TO :"migration_username";
+GRANT CONNECT ON DATABASE veltra_testing TO :"app_db_username";
+GRANT USAGE ON SCHEMA public TO :"app_db_username";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_username" IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_db_username";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_username" IN SCHEMA public
+  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"app_db_username";
+SQL'
+docker compose run --rm migrate-test
+```
+
+Jesli `veltra_testing` juz istnieje, przed migracja testowa uruchom skrypt
+provisioningu na tej bazie osobno:
+
+```bash
+docker compose exec -T postgres sh -c 'POSTGRES_DB=veltra_testing sh /docker-entrypoint-initdb.d/10-create-runtime-role.sh'
 ```
 
 PHPUnit wymusza `veltra_testing` zarowno w zmiennych srodowiskowych, jak i
@@ -134,16 +188,16 @@ Nastepnie:
 
 ```bash
 # Izolowane przypadki health oraz testy z prawdziwym PostgreSQL i Redis.
-docker compose exec -T backend php artisan test --filter=Health
+docker compose run --rm backend-test php artisan test --filter=Health
 
 # Cala podstawowa suita Laravel.
-docker compose exec -T backend composer test
+docker compose run --rm backend-test composer test
 
 # Testy Stage 1B: domena, API, rzeczywiste ograniczenia PostgreSQL i wspolbieznosc.
-docker compose exec -T backend php artisan test --filter='Installation|ManagementConcurrency'
+docker compose run --rm backend-test php artisan test --filter='Installation|ManagementConcurrency'
 
 # Testy Stage 1C: sesje, CSRF, konta, przypisania i interaktywne CLI.
-docker compose exec -T backend php artisan test --filter='Identity|Membership'
+docker compose run --rm backend-test php artisan test --filter='Identity|Membership'
 
 # Format PHP oraz walidacja metadanych zaleznosci.
 docker compose exec -T backend vendor/bin/pint --test

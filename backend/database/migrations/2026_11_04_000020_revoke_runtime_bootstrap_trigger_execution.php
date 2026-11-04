@@ -1,0 +1,71 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\DB;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        $runtimeUsername = (string) env('APP_DB_USERNAME', 'veltra_app');
+        if ($runtimeUsername === '') {
+            throw new RuntimeException('Nie skonfigurowano roli runtime PostgreSQL.');
+        }
+
+        $quotedRuntimeRole = DB::selectOne(
+            'SELECT quote_ident(?) AS role_name',
+            [$runtimeUsername],
+        )->role_name;
+
+        DB::unprepared(<<<'SQL'
+            CREATE OR REPLACE FUNCTION public.raw_materials_reject_bootstrap_grant_replay()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = pg_catalog, public
+            AS $$
+            DECLARE
+                use_id uuid;
+            BEGIN
+                IF TG_RELID <> 'public.organization_permission_grants'::regclass
+                    OR TG_OP <> 'INSERT' THEN
+                    RAISE EXCEPTION 'Bootstrap replay guard may only run for permission grant inserts'
+                        USING ERRCODE = '42501';
+                END IF;
+
+                IF NEW.bootstrap_operation_id IS NULL THEN
+                    RETURN NEW;
+                END IF;
+
+                INSERT INTO public.raw_material_permission_grant_operation_uses (
+                    id, organization_id, bootstrap_operation_id, permission, created_at
+                ) VALUES (
+                    gen_random_uuid(), NEW.organization_id, NEW.bootstrap_operation_id,
+                    NEW.permission, clock_timestamp()
+                )
+                ON CONFLICT (organization_id, bootstrap_operation_id, permission) DO NOTHING
+                RETURNING id INTO use_id;
+
+                IF use_id IS NULL THEN
+                    RAISE EXCEPTION 'A bootstrap permission operation cannot grant the same permission twice'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                RETURN NEW;
+            END
+            $$;
+
+            REVOKE ALL ON FUNCTION public.raw_materials_reject_bootstrap_grant_replay() FROM PUBLIC;
+            SQL);
+
+        DB::unprepared(sprintf(
+            'REVOKE ALL ON FUNCTION public.raw_materials_reject_bootstrap_grant_replay() FROM %s',
+            $quotedRuntimeRole,
+        ));
+    }
+
+    public function down(): void
+    {
+        throw new RuntimeException('Nie można przywrócić runtime prawa wywołania funkcji ochrony replay bootstrapu.');
+    }
+};

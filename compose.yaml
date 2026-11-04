@@ -1,5 +1,41 @@
 name: ${COMPOSE_PROJECT_NAME:-veltra}
 
+x-backend-environment: &backend-environment
+  APP_NAME: VELTRA 2.0
+  APP_ENV: local
+  APP_DEBUG: "false"
+  APP_LOCALE: pl
+  APP_FALLBACK_LOCALE: pl
+  DEV_MANAGEMENT_ENABLED: ${DEV_MANAGEMENT_ENABLED:-false}
+  DEV_MANAGEMENT_TOKEN: ${DEV_MANAGEMENT_TOKEN:-}
+  PHP_CLI_SERVER_WORKERS: "4"
+  APP_KEY: ${APP_KEY:?Run the environment initialization command from README}
+  APP_URL: http://localhost:${BACKEND_PORT:-8000}
+  FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5173}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: info
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: ${POSTGRES_DB:-veltra}
+  DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+  DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
+  CACHE_STORE: redis
+  SESSION_DRIVER: redis
+  SESSION_LIFETIME: "120"
+  SANCTUM_STATEFUL_DOMAINS: localhost:${FRONTEND_PORT:-5173},localhost:${BACKEND_PORT:-8000},127.0.0.1:${FRONTEND_PORT:-5173},127.0.0.1:${BACKEND_PORT:-8000}
+  QUEUE_CONNECTION: redis
+  QUEUE_FAILED_DRIVER: file
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_CACHE_DB: "1"
+  MAIL_MAILER: smtp
+  MAIL_HOST: mailpit
+  MAIL_PORT: "1025"
+  MAIL_FROM_ADDRESS: noreply@veltra.test
+
 x-backend: &backend
   image: veltra-backend:stage1f-polish-localization
   build:
@@ -8,41 +44,7 @@ x-backend: &backend
   dns_opt:
     - timeout:1
     - attempts:1
-  environment:
-    APP_NAME: VELTRA 2.0
-    APP_ENV: local
-    APP_DEBUG: "false"
-    APP_LOCALE: pl
-    APP_FALLBACK_LOCALE: pl
-    DEV_MANAGEMENT_ENABLED: ${DEV_MANAGEMENT_ENABLED:-false}
-    DEV_MANAGEMENT_TOKEN: ${DEV_MANAGEMENT_TOKEN:-}
-    PHP_CLI_SERVER_WORKERS: "4"
-    APP_KEY: ${APP_KEY:?Run the environment initialization command from README}
-    APP_URL: http://localhost:${BACKEND_PORT:-8000}
-    FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5173}
-    LOG_CHANNEL: stderr
-    LOG_LEVEL: info
-    DB_CONNECTION: pgsql
-    DB_HOST: postgres
-    DB_PORT: "5432"
-    DB_DATABASE: ${POSTGRES_DB:-veltra}
-    DB_USERNAME: ${POSTGRES_USER:-veltra}
-    DB_PASSWORD: ${POSTGRES_PASSWORD:?Run the environment initialization command from README}
-    CACHE_STORE: redis
-    SESSION_DRIVER: redis
-    SESSION_LIFETIME: "120"
-    SANCTUM_STATEFUL_DOMAINS: localhost:${FRONTEND_PORT:-5173},localhost:${BACKEND_PORT:-8000},127.0.0.1:${FRONTEND_PORT:-5173},127.0.0.1:${BACKEND_PORT:-8000}
-    QUEUE_CONNECTION: redis
-    QUEUE_FAILED_DRIVER: file
-    REDIS_CLIENT: phpredis
-    REDIS_HOST: redis
-    REDIS_PORT: "6379"
-    REDIS_DB: "0"
-    REDIS_CACHE_DB: "1"
-    MAIL_MAILER: smtp
-    MAIL_HOST: mailpit
-    MAIL_PORT: "1025"
-    MAIL_FROM_ADDRESS: noreply@veltra.test
+  environment: *backend-environment
   depends_on:
     postgres:
       condition: service_healthy
@@ -67,6 +69,45 @@ services:
       timeout: 8s
       retries: 3
       start_period: 20s
+
+  backend-test:
+    <<: *backend
+    profiles: ["testing"]
+    environment:
+      <<: *backend-environment
+      DB_DATABASE: veltra_testing
+      DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
+      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
+    command: ["php", "artisan", "test"]
+
+  migrate:
+    <<: *backend
+    profiles: ["migrations"]
+    environment:
+      <<: *backend-environment
+      DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
+      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["php", "artisan", "migrate", "--force"]
+
+  migrate-test:
+    <<: *backend
+    profiles: ["testing"]
+    environment:
+      <<: *backend-environment
+      DB_DATABASE: veltra_testing
+      DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
+      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["php", "artisan", "migrate", "--force"]
 
   queue:
     <<: *backend
@@ -98,10 +139,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-veltra}
       POSTGRES_USER: ${POSTGRES_USER:-veltra}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run the environment initialization command from README}
+      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
+      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
+      APP_DB_MIGRATION_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      test: ["CMD-SHELL", "pg_isready -U \"$${APP_DB_MIGRATION_USERNAME}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 10

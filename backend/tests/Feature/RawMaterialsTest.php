@@ -79,6 +79,10 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(2, DB::table('raw_material_aliases')->where('revision_id', $material['revision']['id'])->count());
         $this->assertSame(1, DB::table('raw_material_audit_events')
             ->where('subject_id', $material['id'])->where('event_code', 'CREATED')->count());
+        DB::statement('SET CONSTRAINTS raw_material_code_counter_consistency, raw_materials_code_counter_consistency IMMEDIATE');
+        $this->assertSame(1, (int) DB::table('raw_material_code_counters')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('prefix', 'SUR')->value('last_value'));
     }
 
     public function test_view_only_reader_cannot_discover_drafts_or_pending_revisions(): void
@@ -400,6 +404,37 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('raw_material_id', $materialId)->count());
         $this->assertSame(0, DB::table('raw_materials_commercial_idempotency')
             ->where('idempotency_key', 'rollback-product-create-0001')->count());
+    }
+
+    public function test_supplier_business_details_are_preserved_by_archive_workflow(): void
+    {
+        $commercial = app(RawMaterialCommercialService::class);
+        $created = $commercial->createSupplier($this->steward, $this->location, [
+            'supplier_code' => 'IMMUTABLE_DETAILS',
+            'display_name' => 'Dostawca z danymi stałymi',
+            'legal_name' => 'Dostawca z danymi stałymi sp. z o.o.',
+            'tax_identifier' => '1234567890',
+        ], 'supplier-details-create-0001');
+        $supplierId = $created['data']['id'];
+
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_CREATED')->count());
+
+        $commercial->archiveSupplier(
+            $this->steward,
+            $this->location,
+            $supplierId,
+            'Zamknięcie współpracy',
+            'supplier-details-archive-0001',
+        );
+
+        $supplier = DB::table('organization_suppliers')->where('id', $supplierId)->first();
+        $this->assertSame('ARCHIVED', $supplier->lifecycle_state);
+        $this->assertSame('Dostawca z danymi stałymi', $supplier->display_name);
+        $this->assertSame('Dostawca z danymi stałymi sp. z o.o.', $supplier->legal_name);
+        $this->assertNotEmpty($supplier->tax_identifier_ciphertext);
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_ARCHIVED')->count());
     }
 
     public function test_supplier_products_offer_prices_and_cost_permissions_are_isolated(): void
@@ -1245,10 +1280,34 @@ class RawMaterialsTest extends AuthorizationTestCase
             'units' => $units,
             'aliases' => $aliases,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $materialCode ??= 'SUR-000099';
+        if (! preg_match('/^SUR-([0-9]{6,9})$/D', $materialCode, $codeParts)) {
+            throw new \LogicException('The raw material fixture code is invalid.');
+        }
+        $counterQuery = DB::table('raw_material_code_counters')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('prefix', 'SUR');
+        $counter = $counterQuery->lockForUpdate()->first();
+        if (! $counter) {
+            DB::table('raw_material_code_counters')->insert([
+                'organization_id' => $this->steward->organization_id,
+                'prefix' => 'SUR',
+                'last_value' => 0,
+            ]);
+            $counter = (object) ['last_value' => 0];
+        }
+        $targetCounterValue = (int) $codeParts[1];
+        if ($targetCounterValue < (int) $counter->last_value) {
+            throw new \LogicException('The raw material fixture code must advance the sequence.');
+        }
+        while ((int) $counter->last_value < $targetCounterValue) {
+            $counterQuery->update(['last_value' => DB::raw('last_value + 1')]);
+            $counter->last_value++;
+        }
         DB::table('raw_materials')->insert([
             'id' => $materialId,
             'organization_id' => $this->steward->organization_id,
-            'code' => $materialCode ?? 'SUR-000099',
+            'code' => $materialCode,
             'lifecycle_state' => 'DRAFT',
             'working_revision_id' => $revisionId,
             'created_by' => $this->steward->id,

@@ -3,6 +3,7 @@
 namespace App\Domain\Identity;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\SecurityMutation;
@@ -74,7 +75,7 @@ class AccountLinks
     public function issue(User $target, string $kind, string $ip, ?User $actor = null, ?Location $context = null, bool $bootstrap = false): void
     {
         $repository = $this->repository($kind);
-        $delivery = $this->contexts->run('account.issue', $actor?->id, fn (): ?array => DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $repository): ?array {
+        $delivery = $this->contexts->run(AuthorizationMutationScope::accountIssue(), $actor?->id, fn (): ?array => DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $repository): ?array {
             $organization = Organization::whereKey($target->organization_id)->lockForUpdate()->firstOrFail();
             $target = $target->fresh();
             $allowed = $bootstrap
@@ -126,7 +127,7 @@ class AccountLinks
             fn ($attribute, $value, $fail) => strlen($value) > 72 ? $fail(__('messages.password_must_not_exceed_72_bytes')) : null,
         ]])->validate();
         $email = User::normalizeEmail($email);
-        $consumed = $this->contexts->run('account.consume', null, fn (): bool => DB::transaction(function () use ($kind, $email, $token, $password, $repository): bool {
+        $consumed = $this->contexts->run(AuthorizationMutationScope::accountConsume(), null, fn (): bool => DB::transaction(function () use ($kind, $email, $token, $password, $repository): bool {
             Organization::lockForUpdate()->firstOrFail();
             $target = User::where('email', $email)->first();
             if (! $target || ! $target->is_active || ! $target->organization->is_active

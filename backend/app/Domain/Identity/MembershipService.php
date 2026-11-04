@@ -3,6 +3,7 @@
 namespace App\Domain\Identity;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Location;
 use App\Models\LocationMembership;
@@ -17,7 +18,7 @@ class MembershipService
 
     public function assign(User $user, Location $location): LocationMembership
     {
-        return $this->contexts->run('membership.assign', null, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
+        return $this->contexts->run(AuthorizationMutationScope::membershipAssign(), null, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
             $organization = Organization::lockForUpdate()->firstOrFail();
             $user = $user->fresh();
             $location = $location->fresh();
@@ -43,7 +44,7 @@ class MembershipService
     public function deactivate(LocationMembership $membership, string $reason): void
     {
         validator(['reason' => $reason], ['reason' => ['required', 'string', 'max:250']])->validate();
-        $this->contexts->run('membership.deactivate', null, function () use ($membership, $reason): void {
+        $this->contexts->run(AuthorizationMutationScope::membershipDeactivate(), null, function () use ($membership, $reason): void {
             DB::transaction(function () use ($membership, $reason): void {
                 $membership = LocationMembership::findOrFail($membership->id);
                 Organization::whereKey($membership->organization_id)->lockForUpdate()->firstOrFail();

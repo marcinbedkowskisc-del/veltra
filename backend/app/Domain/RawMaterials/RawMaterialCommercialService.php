@@ -3,6 +3,7 @@
 namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
@@ -916,7 +917,7 @@ final class RawMaterialCommercialService
             (string) config('app.key'),
         );
 
-        return $this->contexts->run('raw-material.commercial', $actor->id, fn (): array => DB::transaction(function () use (
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialCommercial(), $actor->id, fn (): array => DB::transaction(function () use (
             $actor, $context, $permissions, $operationCode, $idempotencyKey, $payload, $operation, $requestHash,
         ): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();

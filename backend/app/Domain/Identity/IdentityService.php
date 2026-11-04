@@ -3,6 +3,7 @@
 namespace App\Domain\Identity;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Organization;
 use App\Models\User;
@@ -32,7 +33,7 @@ class IdentityService
             ],
         ])->validate();
 
-        return $this->contexts->run('identity.bootstrap', null, fn (): User => DB::transaction(function () use ($profile, $password): User {
+        return $this->contexts->run(AuthorizationMutationScope::identityBootstrap(), null, fn (): User => DB::transaction(function () use ($profile, $password): User {
             DB::select('SELECT pg_advisory_xact_lock(8612002)');
             $organization = Organization::lockForUpdate()->first();
             if (! $organization || ! $organization->is_active) {
@@ -56,7 +57,7 @@ class IdentityService
 
     public function disable(User $user): void
     {
-        $this->contexts->run('identity.disable', null, function () use ($user): void {
+        $this->contexts->run(AuthorizationMutationScope::identityDisable(), null, function () use ($user): void {
             DB::transaction(function () use ($user): void {
                 $freshUser = User::findOrFail($user->id);
                 Organization::whereKey($freshUser->organization_id)->lockForUpdate()->firstOrFail();

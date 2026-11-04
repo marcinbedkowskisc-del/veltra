@@ -3,6 +3,7 @@
 namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Organization;
@@ -57,7 +58,7 @@ final class RawMaterialPermissionUpgrade
             'reason' => $reason,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
-        return $this->contexts->run('permission.upgrade', $actorId, fn (): array => DB::transaction(function () use (
+        return $this->contexts->run(AuthorizationMutationScope::permissionUpgrade(), $actorId, fn (): array => DB::transaction(function () use (
             $actor,
             $actorId,
             $recipientId,

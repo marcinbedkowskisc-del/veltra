@@ -86,4 +86,35 @@ class RoleAdministrationTest extends AuthorizationTestCase
         $this->role($worker, BusinessRole::RestaurantManager, $other);
         $this->assertFalse($service->canAdminister($manager, $location, $worker, BusinessRole::Employee, $location));
     }
+
+    public function test_non_administrator_cannot_grant_global_administrator_through_domain_service(): void
+    {
+        $location = $this->activeRestaurant();
+        $manager = $this->user('role-escalation-manager@example.test');
+        $this->role($manager, BusinessRole::RestaurantManager, $location);
+        $target = $this->user('role-escalation-target@example.test');
+        $before = RoleAssignment::where('organization_id', $manager->organization_id)
+            ->where('role', BusinessRole::Administrator)
+            ->whereNull('location_id')
+            ->whereNull('revoked_at')
+            ->count();
+
+        try {
+            app(RoleAdministration::class)->grant(
+                $manager,
+                $location,
+                $target,
+                BusinessRole::Administrator,
+                null,
+                self::PASSWORD,
+            );
+            $this->fail('A location manager received a global administrator assignment.');
+        } catch (AuthorizationException) {
+            $this->assertSame($before, RoleAssignment::where('organization_id', $manager->organization_id)
+                ->where('role', BusinessRole::Administrator)
+                ->whereNull('location_id')
+                ->whereNull('revoked_at')
+                ->count());
+        }
+    }
 }

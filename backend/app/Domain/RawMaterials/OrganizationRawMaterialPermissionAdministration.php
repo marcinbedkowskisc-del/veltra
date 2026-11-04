@@ -3,6 +3,7 @@
 namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\Organization;
@@ -40,7 +41,7 @@ final class OrganizationRawMaterialPermissionAdministration
             throw new AuthorizationException(__('messages.unauthorized'));
         }
 
-        return $this->contexts->run('permission.grant', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $recipient, $permission, $reason, $validFrom, $validUntil): array {
+        return $this->contexts->run(AuthorizationMutationScope::permissionGrant($permission), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $recipient, $permission, $reason, $validFrom, $validUntil): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
             if ($actor->is($recipient) || $recipient->organization_id !== $actor->organization_id
@@ -121,8 +122,16 @@ final class OrganizationRawMaterialPermissionAdministration
         string $reason,
     ): void {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
+        $grant = DB::table('organization_permission_grants')
+            ->where('organization_id', $actor->organization_id)
+            ->where('id', $grantId)
+            ->first();
+        $permission = $grant ? RawMaterialPermission::tryFrom($grant->permission) : null;
+        if (! $permission) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
 
-        $this->contexts->run('permission.revoke', $actor->id, function () use ($actor, $context, $grantId, $reason): void {
+        $this->contexts->run(AuthorizationMutationScope::permissionRevoke($permission), $actor->id, function () use ($actor, $context, $grantId, $reason): void {
             DB::transaction(function () use ($actor, $context, $grantId, $reason): void {
                 Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
                 $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);

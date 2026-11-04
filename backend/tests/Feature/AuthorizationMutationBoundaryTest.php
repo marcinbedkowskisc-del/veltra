@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\PersonnelAdministration;
 use App\Domain\Authorization\RoleAdministration;
@@ -16,6 +17,7 @@ use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
 use App\Domain\RawMaterials\RawMaterialPermissionUpgrade;
 use App\Domain\RawMaterials\RawMaterialService;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -65,7 +67,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
     public function test_runtime_cannot_forge_authorization_and_signed_laravel_flows_remain_available(): void
     {
         $connection = DB::connection($this->connectionName);
-        $this->assertSame('veltra_app', $connection->scalar('SELECT session_user'));
+        $this->assertSame((string) env('APP_DB_USERNAME'), $connection->scalar('SELECT session_user'));
         $this->assertFalse($connection->scalar("SELECT has_schema_privilege(session_user, 'public', 'CREATE')"));
         $this->assertFalse($connection->scalar("SELECT has_schema_privilege(session_user, 'veltra_private', 'USAGE')"));
         $this->assertFalse($connection->scalar("SELECT has_table_privilege(session_user, 'public.role_assignments', 'TRUNCATE')"));
@@ -80,9 +82,10 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_material_permission_grant_operation_uses DEFAULT VALUES'));
         $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_material_audit_events DEFAULT VALUES'));
         $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.security_events DEFAULT VALUES'));
-        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_material_categories DEFAULT VALUES'));
-        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_material_revisions DEFAULT VALUES'));
-        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.organization_suppliers DEFAULT VALUES'));
+        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.organization_permission_grant_events DEFAULT VALUES'));
+        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_materials_commercial_audit_events DEFAULT VALUES'));
+        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.supplier_offer_events DEFAULT VALUES'));
+        $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_material_financial_restatements DEFAULT VALUES'));
         $this->assertRuntimeDenied(fn () => $connection->statement('INSERT INTO public.raw_materials_currency_codes DEFAULT VALUES'));
         $this->assertRuntimeDenied(fn () => $connection->statement('TRUNCATE public.role_assignments'));
         $this->assertRuntimeDenied(fn () => $connection->statement('ALTER TABLE public.role_assignments DISABLE TRIGGER ALL'));
@@ -126,7 +129,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $roles->bootstrapInitial($administrator);
         app(MembershipService::class)->assign($administrator, $location);
 
-        app(AuthorizationMutationContext::class)->run('account.consume', null, function () use ($administrator, $organization): void {
+        app(AuthorizationMutationContext::class)->run(AuthorizationMutationScope::accountConsume(), null, function () use ($administrator, $organization): void {
             $administrator->forceFill(['email_verified_at' => now()])->save();
             $organization->forceFill(['authorization_initialized' => true])->save();
         });
@@ -142,7 +145,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
             ],
         );
         $this->assertNotNull($secondAdministrator);
-        app(AuthorizationMutationContext::class)->run('account.consume', null, function () use ($secondAdministrator): void {
+        app(AuthorizationMutationContext::class)->run(AuthorizationMutationScope::accountConsume(), null, function () use ($secondAdministrator): void {
             $secondAdministrator->forceFill([
                 'email_verified_at' => now(),
                 'password' => Hash::make(self::password()),
@@ -185,6 +188,24 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $this->assertSame(1, $connection->table('organization_permission_grants')
             ->where('bootstrap_operation_id', $upgrade['operation_id'])
             ->where('permission', RawMaterialPermission::SupplierManage->value)->count());
+        $roleAssignmentId = $connection->table('role_assignments')
+            ->where('user_id', $secondAdministrator->id)
+            ->where('role', BusinessRole::Administrator->value)
+            ->value('id');
+        $securityEventId = $connection->table('security_events')->value('id');
+        $permissionGrantId = $bootstrap[0]['id'];
+        $this->assertRuntimeDenied(fn () => $connection->table('role_assignments')
+            ->where('id', $roleAssignmentId)->update(['revoked_at' => now()]));
+        $this->assertRuntimeDenied(fn () => $connection->table('role_assignments')
+            ->where('id', $roleAssignmentId)->delete());
+        $this->assertRuntimeDenied(fn () => $connection->table('security_events')
+            ->where('id', $securityEventId)->update(['outcome' => 'rejected']));
+        $this->assertRuntimeDenied(fn () => $connection->table('security_events')
+            ->where('id', $securityEventId)->delete());
+        $this->assertRuntimeDenied(fn () => $connection->table('organization_permission_grants')
+            ->where('id', $permissionGrantId)->update(['valid_until' => now()]));
+        $this->assertRuntimeDenied(fn () => $connection->table('organization_permission_grants')
+            ->where('id', $permissionGrantId)->delete());
 
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
         app(ModuleConfigurationService::class)->configure($administrator, $location, [
@@ -240,15 +261,42 @@ class AuthorizationMutationBoundaryTest extends TestCase
 
     private function assertRuntimeDenied(callable $operation): void
     {
+        $connection = DB::connection($this->connectionName);
+        $before = $this->protectedAuthorizationTableCounts($connection);
+
         try {
-            DB::connection($this->connectionName)->transaction($operation);
+            $connection->transaction($operation);
         } catch (QueryException $exception) {
-            $this->assertSame('42501', $exception->errorInfo[0] ?? null);
+            $this->assertContains($exception->errorInfo[0] ?? null, ['42501', '22023', '23514']);
+            $this->assertSame($before, $this->protectedAuthorizationTableCounts($connection));
 
             return;
         }
 
         $this->fail('PostgreSQL accepted an unsigned or out-of-scope runtime mutation.');
+    }
+
+    private function protectedAuthorizationTableCounts(Connection $connection): array
+    {
+        $tables = [
+            'role_assignments',
+            'location_memberships',
+            'permission_grants',
+            'organization_permission_grants',
+            'organization_permission_grant_events',
+            'raw_material_permission_grant_operation_uses',
+            'raw_material_permission_upgrade_operations',
+            'raw_material_audit_events',
+            'raw_materials_commercial_audit_events',
+            'supplier_offer_events',
+            'raw_material_financial_restatements',
+            'security_events',
+        ];
+
+        return array_combine($tables, array_map(
+            fn (string $table): int => (int) $connection->scalar("SELECT count(*) FROM public.{$table}"),
+            $tables,
+        ));
     }
 
     private static function password(): string

@@ -18,7 +18,7 @@ class SecurityMutation
 
     public function record(?User $actor, User $target, ?Location $location, string $action, string $outcome, ?string $subject = null): void
     {
-        $this->contexts->run('security.event', $actor?->id, function () use ($actor, $target, $location, $action, $outcome, $subject): void {
+        $this->contexts->run(AuthorizationMutationScope::securityEvent(), $actor?->id, function () use ($actor, $target, $location, $action, $outcome, $subject): void {
             DB::table('security_events')->insert([
                 'id' => Str::uuid()->toString(), 'organization_id' => $target->organization_id,
                 'actor_id' => $actor?->id, 'target_id' => $target->id, 'location_id' => $location?->id,
@@ -39,7 +39,7 @@ class SecurityMutation
         string $eventKind,
         string $detailCode,
     ): void {
-        $this->contexts->run('module.audit', $actor->id, function () use (
+        $this->contexts->run(AuthorizationMutationScope::moduleAudit(), $actor->id, function () use (
             $actor, $location, $outcome, $operationId, $eventKind, $module, $previous, $requested, $effective, $detailCode,
         ): void {
             DB::table('security_events')->insert([
@@ -64,7 +64,7 @@ class SecurityMutation
     public function run(User $actor, User $target, ?Location $location, string $action, Closure $operation): mixed
     {
         try {
-            return $this->contexts->run($action, $actor->id, function () use ($actor, $target, $location, $action, $operation): mixed {
+            return $this->contexts->run(AuthorizationMutationScope::forSecurityAction($action), $actor->id, function () use ($actor, $target, $location, $action, $operation): mixed {
                 Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
                 $result = $operation();
                 $this->record($actor, $target, $location, $action, 'accepted', $result instanceof Model ? $result->getKey() : null);

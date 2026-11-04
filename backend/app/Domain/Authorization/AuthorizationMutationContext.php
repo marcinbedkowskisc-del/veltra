@@ -9,18 +9,21 @@ use LogicException;
 
 final class AuthorizationMutationContext
 {
-    public function run(string $scope, ?string $actorId, Closure $operation): mixed
+    public function run(AuthorizationMutationScope $scope, ?string $actorId, Closure $operation): mixed
     {
-        if (! preg_match('/\A[a-z][A-Za-z0-9._-]{0,80}\z/', $scope)) {
-            throw new \InvalidArgumentException('Invalid authorization mutation scope.');
+        $configuredKey = config('authorization.database_mutation_signing_key');
+        if (! is_string($configuredKey) || ! preg_match('/\A[a-f0-9]{64}\z/', $configuredKey)) {
+            throw new LogicException('A dedicated database mutation signing key is required.');
         }
 
-        $applicationKey = config('app.key');
-        if (! is_string($applicationKey) || $applicationKey === '') {
-            throw new LogicException('Application key is required for protected database mutations.');
-        }
+        $signingKey = hash_hmac(
+            'sha256',
+            'veltra-db-authorization-ticket-v2',
+            hex2bin($configuredKey),
+            true,
+        );
 
-        return DB::transaction(function () use ($scope, $actorId, $operation, $applicationKey): mixed {
+        return DB::transaction(function () use ($scope, $actorId, $operation, $signingKey): mixed {
             $connection = DB::connection();
             $previous = $connection->selectOne(<<<'SQL'
                 SELECT current_setting('veltra.authorization_payload', true) AS payload,
@@ -30,10 +33,9 @@ final class AuthorizationMutationContext
                 'actor_id' => $actorId,
                 'expires_at' => now()->addSeconds(30)->timestamp,
                 'nonce' => (string) Str::uuid(),
-                'scope' => $scope,
+                'scope' => $scope->value(),
                 'transaction_id' => (string) $connection->scalar('SELECT txid_current()'),
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
-            $signingKey = hash_hmac('sha256', 'veltra-db-authorization-ticket-v1', $applicationKey, true);
             $signature = hash_hmac('sha256', $payload, $signingKey);
 
             $connection->select(

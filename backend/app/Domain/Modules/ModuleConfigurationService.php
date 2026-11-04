@@ -3,6 +3,7 @@
 namespace App\Domain\Modules;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
@@ -80,7 +81,7 @@ final class ModuleConfigurationService
         $failureCode = 'operation_rejected';
 
         try {
-            return $this->contexts->run('module.configure', $actor->id, function () use (
+            return $this->contexts->run(AuthorizationMutationScope::moduleConfigure(), $actor->id, function () use (
                 $actor,
                 $context,
                 $enabled,

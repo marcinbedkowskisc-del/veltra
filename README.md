@@ -97,11 +97,61 @@ wylacznie biezacej bazy na te role. Nie uruchamiaj go na wspoldzielonej bazie
 ani bez uprzedniej weryfikacji konfiguracji. Dopiero po provisioningu mozna
 uruchomic jawna migracje. Sama edycja `.env` nie zmienia ról ani hasel w bazie.
 
-Przed migracja 022 na istniejacej bazie przejrzyj historyczne dane autoryzacyjne
-i audytowe. Jesli ktorakolwiek chroniona tabela zawiera dane, migracja przerwie
-sie atomowo, dopoki administrator nie potwierdzi recznego przegladu. Ustaw
-zmienna tylko dla jednorazowego uruchomienia `migrate` i podstaw rzeczywista
-nazwe bazy:
+Przed migracjami 022–023 na istniejacej bazie przeprowadz udokumentowany
+przeglad historii autoryzacyjnej i audytowej. Samo ustawienie zmiennej
+atestacyjnej nie dowodzi poprawnosci danych i nie zastepuje przegladu. Zapisz
+poza migrowana baza: zakres i czas migawki, wyniki zapytan kontrolnych,
+wykryte rozbieznosci, decyzje o ich rozstrzygnieciu oraz zatwierdzenie drugiej
+osoby. Migracja odrzuca niespojnosci wykrywane przez constrainty i walidatory;
+nie potrafi kryptograficznie potwierdzic prawdziwosci dawnego audytu.
+
+Wymagany jest rowniez niezalezny 32-bajtowy klucz podpisujacy mutacje DB,
+zapisany jako 64 znaki hex w `APP_DB_MUTATION_SIGNING_KEY`. Wygeneruj go
+osobno od `APP_KEY`, przechowuj w pliku `.env` z prawami `0600` i nie umieszczaj
+go w logach ani repozytorium:
+
+```bash
+openssl rand -hex 32
+```
+
+Przed pierwsza migracja chroniona zmienna musi byc ustawiona we wszystkich
+procesach backendu/workerow i w procesie migracji. Rotacja wymaga okna serwisowego:
+wstrzymaj zapisy backendu i kolejki, wygeneruj nowy klucz i ustaw go w `.env`.
+Nastepnie uruchom polecenie rola migracyjna, z nowym kluczem juz dostepnym
+wszystkim procesom:
+
+```bash
+docker compose run --rm --entrypoint php migrate artisan veltra:rotate-database-mutation-signing-key
+```
+
+Wdroż nowa konfiguracje do wszystkich procesow, zweryfikuj chronione zapisy
+i dopiero potem wznow ruch. Nie zmieniaj samego `APP_KEY` jako sposobu rotacji
+klucza DB. W razie niepowodzenia nie mieszaj starych i nowych sekretow;
+przywroc zgodna para aplikacja–DB i ponow polecenie migracyjne z tym samym
+kluczem. Polecenie nie wypisuje sekretu i odmawia pracy bez roli migracyjnej.
+
+## Macierz uprawnień PostgreSQL runtime
+
+Rola runtime nie jest właścicielem bazy, schematu ani obiektów i nie ma
+`SUPERUSER`, `CREATEDB`, `CREATEROLE`, członkostwa w innych rolach ani prawa
+`CREATE` w schemacie `public`. Nie ma dostępu do schematu `veltra_private`.
+`TRUNCATE` jest odebrane na wszystkich tabelach.
+
+| Tabele | Uprawnienia runtime | Ochrona i granica |
+|---|---|---|
+| `organizations`, `locations`, `location_management_assignments`, `location_supply_relationships`, `users`, `location_memberships`, `role_assignments`, `security_events`, `membership_requests`, `permission_grants`, `report_shares`, `activation_tokens`, `password_reset_tokens`, `account_email_deliveries`, `location_module_states`, `raw_material_revision_approval_events`, `raw_material_audit_events`, `supplier_product_revisions`, `supplier_offer_events`, `supplier_offer_fx_normalization_events`, `organization_exchange_rate_events`, `raw_material_reference_price_events`, `raw_material_financial_restatements`, `raw_materials_commercial_idempotency`, `raw_materials_commercial_audit_events`, `organization_permission_grants`, `organization_permission_grant_events`, `raw_material_permission_upgrade_operations` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | Trigger PostgreSQL wymaga krótkotrwałego podpisu ograniczonego do zamkniętego katalogu scope’ów. Nie zastępuje on autoryzacji biznesowej Laravel. |
+| `organization_suppliers`, `supplier_products`, `supplier_offers`, `raw_material_categories`, `raw_material_code_counters`, `raw_materials`, `raw_material_revisions`, `raw_material_revision_units`, `raw_material_aliases` | `SELECT`, `INSERT`, `UPDATE`, `DELETE` | Bez triggera podpisu. Autoryzację zapewniają serwisy domenowe Laravel, a baza ogranicza spójność i integralność danych. Posiadacz samych poświadczeń runtime może bezpośrednio modyfikować te tabele; jest to jawne ryzyko rezydualne, nie gwarancja ochrony przed SQL injection. |
+| `raw_material_permission_grant_operation_uses`, `raw_materials_currency_codes` | `SELECT` | Zapis, aktualizacja, usuwanie i `TRUNCATE` niedozwolone. |
+| `migrations` | Brak | Wyłącznie rola migracyjna zarządza wersją schematu. |
+
+Rola runtime otrzymuje `USAGE`, `SELECT` i `UPDATE` wyłącznie na sekwencjach
+dozwolonych przez listę runtime, bez sekwencji `migrations`. Provisioning nie
+przywraca runtime prawa właściciela ani `TRUNCATE`.
+
+Jesli ktorakolwiek chroniona tabela zawiera dane, migracja przerwie sie
+atomowo bez recznego potwierdzenia. Po ukonczeniu przegladu ustaw zmienna
+wylacznie dla jednorazowego uruchomienia `migrate` i podstaw rzeczywista nazwe
+bazy:
 
 ```bash
 APP_DB_AUTHORIZATION_HISTORY_ATTESTATION="REVIEWED:veltra:2026_11_05_000022" \
@@ -109,12 +159,12 @@ APP_DB_AUTHORIZATION_HISTORY_ATTESTATION="REVIEWED:veltra:2026_11_05_000022" \
 ```
 
 Wartosc musi odpowiadac dokladnie nazwie bazy i migracji. Migracja zapisuje
-potwierdzenie, role wykonujaca migracje oraz liste tabel zawierajacych dane
-przed zmiana w niedostepnym dla runtime schemacie `veltra_private`. Po migracji
-usun zmienna z powloki/srodowiska. Nie ustawiaj jej bez recznego przegladu.
-Pusta nowa instalacja nie wymaga potwierdzenia; rejestruje brak danych
-historycznych. Ponowne uruchomienie skryptu provisioningu nie przywraca
-runtime praw zapisu do rejestru operacji ani tabel referencyjnych.
+identyfikator potwierdzenia i liste tabel zawierajacych dane w schemacie
+`veltra_private`, ale nie traktuj tego wpisu jako dowodu prawidlowosci historii.
+Zachowaj zewnetrzny protokol przegladu i po migracji usun atestacje z powloki.
+Pusta nowa instalacja zapisuje brak danych historycznych. Migracja 023 zachowuje
+podpisane ograniczenia tylko dla krytycznych tabel RBAC/audytu; dla pozostalych
+tabel aplikacja korzysta z autoryzacji domenowej Laravel i integralnosci DB.
 
 ## Konfiguracja
 
@@ -125,6 +175,9 @@ runtime praw zapisu do rejestru operacji ani tabel referencyjnych.
   uzywaj ich jako roli migracyjnej ani administratora.
 - `APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD`: osobna rola
   nie-superuzytkownikowa uzywana tylko przez jawne migracje i testy.
+- `APP_DB_MUTATION_SIGNING_KEY`: niezalezny 32-bajtowy sekret, 64 znaki hex,
+  uzywany wylacznie do ochrony wybranych mutacji PostgreSQL przed samymi
+  poświadczeniami runtime DB. Nie chroni przed pelnym przejeciem procesu Laravel.
 - `APP_DB_AUTHORIZATION_HISTORY_ATTESTATION`: jednorazowe potwierdzenie
   recznego przegladu danych istniejacej bazy przed migracja 022; pozostaw puste
   poza kontrolowanym uruchomieniem migracji.

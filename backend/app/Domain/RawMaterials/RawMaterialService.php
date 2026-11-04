@@ -3,6 +3,7 @@
 namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
@@ -29,7 +30,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
             $parent = null;
@@ -69,7 +70,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $categoryId, $name): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $categoryId, $name): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
             $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
@@ -202,7 +203,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
             $this->requireCategory($actor, $input['category_id']);
@@ -261,7 +262,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
             $material = $this->material($actor, $materialId, true);
@@ -329,7 +330,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
             $material = $this->material($actor, $materialId, true);
@@ -356,7 +357,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
             $material = $this->material($actor, $materialId, true);
@@ -395,7 +396,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
             $material = $this->material($actor, $materialId, true);
@@ -450,7 +451,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
             $material = $this->material($actor, $materialId, true);
@@ -476,7 +477,7 @@ final class RawMaterialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
@@ -502,7 +503,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
             $material = $this->material($actor, $materialId, true);
@@ -530,7 +531,7 @@ final class RawMaterialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
 
-        return $this->contexts->run('raw-material.mutate', $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
             $material = $this->material($actor, $materialId, true);

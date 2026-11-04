@@ -3,6 +3,7 @@
 namespace App\Domain\Installation;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Models\Location;
 use App\Models\LocationManagementAssignment;
 use App\Models\LocationSupplyRelationship;
@@ -18,7 +19,7 @@ class InstallationService
 
     public function initializeOrganization(array $attributes): Organization
     {
-        return $this->contexts->run('installation.initialize', null, fn (): Organization => DB::transaction(function () use ($attributes): Organization {
+        return $this->contexts->run(AuthorizationMutationScope::installationInitialize(), null, fn (): Organization => DB::transaction(function () use ($attributes): Organization {
             // Also serializes initialization before an organization row exists.
             DB::select('SELECT pg_advisory_xact_lock(8612001)');
             if (Organization::exists()) {
@@ -31,7 +32,7 @@ class InstallationService
 
     public function createLocation(array $attributes): Location
     {
-        return $this->contexts->run('installation.location.create', null, fn (): Location => DB::transaction(function () use ($attributes): Location {
+        return $this->contexts->run(AuthorizationMutationScope::installationLocationCreate(), null, fn (): Location => DB::transaction(function () use ($attributes): Location {
             $organization = $this->lockOrganization();
             $attributes['is_active'] ??= $attributes['type'] === LocationType::CentralKitchen->value;
             if ($attributes['type'] === LocationType::Restaurant->value && $attributes['is_active']) {
@@ -45,7 +46,7 @@ class InstallationService
 
     public function updateLocation(Location $location, array $attributes): Location
     {
-        return $this->contexts->run('installation.location.update', null, fn (): Location => DB::transaction(function () use ($location, $attributes): Location {
+        return $this->contexts->run(AuthorizationMutationScope::installationLocationUpdate(), null, fn (): Location => DB::transaction(function () use ($location, $attributes): Location {
             $organization = $this->lockOrganization();
             $location = Location::findOrFail($location->id);
             $this->ensureOwned($organization, $location);
@@ -71,7 +72,7 @@ class InstallationService
 
     public function assignManagingKitchen(Location $restaurant, Location $kitchen, bool $replace = false): LocationManagementAssignment
     {
-        return $this->contexts->run('installation.management.assign', null, fn (): LocationManagementAssignment => DB::transaction(function () use ($restaurant, $kitchen, $replace): LocationManagementAssignment {
+        return $this->contexts->run(AuthorizationMutationScope::installationManagementAssign(), null, fn (): LocationManagementAssignment => DB::transaction(function () use ($restaurant, $kitchen, $replace): LocationManagementAssignment {
             $organization = $this->lockOrganization();
             $restaurant = Location::findOrFail($restaurant->id);
             $kitchen = Location::findOrFail($kitchen->id);
@@ -106,7 +107,7 @@ class InstallationService
 
     public function establishSupply(Location $restaurant, Location $kitchen): LocationSupplyRelationship
     {
-        return $this->contexts->run('installation.supply.establish', null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($restaurant, $kitchen): LocationSupplyRelationship {
+        return $this->contexts->run(AuthorizationMutationScope::installationSupplyEstablish(), null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($restaurant, $kitchen): LocationSupplyRelationship {
             $organization = $this->lockOrganization();
             $restaurant = Location::findOrFail($restaurant->id);
             $kitchen = Location::findOrFail($kitchen->id);
@@ -126,7 +127,7 @@ class InstallationService
 
     public function disableSupply(LocationSupplyRelationship $relationship): LocationSupplyRelationship
     {
-        return $this->contexts->run('installation.supply.disable', null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($relationship): LocationSupplyRelationship {
+        return $this->contexts->run(AuthorizationMutationScope::installationSupplyDisable(), null, fn (): LocationSupplyRelationship => DB::transaction(function () use ($relationship): LocationSupplyRelationship {
             $organization = $this->lockOrganization();
             $relationship = LocationSupplyRelationship::findOrFail($relationship->id);
             if ($relationship->organization_id !== $organization->id) {

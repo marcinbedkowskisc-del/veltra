@@ -118,7 +118,7 @@ class RoleAdministration
 
     public function bootstrapInitial(User $user): RoleAssignment
     {
-        return app(AuthorizationMutationContext::class)->run('administrator.bootstrap', $user->id, fn (): RoleAssignment => DB::transaction(function () use ($user): RoleAssignment {
+        return app(AuthorizationMutationContext::class)->run(AuthorizationMutationScope::administratorBootstrap(), $user->id, fn (): RoleAssignment => DB::transaction(function () use ($user): RoleAssignment {
             $organization = Organization::whereKey($user->organization_id)->lockForUpdate()->firstOrFail();
             if (! $user->is_initial_identity || ! $user->is_active || $organization->authorization_initialized
                 || RoleAssignment::where('role', BusinessRole::Administrator)->exists()) {

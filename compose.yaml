@@ -10,6 +10,7 @@ x-backend-environment: &backend-environment
   DEV_MANAGEMENT_TOKEN: ${DEV_MANAGEMENT_TOKEN:-}
   PHP_CLI_SERVER_WORKERS: "4"
   APP_KEY: ${APP_KEY:?Run the environment initialization command from README}
+  APP_DB_MUTATION_SIGNING_KEY: ${APP_DB_MUTATION_SIGNING_KEY:?Set an independent 32-byte database mutation signing key}
   APP_URL: http://localhost:${BACKEND_PORT:-8000}
   FRONTEND_URL: http://localhost:${FRONTEND_PORT:-5173}
   LOG_CHANNEL: stderr

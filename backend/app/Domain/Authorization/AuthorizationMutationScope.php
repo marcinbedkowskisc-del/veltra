@@ -164,6 +164,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.mutate');
     }
 
+    public static function rawMaterialUnblock(): self
+    {
+        return new self('raw-material.unblock');
+    }
+
     public static function rawMaterialCommercial(): self
     {
         return new self('raw-material.commercial');

@@ -313,6 +313,13 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola bezpieczeństwa');
         $this->assertSame('BLOCKED', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
         $this->rawMaterialService->unblock($this->steward, $this->location, $materialId, 'Zakończono kontrolę');
+        $unblockEvent = DB::table('raw_material_audit_events')
+            ->where('subject_id', $materialId)->where('event_code', 'UNBLOCKED')->first();
+        $this->assertNotNull($unblockEvent);
+        $this->assertSame($this->steward->id, $unblockEvent->actor_user_id);
+        $this->assertSame('ACCEPTED', $unblockEvent->outcome);
+        $this->assertNotNull($unblockEvent->transaction_id);
+        $this->assertNotSame($unblockEvent->before_hash, $unblockEvent->after_hash);
         $this->rawMaterialService->archive($this->steward, $this->location, $materialId, 'Wycofanie z katalogu');
         $this->rawMaterialService->restore($this->steward, $this->location, $materialId, 'Ponowna walidacja');
         $this->assertSame('VERIFICATION', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
@@ -326,6 +333,73 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('approvals.outcome', 'APPROVED')->count());
         $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
         $this->assertSame(7, DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count());
+    }
+
+    public function test_unblock_state_and_immutable_audit_record_roll_back_together(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Materiał do cofnięcia transakcji');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie');
+        $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola');
+        $auditCount = DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count();
+
+        try {
+            DB::transaction(function () use ($materialId): void {
+                $this->rawMaterialService->unblock(
+                    $this->steward,
+                    $this->location,
+                    $materialId,
+                    'Operacja zostanie wycofana',
+                );
+                throw new \RuntimeException('rollback marker');
+            });
+            $this->fail('Oczekiwano wycofania transakcji testowej.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('rollback marker', $exception->getMessage());
+        }
+
+        $this->assertSame('BLOCKED', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
+        $this->assertSame($auditCount, DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count());
+    }
+
+    public function test_supplier_product_and_initial_revision_roll_back_together(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Produkt do cofnięcia transakcji');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie');
+        $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+        $commercial = app(RawMaterialCommercialService::class);
+        $supplierId = $commercial->createSupplier($this->steward, $this->location, [
+            'supplier_code' => 'ROLLBACK_SUPPLIER',
+            'display_name' => 'Dostawca testowy',
+        ], 'rollback-supplier-create-0001')['data']['id'];
+
+        try {
+            DB::transaction(function () use ($commercial, $materialId, $supplierId, $materialRevisionId): void {
+                $commercial->createProduct($this->steward, $this->location, $materialId, [
+                    'supplier_id' => $supplierId,
+                    'raw_material_revision_id' => $materialRevisionId,
+                    'product_name' => 'Produkt testowy',
+                    'supplier_sku' => 'ROLLBACK-1',
+                    'purchase_unit_code' => 'PACK',
+                    'content_quantity' => '1',
+                    'content_unit_code' => 'g',
+                ], 'rollback-product-create-0001');
+                throw new \RuntimeException('rollback marker');
+            });
+            $this->fail('Oczekiwano wycofania transakcji testowej.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('rollback marker', $exception->getMessage());
+        }
+
+        $this->assertSame(0, DB::table('supplier_products')->where('organization_id', $this->steward->organization_id)
+            ->where('raw_material_id', $materialId)->count());
+        $this->assertSame(0, DB::table('supplier_product_revisions')->where('organization_id', $this->steward->organization_id)
+            ->where('raw_material_id', $materialId)->count());
+        $this->assertSame(0, DB::table('raw_materials_commercial_idempotency')
+            ->where('idempotency_key', 'rollback-product-create-0001')->count());
     }
 
     public function test_supplier_products_offer_prices_and_cost_permissions_are_isolated(): void
@@ -371,6 +445,9 @@ class RawMaterialsTest extends AuthorizationTestCase
         $productRevisionId = $productResponse->json('data.current_revision.id');
         $this->assertSame('500.00000000000000', $productResponse->json('data.current_revision.base_quantity'));
         $this->assertSame('0.001000000000', $productResponse->json('data.current_revision.to_base_factor'));
+        $this->assertSame(1, DB::table('supplier_product_revisions')->where('supplier_product_id', $productId)->count());
+        DB::statement('SET CONSTRAINTS supplier_products_initial_revision IMMEDIATE');
+        DB::statement('SET CONSTRAINTS supplier_products_initial_revision DEFERRED');
 
         $offerResponse = $this->postJson('/api/v1/raw-materials/supplier-products/'.$productId.'/offers', [
             'offer_reference' => 'Q-2026-01',
@@ -401,6 +478,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'reason_code' => 'OFFER_WITHDRAWN',
         ], ['Idempotency-Key' => 'price-withdrawal-0001'])->assertCreated()
             ->assertJsonPath('data.event_type', 'WITHDRAWN');
+        $this->assertSame('ACTIVE', DB::table('supplier_offers')->where('id', $offerId)->value('lifecycle_state'));
         $replacement = $this->postJson('/api/v1/raw-materials/supplier-offers/'.$offerId.'/price-events', [
             'event_type' => 'PRICE_SET',
             'valid_from' => now()->toDateString(),

@@ -477,26 +477,36 @@ final class RawMaterialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
-            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
-            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
-            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
-            $material = $this->material($actor, $materialId, true);
-            if ($material->lifecycle_state !== 'BLOCKED' || $material->pending_revision_id !== null) {
-                throw new RawMaterialException('RAW_MATERIAL_UNBLOCK_INVALID', __('messages.raw_material_unblock_invalid'));
-            }
-            $previous = $this->stateHash($material);
-            DB::table('raw_materials')->where('id', $materialId)->update([
-                'lifecycle_state' => 'ACTIVE',
-                'blocked_at' => null,
-                'blocked_by' => null,
-                'block_reason' => null,
-                'updated_at' => now(),
-            ]);
-            $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'UNBLOCKED', $previous, [], $reason);
+        return $this->contexts->runForSubject(
+            AuthorizationMutationScope::rawMaterialUnblock(),
+            $actor->id,
+            $materialId,
+            fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+                $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
+                $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
+                $material = $this->material($actor, $materialId, true);
+                if ($material->lifecycle_state !== 'BLOCKED' || $material->pending_revision_id !== null) {
+                    throw new RawMaterialException('RAW_MATERIAL_UNBLOCK_INVALID', __('messages.raw_material_unblock_invalid'));
+                }
+                $previous = $this->stateHash($material);
+                $unblocked = clone $material;
+                $unblocked->lifecycle_state = 'ACTIVE';
+                $unblocked->blocked_at = null;
+                $unblocked->blocked_by = null;
+                $unblocked->block_reason = null;
+                $afterHash = $this->stateHash($unblocked);
+                $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'UNBLOCKED', $previous, [], $reason, null, $afterHash);
+                DB::table('raw_materials')->where('id', $materialId)->update([
+                    'lifecycle_state' => 'ACTIVE',
+                    'blocked_at' => null,
+                    'blocked_by' => null,
+                    'block_reason' => null,
+                    'updated_at' => now(),
+                ]);
 
-            return $this->presentCurrent($actor, $materialId);
-        }));
+                return $this->presentCurrent($actor, $materialId);
+            }));
     }
 
     public function archive(User $actor, Location $context, string $materialId, string $reason): array
@@ -818,11 +828,12 @@ final class RawMaterialService
         array $metadata,
         ?string $reason = null,
         ?string $operationId = null,
+        ?string $afterHashOverride = null,
     ): void {
         $metadata += $reason === null ? [] : ['reason' => $reason];
-        $afterHash = $subjectType === 'RAW_MATERIAL' && $subjectId !== null
+        $afterHash = $afterHashOverride ?? ($subjectType === 'RAW_MATERIAL' && $subjectId !== null
             ? $this->stateHash($this->material($actor, $subjectId))
-            : hash('sha256', json_encode($metadata, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+            : hash('sha256', json_encode($metadata, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)));
         DB::table('raw_material_audit_events')->insert([
             'id' => Str::uuid()->toString(),
             'organization_id' => $actor->organization_id,

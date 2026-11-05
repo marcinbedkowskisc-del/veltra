@@ -87,6 +87,13 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::post('/exchange-rates/nbp-sync', [RawMaterialController::class, 'syncExchangeRate']);
     Route::post('/exchange-rates/{rate}/overrides', [RawMaterialController::class, 'overrideExchangeRate'])
         ->whereUuid('rate');
+    Route::get('/allergen-catalog', [RawMaterialController::class, 'allergenCatalog']);
+    Route::put('/{material}/draft/allergen-declaration', [RawMaterialController::class, 'updateDraftAllergenDeclaration'])
+        ->whereUuid('material');
+    Route::put('/{material}/draft/storage-variants', [RawMaterialController::class, 'updateDraftStorageVariants'])
+        ->whereUuid('material');
+    Route::get('/{material}/revisions/{revision}/stage2d', [RawMaterialController::class, 'revisionStage2d'])
+        ->whereUuid('material')->whereUuid('revision');
     Route::get('/{material}/reference-prices', [RawMaterialController::class, 'referencePrices'])
         ->whereUuid('material');
     Route::post('/{material}/reference-prices', [RawMaterialController::class, 'storeReferencePrice'])

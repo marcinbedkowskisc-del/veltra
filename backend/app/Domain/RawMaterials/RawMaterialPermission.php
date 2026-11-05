@@ -23,6 +23,8 @@ enum RawMaterialPermission: string
     case ReferencePriceManage = 'RAW_MATERIALS_REFERENCE_PRICE_MANAGE';
     case ExchangeRateView = 'RAW_MATERIALS_EXCHANGE_RATE_VIEW';
     case ExchangeRateManage = 'RAW_MATERIALS_EXCHANGE_RATE_MANAGE';
+    case AllergenManage = 'RAW_MATERIALS_ALLERGEN_MANAGE';
+    case StorageManage = 'RAW_MATERIALS_STORAGE_MANAGE';
     case AuditView = 'RAW_MATERIALS_AUDIT_VIEW';
     case PermissionDelegate = 'RAW_MATERIALS_PERMISSION_DELEGATE';
 

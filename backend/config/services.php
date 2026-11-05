@@ -35,4 +35,11 @@ return [
         ],
     ],
 
+    'clamav' => [
+        'host' => env('CLAMAV_HOST'),
+        'port' => (int) env('CLAMAV_PORT', 3310),
+        'connect_timeout' => (float) env('CLAMAV_CONNECT_TIMEOUT', 2),
+        'timeout' => (float) env('CLAMAV_TIMEOUT', 30),
+    ],
+
 ];

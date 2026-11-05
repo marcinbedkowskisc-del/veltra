@@ -38,6 +38,16 @@ return [
             'report' => false,
         ],
 
+        'raw_material_documents' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/raw-material-documents'),
+            'serve' => false,
+            'visibility' => 'private',
+            'directory_visibility' => 'private',
+            'throw' => true,
+            'report' => true,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

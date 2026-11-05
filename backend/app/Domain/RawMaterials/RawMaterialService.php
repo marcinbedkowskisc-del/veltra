@@ -7,6 +7,7 @@ use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -260,11 +261,180 @@ final class RawMaterialService
 
     public function revise(User $actor, Location $context, string $materialId, array $input): array
     {
-        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
+        return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit);
+    }
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input): array {
+    public function reviseAllergenDeclaration(User $actor, Location $context, string $materialId, array $input): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AllergenManage);
+        $this->validateAllergenDeclaration($input);
+        $isUnknown = $input['status'] === 'UNKNOWN';
+
+        return $this->reviseWithPermission(
+            $actor,
+            $context,
+            $materialId,
+            [
+                'allergen_declaration' => $isUnknown ? null : $input,
+                'allergen_state' => $isUnknown ? 'UNKNOWN' : 'DECLARED',
+            ],
+            RawMaterialPermission::AllergenManage,
+            'ALLERGEN_DECLARATION_CHANGED',
+        );
+    }
+
+    public function reviseStorageVariants(User $actor, Location $context, string $materialId, array $variants): array
+    {
+        return $this->reviseWithPermission(
+            $actor,
+            $context,
+            $materialId,
+            ['storage_variants' => $variants],
+            RawMaterialPermission::StorageManage,
+            'STORAGE_VARIANTS_CHANGED',
+        );
+    }
+
+    public function allergenCatalog(User $actor, Location $context): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+
+        return DB::table('raw_material_allergen_catalog_versions')
+            ->where('status', 'PUBLISHED')
+            ->orderByDesc('version_number')
+            ->get(['id', 'version_number', 'published_at'])
+            ->map(fn (object $version): array => [
+                'id' => $version->id,
+                'version_number' => (int) $version->version_number,
+                'published_at' => $version->published_at,
+                'definitions' => DB::table('raw_material_allergen_definitions')
+                    ->where('catalog_version_id', $version->id)
+                    ->where('is_active', true)
+                    ->orderBy('display_order')
+                    ->get(['allergen_code', 'name_pl', 'display_order'])
+                    ->map(fn (object $definition): array => [
+                        'allergen_code' => $definition->allergen_code,
+                        'name_pl' => $definition->name_pl,
+                        'display_order' => (int) $definition->display_order,
+                    ])->all(),
+            ])->all();
+    }
+
+    public function revisionStage2d(User $actor, Location $context, string $materialId, string $revisionId): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AuditView);
+        $material = DB::table('raw_materials')
+            ->where('organization_id', $actor->organization_id)
+            ->where('id', $materialId)
+            ->first(['id']);
+        $revision = DB::table('raw_material_revisions')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $materialId)
+            ->where('id', $revisionId)
+            ->first([
+                'id',
+                'revision_no',
+                'allergen_state',
+                'content_hash_version',
+                'content_hash',
+            ]);
+        if (! $material || ! $revision) {
+            throw new RawMaterialException('RAW_MATERIAL_REVISION_NOT_FOUND', __('messages.resource_not_found'), 404);
+        }
+
+        $attestation = DB::table('raw_material_revision_allergen_attestations as attestations')
+            ->join('raw_material_allergen_catalog_versions as versions', 'versions.id', '=', 'attestations.catalog_version_id')
+            ->where('attestations.revision_id', $revisionId)
+            ->select([
+                'attestations.attestation_status',
+                'attestations.catalog_version_id',
+                'attestations.attested_by',
+                'attestations.attested_at',
+                'versions.version_number',
+            ])->first();
+        $items = DB::table('raw_material_revision_allergen_declarations as declarations')
+            ->join('raw_material_allergen_definitions as definitions', function ($join): void {
+                $join->on('definitions.catalog_version_id', '=', 'declarations.catalog_version_id')
+                    ->on('definitions.allergen_code', '=', 'declarations.allergen_code');
+            })
+            ->where('declarations.revision_id', $revisionId)
+            ->orderBy('declarations.allergen_code')
+            ->get([
+                'declarations.allergen_code',
+                'definitions.name_pl',
+                'declarations.exposure_kind',
+            ])->map(fn (object $item): array => [
+                'allergen_code' => $item->allergen_code,
+                'name_pl' => $item->name_pl,
+                'exposure_kind' => $item->exposure_kind,
+            ])->all();
+
+        return [
+            'revision_id' => $revision->id,
+            'revision_no' => (int) $revision->revision_no,
+            'content_hash_version' => (int) $revision->content_hash_version,
+            'content_hash' => $revision->content_hash,
+            'allergen_declaration' => $attestation === null
+                ? [
+                    'status' => $revision->allergen_state === 'UNKNOWN' ? 'UNKNOWN' : 'LEGACY_DECLARED',
+                    'catalog_version_id' => null,
+                    'catalog_version_number' => null,
+                    'attested_by' => null,
+                    'attested_at' => null,
+                    'items' => [],
+                ]
+                : [
+                    'status' => $attestation->attestation_status,
+                    'catalog_version_id' => $attestation->catalog_version_id,
+                    'catalog_version_number' => (int) $attestation->version_number,
+                    'attested_by' => $attestation->attested_by,
+                    'attested_at' => $attestation->attested_at,
+                    'items' => $items,
+                ],
+            'storage_variants' => DB::table('raw_material_revision_storage_variants')
+                ->where('organization_id', $actor->organization_id)
+                ->where('revision_id', $revisionId)
+                ->orderBy('variant_code')
+                ->get([
+                    'variant_code',
+                    'name_pl',
+                    'storage_type',
+                    'temperature_min_c',
+                    'temperature_max_c',
+                    'humidity_min_percent',
+                    'humidity_max_percent',
+                    'conditions',
+                    'is_default',
+                ])
+                ->map(fn (object $variant): array => [
+                    'variant_code' => $variant->variant_code,
+                    'name_pl' => $variant->name_pl,
+                    'storage_type' => $variant->storage_type,
+                    'temperature_min_c' => (string) $variant->temperature_min_c,
+                    'temperature_max_c' => (string) $variant->temperature_max_c,
+                    'humidity_min_percent' => $variant->humidity_min_percent === null
+                        ? null : (string) $variant->humidity_min_percent,
+                    'humidity_max_percent' => $variant->humidity_max_percent === null
+                        ? null : (string) $variant->humidity_max_percent,
+                    'conditions' => $variant->conditions,
+                    'is_default' => $this->canonicalBoolean($variant->is_default),
+                ])->all(),
+        ];
+    }
+
+    private function reviseWithPermission(
+        User $actor,
+        Location $context,
+        string $materialId,
+        array $input,
+        RawMaterialPermission $permission,
+        ?string $changeType = null,
+    ): array {
+        $this->authorization->assertAllowed($actor, $context, $permission);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input, $permission, $changeType): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
-            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
+            $this->authorization->assertAllowed($actor, $context, $permission);
             $material = $this->material($actor, $materialId, true);
             if (! in_array($material->lifecycle_state, ['DRAFT', 'ACTIVE'], true)
                 || $material->pending_revision_id !== null
@@ -292,6 +462,15 @@ final class RawMaterialService
                     __('messages.raw_material_revision_not_editable'),
                 );
             }
+            if ($permission !== RawMaterialPermission::Edit) {
+                $input = array_merge($this->revisionInputFor($baseRevision), $input);
+            }
+            if (! array_key_exists('allergen_declaration', $input)) {
+                $input['allergen_declaration'] = $this->allergenDeclarationForRevision($baseRevision->id);
+            }
+            if (! array_key_exists('storage_variants', $input)) {
+                $input['storage_variants'] = $this->storageVariantsForRevision($baseRevision->id);
+            }
             $this->requireCategory($actor, $input['category_id']);
             $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
             $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
@@ -313,17 +492,104 @@ final class RawMaterialService
                 $aliases,
                 $criticalChange,
                 $input['change_reason'] ?? null,
-                $baseRevision->allergen_state,
+                $input['allergen_state'] ?? $baseRevision->allergen_state,
             );
-            $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'REVISION_CREATED', null, [
+            $metadata = [
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
                 'previous_revision_id' => $baseRevisionId,
                 'critical_change' => $criticalChange,
-            ]);
+            ];
+            if ($changeType !== null) {
+                $metadata['change_type'] = $changeType;
+            }
+            $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'REVISION_CREATED', null, $metadata);
 
             return $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
         }));
+    }
+
+    private function revisionInputFor(object $revision): array
+    {
+        return [
+            'category_id' => $revision->category_id,
+            'name' => $revision->name,
+            'description' => $revision->description,
+            'base_unit_code' => $revision->base_unit_code,
+            'conversions' => DB::table('raw_material_revision_units')
+                ->where('revision_id', $revision->id)
+                ->where('unit_code', '<>', $revision->base_unit_code)
+                ->orderBy('unit_code')
+                ->get(['unit_code', 'to_base_factor', 'basis'])
+                ->map(fn (object $unit): array => [
+                    'unit_code' => $unit->unit_code,
+                    'to_base_factor' => (string) $unit->to_base_factor,
+                    'basis' => $unit->basis,
+                ])->all(),
+            'aliases' => DB::table('raw_material_aliases')
+                ->where('revision_id', $revision->id)
+                ->where('normalized_alias', '<>', self::normalizeTerm($revision->name))
+                ->orderBy('normalized_alias')
+                ->pluck('alias')
+                ->all(),
+            'allergen_declaration' => $this->allergenDeclarationForRevision($revision->id),
+            'storage_variants' => $this->storageVariantsForRevision($revision->id),
+        ];
+    }
+
+    private function validateAllergenDeclaration(array $input): void
+    {
+        $status = $input['status'] ?? null;
+        $items = $input['items'] ?? [];
+        if (! in_array($status, ['UNKNOWN', 'DECLARED', 'NO_KNOWN_ALLERGENS'], true)
+            || ! is_array($items)
+            || ($status === 'UNKNOWN' && (($input['catalog_version_id'] ?? null) !== null || $items !== []))
+            || ($status === 'DECLARED' && $items === [])
+            || ($status === 'NO_KNOWN_ALLERGENS' && $items !== [])) {
+            throw ValidationException::withMessages([
+                'status' => [__('messages.raw_material_allergen_declaration_invalid')],
+            ]);
+        }
+
+        if ($input['status'] === 'UNKNOWN') {
+            return;
+        }
+
+        if (! isset($input['catalog_version_id'])) {
+            throw ValidationException::withMessages([
+                'catalog_version_id' => [__('messages.raw_material_allergen_catalog_unavailable')],
+            ]);
+        }
+
+        $versionExists = DB::table('raw_material_allergen_catalog_versions')
+            ->where('id', $input['catalog_version_id'])
+            ->where('status', 'PUBLISHED')
+            ->exists();
+        if (! $versionExists) {
+            throw new RawMaterialException(
+                'RAW_MATERIAL_ALLERGEN_CATALOG_UNAVAILABLE',
+                __('messages.raw_material_allergen_catalog_unavailable'),
+                422,
+            );
+        }
+
+        $codes = array_column($items, 'allergen_code');
+        if (count($codes) !== count(array_unique($codes))) {
+            throw ValidationException::withMessages([
+                'items' => [__('messages.raw_material_allergen_declaration_invalid')],
+            ]);
+        }
+        if ($codes !== [] && DB::table('raw_material_allergen_definitions')
+            ->where('catalog_version_id', $input['catalog_version_id'])
+            ->where('is_active', true)
+            ->whereIn('allergen_code', $codes)
+            ->count() !== count($codes)) {
+            throw new RawMaterialException(
+                'RAW_MATERIAL_ALLERGEN_DEFINITION_UNAVAILABLE',
+                __('messages.raw_material_allergen_definition_unavailable'),
+                422,
+            );
+        }
     }
 
     public function submit(User $actor, Location $context, string $materialId): array
@@ -577,6 +843,8 @@ final class RawMaterialService
                     'alias' => $alias->alias,
                     'normalized_alias' => $alias->normalized_alias,
                 ])->all();
+            $input['allergen_declaration'] = $this->allergenDeclarationForRevision($approved->id);
+            $input['storage_variants'] = $this->storageVariantsForRevision($approved->id);
             $revision = $this->insertRevision(
                 $actor,
                 $materialId,
@@ -619,15 +887,27 @@ final class RawMaterialService
         ?string $reason,
         string $allergenState = 'UNKNOWN',
     ): array {
+        $stage2d = $this->prepareStage2dSnapshot(
+            $input['allergen_declaration'] ?? null,
+            $input['storage_variants'] ?? [],
+            $actor,
+            $allergenState,
+        );
         $payload = [
             'category_id' => $input['category_id'],
             'name' => trim($input['name']),
             'description' => $input['description'] ?? null,
             'base_unit_code' => $unitData['base_unit_code'],
             'base_unit_dimension' => $unitData['base_unit_dimension'],
-            'allergen_state' => $allergenState,
+            'allergen_state' => $stage2d['attestation'] === null ? $allergenState : 'DECLARED',
         ];
-        $hash = $this->hashPayload($payload, $unitData['units'], $aliases);
+        $hash = $this->hashPayloadV2(
+            $payload,
+            $unitData['units'],
+            $aliases,
+            $stage2d['allergen_declaration'],
+            $stage2d['storage_variants'],
+        );
         $revision = [
             'id' => $revisionId,
             'organization_id' => $actor->organization_id,
@@ -638,6 +918,7 @@ final class RawMaterialService
             'change_reason' => $reason,
             'created_by' => $actor->id,
             'created_at' => now(),
+            'content_hash_version' => 2,
             'content_hash' => $hash,
         ];
         DB::table('raw_material_revisions')->insert($revision);
@@ -658,6 +939,29 @@ final class RawMaterialService
                 'revision_id' => $revisionId,
                 'alias' => $alias['alias'],
                 'normalized_alias' => $alias['normalized_alias'],
+            ]);
+        }
+        if ($stage2d['attestation'] !== null) {
+            DB::table('raw_material_revision_allergen_attestations')->insert([
+                'revision_id' => $revisionId,
+                'organization_id' => $actor->organization_id,
+                ...$stage2d['attestation'],
+            ]);
+            foreach ($stage2d['declarations'] as $declaration) {
+                DB::table('raw_material_revision_allergen_declarations')->insert([
+                    'revision_id' => $revisionId,
+                    'organization_id' => $actor->organization_id,
+                    'catalog_version_id' => $stage2d['attestation']['catalog_version_id'],
+                    ...$declaration,
+                ]);
+            }
+        }
+        foreach ($stage2d['storage_rows'] as $storageVariant) {
+            DB::table('raw_material_revision_storage_variants')->insert([
+                'id' => Str::uuid()->toString(),
+                'revision_id' => $revisionId,
+                'organization_id' => $actor->organization_id,
+                ...$storageVariant,
             ]);
         }
 
@@ -688,7 +992,48 @@ final class RawMaterialService
             'allergen_state' => $revision->allergen_state,
         ];
 
-        return $this->hashPayload($payload, $units, $aliases);
+        if ((int) $revision->content_hash_version === 1) {
+            return $this->hashPayload($payload, $units, $aliases);
+        }
+
+        $attestation = DB::table('raw_material_revision_allergen_attestations as attestations')
+            ->join('raw_material_allergen_catalog_versions as versions', 'versions.id', '=', 'attestations.catalog_version_id')
+            ->where('attestations.revision_id', $revision->id)
+            ->select([
+                'attestations.attestation_status',
+                'attestations.catalog_version_id',
+                'attestations.attested_by',
+                'attestations.attested_at',
+                'versions.version_number',
+            ])->first();
+        $declarations = DB::table('raw_material_revision_allergen_declarations')
+            ->where('revision_id', $revision->id)
+            ->orderBy('allergen_code')
+            ->get()->map(fn (object $declaration): array => [
+                'allergen_code' => $declaration->allergen_code,
+                'exposure_kind' => $declaration->exposure_kind,
+            ])->all();
+        $allergenDeclaration = $attestation === null
+            ? [
+                'status' => $revision->allergen_state === 'UNKNOWN' ? 'UNKNOWN' : 'LEGACY_DECLARED',
+                'catalog_version_number' => null,
+                'attested_by' => null,
+                'attested_at' => null,
+                'items' => [],
+            ]
+            : [
+                'status' => $attestation->attestation_status,
+                'catalog_version_number' => (int) $attestation->version_number,
+                'attested_by' => $attestation->attested_by,
+                'attested_at' => $this->canonicalTimestamp($attestation->attested_at),
+                'items' => $declarations,
+            ];
+        $storageVariants = DB::table('raw_material_revision_storage_variants')
+            ->where('revision_id', $revision->id)
+            ->orderBy('variant_code')
+            ->get()->map(fn (object $variant): array => $this->canonicalStorageVariant((array) $variant))->all();
+
+        return $this->hashPayloadV2($payload, $units, $aliases, $allergenDeclaration, $storageVariants);
     }
 
     private function hashPayload(array $payload, array $units, array $aliases): string
@@ -702,6 +1047,192 @@ final class RawMaterialService
             'units' => $units,
             'aliases' => $aliases,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function hashPayloadV2(
+        array $payload,
+        array $units,
+        array $aliases,
+        array $allergenDeclaration,
+        array $storageVariants,
+    ): string {
+        ksort($payload);
+        usort($units, fn (array $left, array $right): int => $left['unit_code'] <=> $right['unit_code']);
+        usort($aliases, fn (array $left, array $right): int => $left['normalized_alias'] <=> $right['normalized_alias']);
+        usort($allergenDeclaration['items'], fn (array $left, array $right): int => [$left['allergen_code'], $left['exposure_kind']] <=> [$right['allergen_code'], $right['exposure_kind']]);
+        usort($storageVariants, fn (array $left, array $right): int => $left['variant_code'] <=> $right['variant_code']);
+
+        return hash('sha256', json_encode([
+            'version' => 2,
+            'payload' => $payload,
+            'units' => $units,
+            'aliases' => $aliases,
+            'allergen_declaration' => $allergenDeclaration,
+            'storage_variants' => $storageVariants,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function prepareStage2dSnapshot(
+        ?array $allergenDeclaration,
+        array $storageVariants,
+        User $actor,
+        string $allergenState,
+    ): array {
+        $attestation = null;
+        $declarations = [];
+        if ($allergenDeclaration === null) {
+            $canonicalDeclaration = [
+                'status' => $allergenState === 'UNKNOWN' ? 'UNKNOWN' : 'LEGACY_DECLARED',
+                'catalog_version_number' => null,
+                'attested_by' => null,
+                'attested_at' => null,
+                'items' => [],
+            ];
+        } else {
+            $status = $allergenDeclaration['status'] ?? null;
+            if (! in_array($status, ['DECLARED', 'NO_KNOWN_ALLERGENS'], true)) {
+                throw new \InvalidArgumentException('Nieprawidłowy stan atestu alergenowego.');
+            }
+            $catalogVersionId = $allergenDeclaration['catalog_version_id'] ?? null;
+            $catalogVersionNumber = DB::table('raw_material_allergen_catalog_versions')
+                ->where('id', $catalogVersionId)->where('status', 'PUBLISHED')->value('version_number');
+            if ($catalogVersionNumber === null) {
+                throw new \InvalidArgumentException('Atest wymaga opublikowanej wersji słownika alergenów.');
+            }
+            $items = $allergenDeclaration['items'] ?? [];
+            if (! is_array($items)
+                || ($status === 'DECLARED' && $items === [])
+                || ($status === 'NO_KNOWN_ALLERGENS' && $items !== [])) {
+                throw new \InvalidArgumentException('Pozycje atestu alergenowego nie odpowiadają jego stanowi.');
+            }
+
+            $attestedBy = $allergenDeclaration['attested_by'] ?? $actor->id;
+            $attestedAt = $allergenDeclaration['attested_at'] ?? now();
+            $canonicalDeclaration = [
+                'status' => $status,
+                'catalog_version_number' => (int) $catalogVersionNumber,
+                'attested_by' => $attestedBy,
+                'attested_at' => $this->canonicalTimestamp($attestedAt),
+                'items' => [],
+            ];
+            $attestation = [
+                'catalog_version_id' => $catalogVersionId,
+                'attestation_status' => $status,
+                'attested_by' => $attestedBy,
+                'attested_at' => Carbon::parse($attestedAt)->utc()->format('Y-m-d H:i:s.uP'),
+            ];
+            foreach ($items as $item) {
+                $declaration = [
+                    'allergen_code' => $item['allergen_code'],
+                    'exposure_kind' => $item['exposure_kind'],
+                ];
+                $declarations[] = $declaration;
+                $canonicalDeclaration['items'][] = $declaration;
+            }
+        }
+
+        $canonicalStorageVariants = [];
+        $storageRows = [];
+        foreach ($storageVariants as $variant) {
+            $storageRow = [
+                'variant_code' => $variant['variant_code'],
+                'name_pl' => trim($variant['name_pl']),
+                'storage_type' => trim($variant['storage_type']),
+                'temperature_min_c' => $this->canonicalDecimal($variant['temperature_min_c']),
+                'temperature_max_c' => $this->canonicalDecimal($variant['temperature_max_c']),
+                'humidity_min_percent' => ($variant['humidity_min_percent'] ?? null) === null
+                    ? null : $this->canonicalDecimal($variant['humidity_min_percent']),
+                'humidity_max_percent' => ($variant['humidity_max_percent'] ?? null) === null
+                    ? null : $this->canonicalDecimal($variant['humidity_max_percent']),
+                'conditions' => $variant['conditions'] ?? null,
+                'is_default' => $this->canonicalBoolean($variant['is_default'] ?? false),
+            ];
+            $storageRows[] = $storageRow;
+            $canonicalStorageVariants[] = $storageRow;
+        }
+
+        return [
+            'attestation' => $attestation,
+            'declarations' => $declarations,
+            'allergen_declaration' => $canonicalDeclaration,
+            'storage_rows' => $storageRows,
+            'storage_variants' => $canonicalStorageVariants,
+        ];
+    }
+
+    private function allergenDeclarationForRevision(string $revisionId): ?array
+    {
+        $attestation = DB::table('raw_material_revision_allergen_attestations')
+            ->where('revision_id', $revisionId)->first();
+        if (! $attestation) {
+            return null;
+        }
+
+        return [
+            'status' => $attestation->attestation_status,
+            'catalog_version_id' => $attestation->catalog_version_id,
+            'attested_by' => $attestation->attested_by,
+            'attested_at' => $attestation->attested_at,
+            'items' => DB::table('raw_material_revision_allergen_declarations')
+                ->where('revision_id', $revisionId)
+                ->orderBy('allergen_code')
+                ->get()->map(fn (object $declaration): array => [
+                    'allergen_code' => $declaration->allergen_code,
+                    'exposure_kind' => $declaration->exposure_kind,
+                ])->all(),
+        ];
+    }
+
+    private function storageVariantsForRevision(string $revisionId): array
+    {
+        return DB::table('raw_material_revision_storage_variants')
+            ->where('revision_id', $revisionId)
+            ->orderBy('variant_code')
+            ->get()->map(fn (object $variant): array => [
+                'variant_code' => $variant->variant_code,
+                'name_pl' => $variant->name_pl,
+                'storage_type' => $variant->storage_type,
+                'temperature_min_c' => (string) $variant->temperature_min_c,
+                'temperature_max_c' => (string) $variant->temperature_max_c,
+                'humidity_min_percent' => $variant->humidity_min_percent === null
+                    ? null : (string) $variant->humidity_min_percent,
+                'humidity_max_percent' => $variant->humidity_max_percent === null
+                    ? null : (string) $variant->humidity_max_percent,
+                'conditions' => $variant->conditions,
+                'is_default' => $this->canonicalBoolean($variant->is_default),
+            ])->all();
+    }
+
+    private function canonicalStorageVariant(array $variant): array
+    {
+        return [
+            'variant_code' => $variant['variant_code'],
+            'name_pl' => $variant['name_pl'],
+            'storage_type' => $variant['storage_type'],
+            'temperature_min_c' => $this->canonicalDecimal($variant['temperature_min_c']),
+            'temperature_max_c' => $this->canonicalDecimal($variant['temperature_max_c']),
+            'humidity_min_percent' => $variant['humidity_min_percent'] === null
+                ? null : $this->canonicalDecimal($variant['humidity_min_percent']),
+            'humidity_max_percent' => $variant['humidity_max_percent'] === null
+                ? null : $this->canonicalDecimal($variant['humidity_max_percent']),
+            'conditions' => $variant['conditions'],
+            'is_default' => $this->canonicalBoolean($variant['is_default']),
+        ];
+    }
+
+    private function canonicalDecimal(string|int|float $value): string
+    {
+        return number_format((float) $value, 2, '.', '');
+    }
+
+    private function canonicalBoolean(mixed $value): bool
+    {
+        return in_array($value, [true, 1, '1', 't', 'true'], true);
+    }
+
+    private function canonicalTimestamp(\DateTimeInterface|string $value): string
+    {
+        return Carbon::parse($value)->utc()->format('Y-m-d\TH:i:s.u\Z');
     }
 
     private function aliases(string $name, array $input): array

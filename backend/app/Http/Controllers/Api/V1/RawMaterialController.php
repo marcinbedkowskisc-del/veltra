@@ -8,6 +8,7 @@ use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ListRawMaterialsRequest;
+use App\Http\Requests\RawMaterialAllergenDeclarationRequest;
 use App\Http\Requests\RawMaterialApprovalRequest;
 use App\Http\Requests\RawMaterialCategoryRenameRequest;
 use App\Http\Requests\RawMaterialCategoryRequest;
@@ -25,6 +26,7 @@ use App\Http\Requests\RawMaterialReasonRequest;
 use App\Http\Requests\RawMaterialReferencePriceQueryRequest;
 use App\Http\Requests\RawMaterialReferencePriceRequest;
 use App\Http\Requests\RawMaterialRestatementRequest;
+use App\Http\Requests\RawMaterialStorageVariantsRequest;
 use App\Http\Requests\RawMaterialSupplierListRequest;
 use App\Http\Requests\RawMaterialSupplierRequest;
 use App\Models\User;
@@ -312,6 +314,54 @@ class RawMaterialController extends Controller
             $request->user(),
             $request->attributes->get('operating_location'),
             $material,
+        )]);
+    }
+
+    public function allergenCatalog(Request $request, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->allergenCatalog(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+        )]);
+    }
+
+    public function revisionStage2d(
+        Request $request,
+        string $material,
+        string $revision,
+        RawMaterialService $service,
+    ): JsonResponse {
+        return response()->json(['data' => $service->revisionStage2d(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $revision,
+        )]);
+    }
+
+    public function updateDraftAllergenDeclaration(
+        RawMaterialAllergenDeclarationRequest $request,
+        string $material,
+        RawMaterialService $service,
+    ): JsonResponse {
+        return response()->json(['data' => $service->reviseAllergenDeclaration(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $request->validated(),
+        )]);
+    }
+
+    public function updateDraftStorageVariants(
+        RawMaterialStorageVariantsRequest $request,
+        string $material,
+        RawMaterialService $service,
+    ): JsonResponse {
+        return response()->json(['data' => $service->reviseStorageVariants(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $request->validated('variants'),
         )]);
     }
 

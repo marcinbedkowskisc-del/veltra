@@ -8,6 +8,10 @@ use App\Domain\Authorization\ReportCatalog;
 use App\Domain\Authorization\UnavailableReports;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\RawMaterials\Documents\ClamAvDocumentScanner;
+use App\Domain\RawMaterials\Documents\DocumentScanner;
+use App\Domain\RawMaterials\Documents\PrivateDocumentStorage;
+use App\Domain\RawMaterials\Documents\PrivateLocalDocumentStorage;
 use App\Models\User;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -25,6 +29,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(ModuleCatalog::class, DefinedModuleCatalog::class);
         $this->app->bind(ModuleAvailability::class, ConfiguredModuleAvailability::class);
         $this->app->bind(ReportCatalog::class, UnavailableReports::class);
+        $this->app->bind(PrivateDocumentStorage::class, PrivateLocalDocumentStorage::class);
+        $this->app->bind(DocumentScanner::class, ClamAvDocumentScanner::class);
     }
 
     /**

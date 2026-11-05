@@ -1,0 +1,135 @@
+name: veltra-stage2c-security-test
+
+x-test-environment: &test-environment
+  APP_NAME: VELTRA 2.0
+  APP_ENV: testing
+  APP_DEBUG: "false"
+  APP_LOCALE: pl
+  APP_FALLBACK_LOCALE: pl
+  APP_KEY: ${TEST_APP_KEY:?Set a synthetic TEST_APP_KEY}
+  APP_DB_MUTATION_SIGNING_KEY: ${TEST_MUTATION_SIGNING_KEY:?Set a synthetic TEST_MUTATION_SIGNING_KEY}
+  APP_URL: http://localhost:8000
+  FRONTEND_URL: http://localhost:5173
+  SANCTUM_STATEFUL_DOMAINS: localhost:5173,localhost:8000,127.0.0.1:5173,127.0.0.1:8000
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: warning
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: veltra_testing
+  DB_USERNAME: veltra_app
+  DB_PASSWORD: ${TEST_DB_APP_PASSWORD:?Set a synthetic TEST_DB_APP_PASSWORD}
+  APP_DB_USERNAME: veltra_app
+  APP_DB_PASSWORD: ${TEST_DB_APP_PASSWORD:?Set a synthetic TEST_DB_APP_PASSWORD}
+  APP_DB_MIGRATION_USERNAME: veltra_migrator
+  APP_DB_MIGRATION_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD:?Set a synthetic TEST_DB_MIGRATION_PASSWORD}
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_CACHE_DB: "1"
+  CACHE_STORE: redis
+  SESSION_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  MAIL_MAILER: array
+  TEST_DB_SETUP_USERNAME: veltra_migrator
+  TEST_DB_SETUP_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD:?Set a synthetic TEST_DB_MIGRATION_PASSWORD}
+  CLAMAV_HOST: clamav
+  CLAMAV_PORT: "3310"
+  CLAMAV_CONNECT_TIMEOUT: "2"
+  CLAMAV_TIMEOUT: "30"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: veltra-stage2c-sec-postgres
+    environment:
+      POSTGRES_DB: veltra_testing
+      POSTGRES_USER: veltra_test_admin
+      POSTGRES_PASSWORD: ${TEST_PG_ADMIN_PASSWORD:?Set a synthetic TEST_PG_ADMIN_PASSWORD}
+      APP_DB_USERNAME: veltra_app
+      APP_DB_PASSWORD: ${TEST_DB_APP_PASSWORD:?Set a synthetic TEST_DB_APP_PASSWORD}
+      APP_DB_MIGRATION_USERNAME: veltra_migrator
+      APP_DB_MIGRATION_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD:?Set a synthetic TEST_DB_MIGRATION_PASSWORD}
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
+    networks:
+      - isolated
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veltra_migrator -d veltra_testing"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: veltra-stage2c-sec-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--dir", "/data"]
+    tmpfs:
+      - /data
+    networks:
+      - isolated
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: veltra-stage2c-sec-clamav
+    networks:
+      - isolated
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping=1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+    restart: "no"
+
+  migrate:
+    image: veltra-stage2c-security-test-backend
+    container_name: veltra-stage2c-sec-migrate
+    build:
+      context: ./backend
+    profiles: ["setup"]
+    environment:
+      <<: *test-environment
+      DB_USERNAME: veltra_migrator
+      DB_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD:?Set a synthetic TEST_DB_MIGRATION_PASSWORD}
+    command: ["php", "artisan", "migrate", "--force"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - isolated
+    restart: "no"
+
+  test-runner:
+    image: veltra-stage2c-security-test-backend
+    container_name: veltra-stage2c-sec-runner
+    build:
+      context: ./backend
+    profiles: ["tools"]
+    environment: *test-environment
+    command: ["sleep", "infinity"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    networks:
+      - isolated
+    restart: "no"
+
+networks:
+  isolated:
+    name: veltra-stage2c-security-test-internal
+    internal: true

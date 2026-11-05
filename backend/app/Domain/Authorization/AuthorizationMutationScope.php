@@ -189,6 +189,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.commercial');
     }
 
+    public static function rawMaterialCsvImport(): self
+    {
+        return new self('raw-material.csv-import');
+    }
+
     public static function securityEvent(): self
     {
         return new self('security.event');

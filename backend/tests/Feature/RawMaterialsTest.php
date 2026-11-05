@@ -4,11 +4,15 @@ namespace Tests\Feature;
 
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
+use App\Domain\Installation\LocationType;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\Modules\ModuleDefinition;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
+use App\Domain\RawMaterials\RawMaterialCsvImportPersistenceService;
+use App\Domain\RawMaterials\RawMaterialCsvParser;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
@@ -17,10 +21,12 @@ use App\Models\LocationModuleState;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Tests\AuthorizationTestCase;
@@ -83,6 +89,520 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(1, (int) DB::table('raw_material_code_counters')
             ->where('organization_id', $this->steward->organization_id)
             ->where('prefix', 'SUR')->value('last_value'));
+    }
+
+    public function test_csv_import_records_metadata_baseline_and_only_genuine_history_changes(): void
+    {
+        $material = $this->activeCsvImportMaterial('Składnik do importu CSV');
+        $imports = app(RawMaterialCsvImportPersistenceService::class);
+        $initial = $this->csvImportRow($material, [
+            'price_net' => '4.125',
+            'normalized_net_pln_per_base_unit' => '0.004125',
+            'vat_rate' => '5',
+            'unit' => 'kg',
+            'effective_date' => '2026-01-01',
+        ]);
+        $sourceHash = hash('sha256', 'fixture-csv-baseline');
+        $baseline = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            $sourceHash,
+            'csv-import-baseline-0001',
+            [$initial],
+        );
+
+        $this->assertSame('COMMITTED', $baseline['batch_status']);
+        $this->assertSame('BAZA POCZĄTKOWA METADANYCH', $baseline['rows'][0]['status']);
+        $this->assertNotNull($baseline['rows'][0]['created_reference_price_event_id']);
+        $this->assertSame(1, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_import_batches')->where('id', $baseline['batch_id'])
+            ->update(['source_sha256' => hash('sha256', 'tampered')]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_import_rows')->where('batch_id', $baseline['batch_id'])
+            ->delete());
+        $metadataId = $baseline['rows'][0]['effective_metadata_state_id'];
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_import_metadata_events')->where('id', $metadataId)
+            ->update(['vat_rate' => '0']));
+        $this->assertNull(DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->whereDate('effective_from', '<', '2026-01-01')->first());
+
+        $replay = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            $sourceHash,
+            'csv-import-baseline-0001',
+            [$initial],
+        );
+        $this->assertSame($baseline, $replay);
+        $this->assertSame(1, DB::table('raw_material_import_rows')
+            ->where('raw_material_id', $material['id'])->count());
+
+        $sameState = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'fixture-csv-same-state'),
+            'csv-import-same-state-0001',
+            [$this->csvImportRow($material, [
+                'effective_date' => '2026-01-02',
+                'price_net' => '4.125',
+                'normalized_net_pln_per_base_unit' => '0.004125',
+                'vat_rate' => '5',
+                'unit' => 'kg',
+            ])],
+        );
+        $this->assertSame('BEZ ZMIAN', $sameState['rows'][0]['status']);
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(1, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->count());
+
+        $metadataChange = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'fixture-csv-metadata-change'),
+            'csv-import-metadata-change-0001',
+            [$this->csvImportRow($material, [
+                'effective_date' => '2026-01-03',
+                'price_net' => '4.125',
+                'normalized_net_pln_per_base_unit' => '0.004125',
+                'vat_rate' => '23',
+                'unit' => 'l',
+            ])],
+        );
+        $this->assertSame('ZMIANA DANYCH', $metadataChange['rows'][0]['status']);
+        $this->assertNull($metadataChange['rows'][0]['created_reference_price_event_id']);
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(2, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->count());
+
+        $priceChange = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'fixture-csv-price-change'),
+            'csv-import-price-change-0001',
+            [$this->csvImportRow($material, [
+                'effective_date' => '2026-01-04',
+                'price_net' => '5',
+                'normalized_net_pln_per_base_unit' => '0.005',
+                'vat_rate' => '23',
+                'unit' => 'l',
+            ])],
+        );
+        $this->assertSame('ZMIANA CENY', $priceChange['rows'][0]['status']);
+        $this->assertSame(2, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(2, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame($metadataChange['rows'][0]['effective_metadata_state_id'],
+            $priceChange['rows'][0]['effective_metadata_state_id']);
+        $this->assertSame($metadataChange['rows'][0]['effective_metadata_state_id'],
+            DB::table('raw_material_import_metadata_events')
+                ->where('raw_material_id', $material['id'])
+                ->whereDate('effective_from', '<=', '2026-01-03')
+                ->orderByDesc('effective_from')
+                ->value('id'));
+
+        $priceAndMetadataChange = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'fixture-csv-price-and-metadata-change'),
+            'csv-import-price-metadata-change-0001',
+            [$this->csvImportRow($material, [
+                'effective_date' => '2026-01-05',
+                'price_net' => '6',
+                'normalized_net_pln_per_base_unit' => '0.006',
+                'vat_rate' => '5',
+                'unit' => 'kg',
+            ])],
+        );
+        $this->assertSame('ZMIANA CENY I DANYCH', $priceAndMetadataChange['rows'][0]['status']);
+        $this->assertSame(3, DB::table('raw_material_reference_price_events')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(3, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $material['id'])->count());
+
+        try {
+            $imports->recordPreparedBatch(
+                $this->steward,
+                $this->location,
+                $sourceHash,
+                'csv-import-baseline-0001',
+                [$this->csvImportRow($material, ['price_net' => '9'])],
+            );
+            $this->fail('The CSV import idempotency key was reused with a different payload.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_IDEMPOTENCY_CONFLICT', $exception->errorCode);
+        }
+
+        $unknown = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'unknown-ingredient'),
+            'csv-import-unknown-ingredient-0001',
+            [$this->csvImportRow([
+                'id' => null,
+                'code' => 'SUR-999999',
+                'name' => 'Nieznany składnik',
+            ])],
+        );
+        $this->assertSame('REJECTED', $unknown['batch_status']);
+        $this->assertSame('BŁĘDY', $unknown['rows'][0]['status']);
+        $this->assertSame('UNKNOWN_INGREDIENT_ID', $unknown['rows'][0]['error_code']);
+    }
+
+    public function test_csv_same_date_conflict_rejects_the_whole_batch_without_writing_history(): void
+    {
+        $categoryId = $this->category()['id'];
+        $firstMaterial = $this->activeCsvImportMaterial('Pierwszy składnik CSV', $categoryId);
+        $secondMaterial = $this->activeCsvImportMaterial('Drugi składnik CSV', $categoryId);
+        $imports = app(RawMaterialCsvImportPersistenceService::class);
+        $secondBaseline = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'second-material-baseline'),
+            'csv-import-second-baseline-0001',
+            [$this->csvImportRow($secondMaterial, [
+                'effective_date' => '2026-02-01',
+                'price_net' => '2',
+                'normalized_net_pln_per_base_unit' => '0.002',
+                'vat_rate' => '5',
+                'unit' => 'kg',
+            ])],
+        );
+        $this->assertSame('COMMITTED', $secondBaseline['batch_status']);
+
+        $eventCountBefore = DB::table('raw_material_reference_price_events')->count();
+        $metadataCountBefore = DB::table('raw_material_import_metadata_events')->count();
+        $result = $imports->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'atomic-date-conflict'),
+            'csv-import-date-conflict-0001',
+            [
+                $this->csvImportRow($firstMaterial, [
+                    'effective_date' => '2026-02-01',
+                    'price_net' => '3',
+                    'normalized_net_pln_per_base_unit' => '0.003',
+                    'vat_rate' => '5',
+                    'unit' => 'kg',
+                ]),
+                $this->csvImportRow($secondMaterial, [
+                    'effective_date' => '2026-02-01',
+                    'price_net' => '2.5',
+                    'normalized_net_pln_per_base_unit' => '0.0025',
+                    'vat_rate' => '5',
+                    'unit' => 'kg',
+                ]),
+            ],
+        );
+
+        $this->assertSame('REJECTED', $result['batch_status']);
+        $this->assertSame('BŁĘDY', $result['rows'][0]['status']);
+        $this->assertSame('KONFLIKT DATY', $result['rows'][1]['status']);
+        $this->assertSame($eventCountBefore, DB::table('raw_material_reference_price_events')->count());
+        $this->assertSame($metadataCountBefore, DB::table('raw_material_import_metadata_events')->count());
+        $this->assertSame(0, DB::table('raw_material_import_metadata_events')
+            ->where('raw_material_id', $firstMaterial['id'])->count());
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $result['batch_id'])
+            ->where('event_code', 'CSV_IMPORT_REJECTED')
+            ->where('outcome', 'REJECTED')->count());
+    }
+
+    public function test_csv_import_history_requires_signed_runtime_mutations_and_composite_tenant_references(): void
+    {
+        $organizationId = $this->steward->organization_id;
+        $actorId = $this->steward->id;
+        $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('raw_material_import_batches')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $organizationId,
+            'actor_user_id' => $actorId,
+        ]));
+        $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('raw_material_import_rows')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $organizationId,
+        ]));
+        $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('raw_material_import_metadata_events')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $organizationId,
+        ]));
+
+        $material = $this->activeCsvImportMaterial('Składnik z ograniczeniem organizacji');
+        $batch = app(RawMaterialCsvImportPersistenceService::class)->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'tenant-integrity'),
+            'csv-import-tenant-integrity-0001',
+            [$this->csvImportRow($material)],
+        );
+        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($batch): void {
+            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+                ->table('raw_material_import_rows')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $foreignLocation->organization_id,
+                    'batch_id' => $batch['batch_id'],
+                    'row_number' => 999,
+                    'ingredient_code' => 'SUR-999999',
+                    'input_ingredient_name' => 'Niedozwolony wiersz',
+                    'source_price_net' => '1',
+                    'normalized_net_pln_per_base_unit' => '1',
+                    'vat_rate' => '23',
+                    'input_unit' => 'kg',
+                    'effective_date' => '2026-01-01',
+                    'result_code' => 'INVALID_ROW',
+                    'error_code' => 'TEST_TENANT_MISMATCH',
+                ]));
+        });
+    }
+
+    public function test_csv_parser_rejects_malformed_records_and_duplicate_identifiers(): void
+    {
+        $parser = app(RawMaterialCsvParser::class);
+        $header = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n";
+        $valid = $parser->parse($header."SUR-000123;\"Mąka; drobna\";4.125;23;kg;2026-11-01\n");
+        $this->assertSame('Mąka; drobna', $valid[0]['ingredient_name']);
+
+        foreach ([
+            $header."SUR-000123;Mąka;4;23;kg;2026-11-01;extra\n",
+            $header."SUR-000123;\"Mąka;4;23;kg;2026-11-01\n",
+            $header."SUR-000123;Mą\"ka;4;23;kg;2026-11-01\n",
+            $header."SUR-000123;Mąka;1e3;23;kg;2026-11-01\n",
+            $header."SUR-000123;Mąka;4.123456789012345;23;kg;2026-11-01\n",
+            $header."SUR-000123;Mąka;4;101;kg;2026-11-01\n",
+            $header."SUR-000123;Mąka;4;23;kg;2026-02-30\n",
+        ] as $invalid) {
+            try {
+                $parser->parse($invalid);
+                $this->fail('Parser zaakceptował nieprawidłowy plik CSV.');
+            } catch (RawMaterialException $exception) {
+                $this->assertSame(422, $exception->status);
+            }
+        }
+
+        try {
+            $parser->parse($header
+                ."SUR-000123;Mąka;4;23;kg;2026-11-01\n"
+                ."SUR-000123;Mąka;4;23;kg;2026-11-02\n");
+            $this->fail('Parser zaakceptował powtórzony identyfikator SUR.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_CSV_DUPLICATE_IDENTIFIER', $exception->errorCode);
+            $this->assertSame([2, 3], $exception->details['row_numbers']);
+        }
+    }
+
+    public function test_csv_http_preview_commit_is_private_normalized_idempotent_and_audited(): void
+    {
+        Storage::fake('raw_material_csv_imports');
+        $material = $this->activeCsvWorkflowMaterial('Mąka; drobna');
+        $this->selectRawMaterialApiContext($this->steward);
+        $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            .$material['code'].';"'.$material['name'].'";4.125;5;kg;2026-01-01'."\n";
+
+        $previewResponse = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('ceny.csv', $csv),
+        ]);
+        $previewResponse->assertCreated()->assertJsonPath('data.can_commit', true)
+            ->assertJsonPath('data.rows.0.status', 'BAZA POCZĄTKOWA METADANYCH')
+            ->assertJsonPath('data.rows.0.normalized_net_pln_per_base_unit', '0.00412500000000');
+        $preview = $previewResponse->json('data');
+        $this->assertSame(0, DB::table('raw_material_reference_price_events')->count());
+        $this->assertSame(0, DB::table('raw_material_import_metadata_events')->count());
+        $this->assertCount(1, Storage::disk('raw_material_csv_imports')->allFiles());
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_IMPORT_PREVIEW')
+            ->where('event_code', 'CSV_IMPORT_PREVIEWED')
+            ->count());
+
+        $idempotencyKey = 'csv-http-workflow-key-0001';
+        $commitUrl = '/api/v1/raw-materials/imports/'.$preview['preview_id'].'/commit';
+        $storedFile = Storage::disk('raw_material_csv_imports')->allFiles()[0];
+        Storage::disk('raw_material_csv_imports')->put($storedFile, $csv.'#zmieniono');
+        $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', $idempotencyKey)
+            ->postJson($commitUrl, ['confirmed' => true])
+            ->assertStatus(409)->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_SOURCE_CHANGED');
+        Storage::disk('raw_material_csv_imports')->put($storedFile, $csv);
+        $commitResponse = $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', $idempotencyKey)
+            ->postJson($commitUrl, ['confirmed' => false]);
+        $commitResponse->assertStatus(422)->assertJsonValidationErrors('confirmed');
+        $this->assertSame(0, DB::table('raw_material_reference_price_events')->count());
+        $commitResponse = $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', $idempotencyKey)
+            ->postJson($commitUrl, ['confirmed' => true]);
+        $commitResponse->assertOk()->assertJsonPath('data.batch_status', 'COMMITTED')
+            ->assertJsonPath('data.rows.0.status', 'BAZA POCZĄTKOWA METADANYCH');
+        $batchId = $commitResponse->json('data.batch_id');
+
+        $retry = $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', $idempotencyKey)
+            ->postJson($commitUrl, ['confirmed' => true]);
+        $retry->assertOk()->assertJsonPath('data.batch_id', $batchId);
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->count());
+        $this->assertSame(1, DB::table('raw_material_import_metadata_events')->count());
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $batchId)
+            ->where('event_code', 'CSV_IMPORT_COMMITTED')->count());
+
+        $this->actingAs($this->steward, 'web')->getJson('/api/v1/raw-materials/imports/results/'.$batchId)
+            ->assertOk()->assertJsonPath('data.rows.0.normalized_net_pln_per_base_unit', '0.00412500000000');
+    }
+
+    public function test_csv_preview_reports_invalid_ingredients_and_blocks_atomic_commit(): void
+    {
+        Storage::fake('raw_material_csv_imports');
+        $categoryId = $this->category()['id'];
+        $draftId = $this->declaredMaterial($categoryId, 'Szkic CSV', materialCode: 'SUR-000099');
+        $draft = DB::table('raw_materials')->where('id', $draftId)->value('code');
+        $this->selectRawMaterialApiContext($this->steward);
+        $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            .$draft.';Szkic CSV;1;23;kg;2026-11-01'."\n"
+            ."SUR-999999;Nieznany;1;23;kg;2026-11-01\n";
+        $response = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('bledne.csv', $csv),
+        ]);
+
+        $response->assertCreated()->assertJsonPath('data.can_commit', false)
+            ->assertJsonPath('data.rows.0.error_code', 'INGREDIENT_NOT_ACTIVE')
+            ->assertJsonPath('data.rows.1.error_code', 'UNKNOWN_INGREDIENT_ID');
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('event_code', 'CSV_IMPORT_PREVIEWED')
+            ->where('outcome', 'REJECTED')
+            ->count());
+        $previewId = $response->json('data.preview_id');
+        $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', 'csv-invalid-preview-key-01')
+            ->postJson('/api/v1/raw-materials/imports/'.$previewId.'/commit', ['confirmed' => true])
+            ->assertStatus(422)->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_PREVIEW_HAS_ERRORS');
+        $this->assertSame(0, DB::table('raw_material_reference_price_events')->count());
+    }
+
+    public function test_csv_preview_checks_exact_name_units_and_half_even_conversion_with_periods(): void
+    {
+        Storage::fake('raw_material_csv_imports');
+        $categoryId = $this->category()['id'];
+        $mass = $this->activeCsvWorkflowMaterial('Masa CSV', categoryId: $categoryId);
+        $volume = $this->activeCsvWorkflowMaterial('Objętość CSV', 'ml', 'VOLUME', [
+            'unit_code' => 'l',
+            'dimension' => 'VOLUME',
+            'conversion_kind' => 'METRIC',
+            'to_base_factor' => '1000.000000000000',
+            'basis' => null,
+        ], $categoryId);
+        $count = $this->activeCsvWorkflowMaterial('Sztuki CSV', 'pc', 'COUNT', [
+            'unit_code' => 'pc',
+            'dimension' => 'COUNT',
+            'conversion_kind' => 'BASE',
+            'to_base_factor' => '1.000000000000',
+            'basis' => null,
+        ], $categoryId);
+        $halfEven = $this->activeCsvWorkflowMaterial('Zaokrąglenie CSV', 'ml', 'VOLUME', [
+            'unit_code' => 'l',
+            'dimension' => 'VOLUME',
+            'conversion_kind' => 'METRIC',
+            'to_base_factor' => '1000.000000000000',
+            'basis' => null,
+        ], $categoryId);
+        app(RawMaterialCsvImportPersistenceService::class)->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'future-reference-price'),
+            'csv-import-future-reference-price-01',
+            [$this->csvImportRow($mass, [
+                'price_net' => '1000',
+                'normalized_net_pln_per_base_unit' => '1',
+                'effective_date' => '2026-06-01',
+            ])],
+        );
+        $this->selectRawMaterialApiContext($this->steward);
+        $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            .$mass['code'].';'.$mass['name'].';4.125;5;kg;2026-01-01'."\n"
+            .$volume['code'].';'.$volume['name'].';3.45;23;l;2026-01-02'."\n"
+            .$count['code'].';'.$count['name'].';12;23;szt.;2027-01-01'."\n"
+            .$halfEven['code'].';'.$halfEven['name'].';0.000000000015;5;l;2026-01-03'."\n";
+
+        $response = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('jednostki.csv', $csv),
+        ]);
+        $response->assertCreated()->assertJsonPath('data.can_commit', true)
+            ->assertJsonPath('data.rows.0.normalized_net_pln_per_base_unit', '0.00412500000000')
+            ->assertJsonPath('data.rows.0.is_backdated', true)
+            ->assertJsonPath('data.rows.0.affected_until', '2026-06-01')
+            ->assertJsonPath('data.rows.1.normalized_net_pln_per_base_unit', '0.00345000000000')
+            ->assertJsonPath('data.rows.1.is_backdated', true)
+            ->assertJsonPath('data.rows.2.normalized_net_pln_per_base_unit', '12.00000000000000')
+            ->assertJsonPath('data.rows.2.is_future', true)
+            ->assertJsonPath('data.rows.3.normalized_net_pln_per_base_unit', '0.00000000000002');
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->count());
+
+        $badCsv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            .$mass['code'].';inna nazwa;4;5;kg;2026-01-01'."\n"
+            .$volume['code'].';'.$volume['name'].';4;5;szt.;2026-01-01'."\n";
+        $invalid = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('niepoprawne-jednostki.csv', $badCsv),
+        ]);
+        $invalid->assertCreated()->assertJsonPath('data.can_commit', false)
+            ->assertJsonPath('data.rows.0.error_code', 'INGREDIENT_NAME_MISMATCH')
+            ->assertJsonPath('data.rows.1.error_code', 'UNIT_NOT_COMPATIBLE');
+    }
+
+    public function test_csv_preview_detects_state_race_and_readiness_gate_blocks_http(): void
+    {
+        Storage::fake('raw_material_csv_imports');
+        $material = $this->activeCsvWorkflowMaterial('Składnik wyścigu CSV');
+        $this->selectRawMaterialApiContext($this->steward);
+        $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            .$material['code'].';'.$material['name'].';4.125;5;kg;2026-02-01'."\n";
+        $preview = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('race.csv', $csv),
+        ])->assertCreated()->json('data');
+
+        app(RawMaterialCsvImportPersistenceService::class)->recordPreparedBatch(
+            $this->steward,
+            $this->location,
+            hash('sha256', 'intervening-import'),
+            'csv-race-intervening-key-001',
+            [$this->csvImportRow($material, [
+                'effective_date' => '2026-01-15',
+                'normalized_net_pln_per_base_unit' => '0.004',
+            ])],
+        );
+        $this->actingAs($this->steward, 'web')
+            ->withHeader('Idempotency-Key', 'csv-race-commit-key-0001')
+            ->postJson('/api/v1/raw-materials/imports/'.$preview['preview_id'].'/commit', ['confirmed' => true])
+            ->assertStatus(409)->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_PREVIEW_STALE');
+
+        $this->app->instance(ModuleCatalog::class, new DefinedModuleCatalog([
+            new ModuleDefinition(
+                'RAW_MATERIALS',
+                'Surowce',
+                'RAW_MATERIALS_VIEW',
+                [LocationType::CentralKitchen, LocationType::Restaurant],
+            ),
+        ]));
+        $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('not-ready.csv', $csv),
+        ])->assertStatus(503)->assertJsonPath('error.code', 'RAW_MATERIALS_MODULE_UNAVAILABLE');
+    }
+
+    public function test_csv_import_http_rejects_an_actor_without_reference_price_permission(): void
+    {
+        Storage::fake('raw_material_csv_imports');
+        $reader = $this->user('raw-material-csv-reader@example.test');
+        app(MembershipService::class)->assign($reader, $this->location);
+        $this->selectRawMaterialApiContext($reader);
+        $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
+            ."SUR-999999;Nieznany;1;23;kg;2026-11-01\n";
+
+        $this->actingAs($reader, 'web')->post('/api/v1/raw-materials/imports', [
+            'file' => UploadedFile::fake()->createWithContent('brak-uprawnien.csv', $csv),
+        ])->assertForbidden();
     }
 
     public function test_view_only_reader_cannot_discover_drafts_or_pending_revisions(): void
@@ -1213,6 +1733,84 @@ class RawMaterialsTest extends AuthorizationTestCase
         ];
     }
 
+    private function activeCsvImportMaterial(string $name, ?string $categoryId = null): array
+    {
+        $categoryId ??= $this->category()['id'];
+        $materialCount = DB::table('raw_materials')
+            ->where('organization_id', $this->steward->organization_id)
+            ->count();
+        $code = 'SUR-'.sprintf('%06d', $materialCount + 99);
+        $materialId = $this->declaredMaterial($categoryId, $name, materialCode: $code);
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa CSV');
+
+        return [
+            'id' => $materialId,
+            'code' => $code,
+            'name' => $name,
+        ];
+    }
+
+    private function activeCsvWorkflowMaterial(
+        string $name,
+        string $baseUnitCode = 'g',
+        string $baseUnitDimension = 'MASS',
+        ?array $csvUnit = null,
+        ?string $categoryId = null,
+    ): array {
+        $categoryId ??= $this->category()['id'];
+        $csvUnit ??= [
+            'unit_code' => 'kg',
+            'dimension' => 'MASS',
+            'conversion_kind' => 'METRIC',
+            'to_base_factor' => '1000.000000000000',
+            'basis' => null,
+        ];
+        $materialCount = DB::table('raw_materials')
+            ->where('organization_id', $this->steward->organization_id)
+            ->count();
+        $code = 'SUR-'.sprintf('%06d', $materialCount + 99);
+        $additionalUnits = $csvUnit['unit_code'] === $baseUnitCode ? [] : [$csvUnit];
+        $materialId = $this->declaredMaterial(
+            $categoryId,
+            $name,
+            $additionalUnits,
+            $code,
+            $baseUnitCode,
+            $baseUnitDimension,
+        );
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa importu CSV');
+
+        return [
+            'id' => $materialId,
+            'code' => $code,
+            'name' => $name,
+        ];
+    }
+
+    private function selectRawMaterialApiContext(User $actor): void
+    {
+        Auth::forgetGuards();
+        $response = $this->actingAs($actor, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ]);
+        $this->assertSame(200, $response->status(), $response->getContent());
+    }
+
+    private function csvImportRow(array $material, array $overrides = []): array
+    {
+        return array_replace([
+            'ingredient_id' => $material['code'],
+            'ingredient_name' => $material['name'],
+            'price_net' => '4.125',
+            'normalized_net_pln_per_base_unit' => '0.004125',
+            'vat_rate' => '5',
+            'unit' => 'kg',
+            'effective_date' => '2026-01-01',
+        ], $overrides);
+    }
+
     private function category(): array
     {
         return $this->rawMaterialService->createCategory($this->steward, $this->location, [
@@ -1265,6 +1863,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         string $name,
         array $additionalUnits = [],
         ?string $materialCode = null,
+        string $baseUnitCode = 'g',
+        string $baseUnitDimension = 'MASS',
     ): string {
         $materialId = Str::uuid()->toString();
         $revisionId = Str::uuid()->toString();
@@ -1273,18 +1873,19 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $categoryId,
             'name' => $name,
             'description' => null,
-            'base_unit_code' => 'g',
-            'base_unit_dimension' => 'MASS',
+            'base_unit_code' => $baseUnitCode,
+            'base_unit_dimension' => $baseUnitDimension,
             'allergen_state' => 'DECLARED',
         ];
         ksort($payload);
         $units = [[
-            'unit_code' => 'g',
-            'dimension' => 'MASS',
+            'unit_code' => $baseUnitCode,
+            'dimension' => $baseUnitDimension,
             'conversion_kind' => 'BASE',
             'to_base_factor' => '1.000000000000',
             'basis' => null,
         ], ...$additionalUnits];
+        usort($units, fn (array $left, array $right): int => $left['unit_code'] <=> $right['unit_code']);
         $aliases = [['alias' => $name, 'normalized_alias' => $alias]];
         $hash = hash('sha256', json_encode([
             'payload' => $payload,
@@ -1306,6 +1907,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             $units,
             $aliases,
             $hash,
+            $baseUnitCode,
+            $baseUnitDimension,
         ): string {
             $counterQuery = $connection->table('raw_material_code_counters')
                 ->where('organization_id', $this->steward->organization_id)
@@ -1342,8 +1945,8 @@ class RawMaterialsTest extends AuthorizationTestCase
                 'revision_no' => 1,
                 'category_id' => $categoryId,
                 'name' => $name,
-                'base_unit_code' => 'g',
-                'base_unit_dimension' => 'MASS',
+                'base_unit_code' => $baseUnitCode,
+                'base_unit_dimension' => $baseUnitDimension,
                 'allergen_state' => 'DECLARED',
                 'critical_change' => false,
                 'created_by' => $this->steward->id,

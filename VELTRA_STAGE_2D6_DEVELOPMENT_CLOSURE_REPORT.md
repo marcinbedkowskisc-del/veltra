@@ -90,3 +90,31 @@ Kontrakt CSV jest zatwierdzony do przyszłej implementacji, ale Stage 2E nie zos
 Przegląd był odczytowy i nie był niezależny. Nie wykonywano testów, zmian kodu ani migracji; nie zmieniano gotowości modułów. W repozytorium widoczne były już lokalne zmiany Stage 2D; nie były one modyfikowane w ramach tego przeglądu. Nie wykonano commitów, pushy ani wdrożenia.
 
 **Podsumowanie:** implementacja i dozwolona regresja Stage 2D są udokumentowane jako zakończone, ale formalne zamknięcie pozostaje niekompletne do czasu odrębnego, niezależnego przeglądu wymaganego przez zatwierdzony plan. Nie oznacza to wykrycia defektu aplikacyjnego ani zmiany statusu Stage 2C.
+
+---
+
+## Aneks zamknięcia rozwoju — 2026-11-05
+
+### Uzupełnienie historii przeglądu
+
+Pierwotny niezależny przegląd Stage 2D zakończył się werdyktem **FAIL** z dwoma ustaleniami: brak wymaganego atestu przy przejściu historycznej rewizji v1 do v2 oraz brak podpisanej granicy mutacji dla tabel atestów, deklaracji i wariantów. W Stage 2D.7 wdrożono remediacje opisane w [raporcie remediacji](./VELTRA_STAGE_2D7_REMEDIATION_REPORT.md), bez zmiany pierwotnego raportu ani jego historycznego werdyktu.
+
+Następnie odrębny recenzent przeprowadził niezależną, read-only weryfikację aktualnego kodu, migracji 033, testów i pierwotnych ustaleń. W [raporcie uzupełniającym niezależnego przeglądu](./VELTRA_STAGE_2D_INDEPENDENT_REVIEW_FOLLOWUP.md) oba ustalenia oznaczono jako **RESOLVED**, a końcowy werdykt jako **PASS**. Weryfikacja nie potwierdza wdrożenia migracji ani stanu jakiejkolwiek bazy produkcyjnej.
+
+Najnowsza dozwolona regresja Stage 2D.7 zakończyła się wynikiem **201 testów / 1647 asercji — PASS**, bez niepowodzeń. Dokładnie 17 ograniczonych testów Stage 2C pozostało niewykonanych i nie były odtwarzane.
+
+### Końcowy werdykt Stage 2D
+
+**DEVELOPMENT COMPLETE** — zakres rozwojowy Stage 2D.1–2D.5, remediacje Stage 2D.7 i wymagany niezależny follow-up zostały udokumentowane; oba pierwotne ustalenia zostały niezależnie zweryfikowane jako rozwiązane. Niniejsze zamknięcie dotyczy wyłącznie DEVELOPMENT. Zachowuje ono historię wcześniejszego werdyktu **FAIL** oraz jego późniejszej remediacji i weryfikacji; nie zmienia wstecznego wyniku pierwotnego przeglądu.
+
+### Statusy pozostające bez zmian
+
+- **Stage 2C:** **OPEN / NOT VERIFIED** — akceptacja bezpieczeństwa nie została udzielona.
+- **VEL-DEF-007:** **NOT VERIFIED**.
+- **17 ograniczonych testów Stage 2C:** niewykonane; ich brak nie jest wynikiem pozytywnym.
+- **Gotowość produkcyjna:** niepotwierdzona; **DEVELOPMENT COMPLETE** nie oznacza gotowości produkcyjnej ani bezpieczeństwa produkcyjnego.
+- **RAW_MATERIALS:** **NOT_READY**; nieaktywowany.
+- **VSEF:** nieaktywne.
+- **Wymagania odroczone:** globalny katalog alergenów i widoczność znaczników źródeł wyłącznie w zarządzaniu, lista alergenów krytycznych zakładu, automatyczne dziedziczenie na produkty, brak duplikatów między „ALERGENY” i „MOŻE ZAWIERAĆ”, etykiety bez znaczników kraju/źródła, implementacja Stage 2E na bazie zatwierdzonego kontraktu CSV oraz produkcyjnie ukierunkowana architektura pozostają niezaimplementowane lub odroczone zgodnie z zakresem. Stage 2E nie został rozpoczęty.
+
+Nie wykonano wdrożenia, aktywacji funkcji ani zmian statusu Stage 2C. Niniejszy aneks nie zamyka żadnej bramki bezpieczeństwa ani produkcyjnej.

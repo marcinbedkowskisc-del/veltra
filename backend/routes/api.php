@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\RawMaterialController;
+use App\Http\Controllers\Api\V1\RawMaterialCsvImportController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
@@ -61,6 +62,9 @@ Route::prefix('v1/raw-materials')->middleware([
     'throttle:security',
     RequireRawMaterialsAvailability::class,
 ])->group(function (): void {
+    Route::post('/imports', [RawMaterialCsvImportController::class, 'upload']);
+    Route::post('/imports/{preview}/commit', [RawMaterialCsvImportController::class, 'commit'])->whereUuid('preview');
+    Route::get('/imports/results/{batch}', [RawMaterialCsvImportController::class, 'result'])->whereUuid('batch');
     Route::get('/suppliers', [RawMaterialController::class, 'suppliers']);
     Route::post('/suppliers', [RawMaterialController::class, 'storeSupplier']);
     Route::post('/suppliers/{supplier}/archive', [RawMaterialController::class, 'archiveSupplier'])

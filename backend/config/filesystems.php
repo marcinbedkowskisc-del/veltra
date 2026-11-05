@@ -48,6 +48,16 @@ return [
             'report' => true,
         ],
 
+        'raw_material_csv_imports' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/raw-material-csv-imports'),
+            'serve' => false,
+            'visibility' => 'private',
+            'directory_visibility' => 'private',
+            'throw' => true,
+            'report' => true,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

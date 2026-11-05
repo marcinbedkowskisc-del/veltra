@@ -89,12 +89,14 @@ class RawMaterialConcurrencyTest extends TestCase
             $codes = [$firstResult['code'], $secondResult['code']];
             sort($codes);
 
-            $this->assertSame(['SUR-000001', 'SUR-000002'], $codes);
+            $this->assertSame(['RAW-000001', 'RAW-000002'], $codes);
             $this->assertSame(2, DB::table('raw_materials')->where('organization_id', $organization->id)->count());
             $this->assertSame(2, DB::table('raw_material_audit_events')
                 ->where('organization_id', $organization->id)->where('event_code', 'CREATED')->count());
-            $this->assertSame(2, (int) DB::table('raw_material_code_counters')
-                ->where('organization_id', $organization->id)->value('last_value'));
+            $this->assertSame(2, (int) DB::table('organization_sku_counters')
+                ->where('organization_id', $organization->id)->where('prefix', 'RAW')->value('last_value'));
+            $this->assertSame(0, (int) DB::table('organization_sku_counters')
+                ->where('organization_id', $organization->id)->where('prefix', 'SUR')->value('last_value'));
         } finally {
             $this->cleanup($processes);
         }

@@ -411,12 +411,13 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             $aliases,
             $legacyHash,
         ): void {
-            $connection->table('raw_material_code_counters')->insert([
+            $connection->table('organization_sku_counters')->insertOrIgnore([
                 'organization_id' => $this->steward->organization_id,
                 'prefix' => 'SUR',
                 'last_value' => 0,
+                'updated_at' => now(),
             ]);
-            $connection->table('raw_material_code_counters')
+            $connection->table('organization_sku_counters')
                 ->where('organization_id', $this->steward->organization_id)
                 ->where('prefix', 'SUR')->update(['last_value' => 1]);
             $connection->table('raw_materials')->insert([
@@ -426,6 +427,16 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
                 'lifecycle_state' => 'DRAFT',
                 'working_revision_id' => $revisionId,
                 'created_by' => $this->steward->id,
+            ]);
+            $connection->table('organization_sku_assignments')->insert([
+                'organization_id' => $this->steward->organization_id,
+                'sku' => 'SUR-000001',
+                'prefix' => 'SUR',
+                'sequence_number' => 1,
+                'entity_type' => 'RAW',
+                'entity_id' => $materialId,
+                'allocation_source' => 'LEGACY',
+                'assigned_by' => $this->steward->id,
             ]);
             $connection->table('raw_material_revisions')->insert([
                 'id' => $revisionId,

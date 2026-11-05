@@ -219,7 +219,7 @@ final class RawMaterialCsvImportPersistenceService
                 || array_diff($expectedKeys, array_keys($row)) !== []) {
                 throw new InvalidArgumentException('Przygotowany wiersz importu ma nieprawidłowy kształt.');
             }
-            if (! is_string($row['ingredient_id']) || ! preg_match('/\ASUR-[0-9]{6,}\z/', $row['ingredient_id'])
+            if (! is_string($row['ingredient_id']) || ! preg_match('/\A(?:RAW|SUR)-[0-9]{6,9}\z/', $row['ingredient_id'])
                 || ! is_string($row['ingredient_name']) || trim($row['ingredient_name']) === ''
                 || mb_strlen($row['ingredient_name'], 'UTF-8') > 200) {
                 throw new InvalidArgumentException('Identyfikator lub nazwa składnika ma nieprawidłowy format.');

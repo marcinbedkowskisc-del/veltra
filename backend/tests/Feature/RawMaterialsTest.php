@@ -16,8 +16,11 @@ use App\Domain\RawMaterials\RawMaterialCsvParser;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
+use App\Domain\Sku\SkuAllocationService;
+use App\Domain\Sku\SkuPrefix;
 use App\Models\Location;
 use App\Models\LocationModuleState;
+use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
@@ -76,7 +79,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'aliases' => ['Mąka tortowa'],
         ]);
 
-        $this->assertSame('SUR-000001', $material['code']);
+        $this->assertSame('RAW-000001', $material['code']);
         $this->assertSame('DRAFT', $material['lifecycle_state']);
         $this->assertSame('UNKNOWN', $material['revision']['allergen_state']);
         $this->assertSame('MASS', $material['revision']['base_unit_dimension']);
@@ -85,10 +88,142 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(2, DB::table('raw_material_aliases')->where('revision_id', $material['revision']['id'])->count());
         $this->assertSame(1, DB::table('raw_material_audit_events')
             ->where('subject_id', $material['id'])->where('event_code', 'CREATED')->count());
-        DB::statement('SET CONSTRAINTS raw_material_code_counter_consistency, raw_materials_code_counter_consistency IMMEDIATE');
-        $this->assertSame(1, (int) DB::table('raw_material_code_counters')
+        DB::statement('SET CONSTRAINTS organization_sku_counter_consistency, organization_sku_assignment_counter_consistency IMMEDIATE');
+        $this->assertSame(1, (int) DB::table('organization_sku_counters')
             ->where('organization_id', $this->steward->organization_id)
-            ->where('prefix', 'SUR')->value('last_value'));
+            ->where('prefix', 'RAW')->value('last_value'));
+        $this->assertSame('GENERATED', DB::table('organization_sku_assignments')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('sku', 'RAW-000001')->value('allocation_source'));
+    }
+
+    public function test_sku_prefixes_allocate_independently_and_reserve_unassigned_imported_numbers(): void
+    {
+        $allocation = app(SkuAllocationService::class);
+        $organizationId = $this->steward->organization_id;
+
+        $this->assertSame('INT-000010', DB::transaction(
+            fn (): string => $allocation->reserveImported(
+                $this->steward,
+                SkuPrefix::Intermediate,
+                'INT-000010',
+                Str::uuid()->toString(),
+            ),
+        ));
+        $this->assertSame('INT-000011', DB::transaction(
+            fn (): string => $allocation->allocateNext(
+                $this->steward,
+                SkuPrefix::Intermediate,
+                Str::uuid()->toString(),
+            ),
+        ));
+        $this->assertSame('INT-000005', DB::transaction(
+            fn (): string => $allocation->reserveImported(
+                $this->steward,
+                SkuPrefix::Intermediate,
+                'INT-000005',
+                Str::uuid()->toString(),
+            ),
+        ));
+        $this->assertSame('PRD-000001', DB::transaction(
+            fn (): string => $allocation->allocateNext(
+                $this->steward,
+                SkuPrefix::Product,
+                Str::uuid()->toString(),
+            ),
+        ));
+        $this->assertSame('RAW-000001', DB::transaction(
+            fn (): string => $allocation->allocateNext(
+                $this->steward,
+                SkuPrefix::Raw,
+                Str::uuid()->toString(),
+            ),
+        ));
+
+        $this->assertSame(11, (int) DB::table('organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'INT')->value('last_value'));
+        $this->assertSame(1, (int) DB::table('organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'PRD')->value('last_value'));
+        $this->assertSame(1, (int) DB::table('organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value'));
+        $this->assertSame('IMPORTED', DB::table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->where('sku', 'INT-000005')->value('allocation_source'));
+
+        try {
+            DB::transaction(fn (): string => $allocation->reserveImported(
+                $this->steward,
+                SkuPrefix::Intermediate,
+                'INT-000005',
+                Str::uuid()->toString(),
+            ));
+            $this->fail('Zarezerwowany numer SKU nie może zostać przypisany ponownie.');
+        } catch (\DomainException $exception) {
+            $this->assertStringContainsString('już użyty', $exception->getMessage());
+        }
+
+        $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('organization_sku_assignments')->insert([
+            'organization_id' => $organizationId,
+            'sku' => 'MEN-000001',
+            'prefix' => 'MEN',
+            'sequence_number' => 1,
+            'entity_type' => 'MEN',
+            'entity_id' => Str::uuid()->toString(),
+            'allocation_source' => 'IMPORTED',
+            'assigned_by' => $this->steward->id,
+            'created_at' => now(),
+        ]));
+        $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->where('sku', 'INT-000005')
+            ->update(['sku' => 'INT-000006']));
+    }
+
+    public function test_sku_counters_are_scoped_to_each_organization(): void
+    {
+        $setup = DB::connection('pgsql_setup');
+        $setup->statement('ALTER TABLE public.organizations DROP CONSTRAINT organizations_single_installation_unique');
+
+        try {
+            $foreignOrganization = Organization::on('pgsql_setup')->create([
+                'name' => 'Druga organizacja SKU',
+                'code' => 'SKU-FOREIGN',
+            ]);
+            $foreignActor = User::on('pgsql_setup')->create([
+                'organization_id' => $foreignOrganization->id,
+                'first_name' => 'Test',
+                'last_name' => 'Tenant',
+                'email' => 'sku-foreign@example.test',
+                'password' => self::PASSWORD,
+                'is_active' => true,
+            ]);
+            $foreignActor->forceFill(['email_verified_at' => now()])->save();
+            $allocation = app(SkuAllocationService::class);
+
+            $this->assertSame('RAW-000001', DB::transaction(
+                fn (): string => $allocation->allocateNext(
+                    $this->steward,
+                    SkuPrefix::Raw,
+                    Str::uuid()->toString(),
+                ),
+            ));
+            $this->assertSame('RAW-000001', DB::transaction(
+                fn (): string => $allocation->allocateNext(
+                    $foreignActor,
+                    SkuPrefix::Raw,
+                    Str::uuid()->toString(),
+                ),
+            ));
+            $this->assertSame(1, DB::table('organization_sku_assignments')
+                ->where('organization_id', $this->steward->organization_id)
+                ->where('sku', 'RAW-000001')->count());
+            $this->assertSame(1, DB::table('organization_sku_assignments')
+                ->where('organization_id', $foreignOrganization->id)
+                ->where('sku', 'RAW-000001')->count());
+        } finally {
+            $this->resetTestDatabase();
+            $setup->statement(
+                'ALTER TABLE public.organizations ADD CONSTRAINT organizations_single_installation_unique UNIQUE (installation)',
+            );
+        }
     }
 
     public function test_csv_import_records_metadata_baseline_and_only_genuine_history_changes(): void
@@ -367,6 +502,9 @@ class RawMaterialsTest extends AuthorizationTestCase
         $header = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n";
         $valid = $parser->parse($header."SUR-000123;\"Mąka; drobna\";4.125;23;kg;2026-11-01\n");
         $this->assertSame('Mąka; drobna', $valid[0]['ingredient_name']);
+        $this->assertSame('RAW-000123', $parser->parse(
+            $header."RAW-000123;Mąka;4.125;23;kg;2026-11-01\n",
+        )[0]['ingredient_id']);
 
         foreach ([
             $header."SUR-000123;Mąka;4;23;kg;2026-11-01;extra\n",
@@ -2092,12 +2230,12 @@ class RawMaterialsTest extends AuthorizationTestCase
             $baseUnitCode,
             $baseUnitDimension,
         ): string {
-            $counterQuery = $connection->table('raw_material_code_counters')
+            $counterQuery = $connection->table('organization_sku_counters')
                 ->where('organization_id', $this->steward->organization_id)
                 ->where('prefix', 'SUR');
             $counter = $counterQuery->lockForUpdate()->first();
             if (! $counter) {
-                $connection->table('raw_material_code_counters')->insert([
+                $connection->table('organization_sku_counters')->insert([
                     'organization_id' => $this->steward->organization_id,
                     'prefix' => 'SUR',
                     'last_value' => 0,
@@ -2119,6 +2257,16 @@ class RawMaterialsTest extends AuthorizationTestCase
                 'lifecycle_state' => 'DRAFT',
                 'working_revision_id' => $revisionId,
                 'created_by' => $this->steward->id,
+            ]);
+            $connection->table('organization_sku_assignments')->insert([
+                'organization_id' => $this->steward->organization_id,
+                'sku' => $materialCode,
+                'prefix' => 'SUR',
+                'sequence_number' => (int) $codeParts[1],
+                'entity_type' => 'RAW',
+                'entity_id' => $materialId,
+                'allocation_source' => 'LEGACY',
+                'assigned_by' => $this->steward->id,
             ]);
             $connection->table('raw_material_revisions')->insert([
                 'id' => $revisionId,

@@ -380,13 +380,13 @@ class AuthorizationMutationBoundaryTest extends TestCase
 
         $this->assertSame(1, $connection->table('public.raw_material_categories')
             ->where('id', $categoryId)->update(['name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]));
-        $counterBefore = (int) $connection->table('raw_material_code_counters')
-            ->where('organization_id', $organizationId)->where('prefix', 'SUR')->value('last_value');
-        $this->assertSame(1, $connection->table('public.raw_material_code_counters')
-            ->where('organization_id', $organizationId)->where('prefix', 'SUR')
+        $counterBefore = (int) $connection->table('organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value');
+        $this->assertRuntimeDenied(fn () => $connection->table('public.organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'RAW')
             ->update(['last_value' => DB::raw('last_value + 1'), 'updated_at' => now()]));
-        $this->assertSame($counterBefore + 1, (int) $connection->table('raw_material_code_counters')
-            ->where('organization_id', $organizationId)->where('prefix', 'SUR')->value('last_value'));
+        $this->assertSame($counterBefore, (int) $connection->table('organization_sku_counters')
+            ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value'));
 
         $auditCountBefore = (int) $connection->table('raw_materials_commercial_audit_events')->count();
         $this->assertSame(1, $connection->table('public.organization_suppliers')

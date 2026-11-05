@@ -13,7 +13,7 @@ Import zapisuje cenę referencyjną składnika; nie jest zdarzeniem ceny pojedyn
 ## 2. Istniejąca tożsamość i docelowy strumień cen
 
 - Jedyną tożsamością składnika jest istniejący rekord `raw_materials`; nie powstaje drugi katalog ani alternatywny identyfikator.
-- W kolumnie `ingredient_id` należy przekazywać niezmienny kod biznesowy `raw_materials.code` w formacie `SUR-…`, unikalny w obrębie organizacji. Import rozwiązuje go wyłącznie w organizacji bieżącego kontekstu, a następnie używa wewnętrznego UUID `raw_materials.id`. UUID nie jest drugim kluczem CSV.
+- W kolumnie `ingredient_id` należy przekazywać niezmienny kod biznesowy `raw_materials.code`, unikalny w obrębie organizacji. Nowe surowce używają formatu `RAW-…`; istniejące historyczne kody `SUR-…` pozostają ważne i nie są przepisywane. Import rozwiązuje dokładny kod wyłącznie w organizacji bieżącego kontekstu, a następnie używa wewnętrznego UUID `raw_materials.id`. UUID nie jest drugim kluczem CSV. Nie tworzy się brakujących surowców w imporcie cen.
 - `ingredient_name` pochodzi dokładnie z `raw_material_revisions.name` wskazanej przez `raw_materials.approved_revision_id`. Nie używa się aliasu, nazwy dostawcy ani nazwy z niezatwierdzonej rewizji.
 - Wartości netto są przechowywane w istniejącym append-only `raw_material_reference_price_events` jako `net_pln_per_base_unit` i `effective_from`. Ponieważ CSV nie ma kolumny waluty, `price_net` i średnia cena wejściowa są **zawsze w PLN**.
 - Ceny ofert pozostają w `supplier_offer_events`, z osobnymi walutami, jednostkami opakowania i rewizją produktu. Nie wolno używać strumienia ofert jako zamiennika ceny referencyjnej.
@@ -26,16 +26,16 @@ Kodowanie UTF-8, separator pól `;`, separator dziesiętny `.`, daty ISO `YYYY-M
 
 ```csv
 ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date
-SUR-000123;Mąka pszenna;4.1250;23;kg;2026-11-01
-SUR-000124;Mleko 2%;3.4500;5;l;2026-11-01
-SUR-000125;Jajko;0.9200;5;szt.;2026-11-01
+RAW-000123;Mąka pszenna;4.1250;23;kg;2026-11-01
+RAW-000124;Mleko 2%;3.4500;5;l;2026-11-01
+RAW-000125;Jajko;0.9200;5;szt.;2026-11-01
 ```
 
 Żadne dodatkowe, brakujące, powtórzone ani inaczej nazwane kolumny nie są akceptowane. Puste pola są błędem.
 
 | Kolumna | Kontrakt |
 |---|---|
-| `ingredient_id` | Wymagany, dokładny kod `SUR-…`. Jedyny klucz dopasowania składnika. Nie podlega normalizacji do innego rekordu. |
+| `ingredient_id` | Wymagany, dokładny kod istniejącego składnika: `RAW-…` dla nowych surowców albo historyczny `SUR-…`. Jedyny klucz dopasowania; nie podlega zamianie prefiksu ani normalizacji do innego rekordu. |
 | `ingredient_name` | Wymagana, dokładna nazwa zatwierdzonej rewizji w chwili eksportu. Tylko do kontroli przez operatora; nigdy nie jest kluczem wyszukiwania. |
 | `price_net` | Wymagana, średnia cena netto w PLN za ilość określoną w `unit`. Zapis dziesiętny ASCII z kropką, bez separatorów tysięcy, waluty, spacji i notacji wykładniczej; wartość nieujemna, w granicach precyzji zatwierdzonej dla cen (`NUMERIC`, bez float). |
 | `vat_rate` | Wymagana stawka VAT jako procent, nie ułamek: od `0` do `100`, maksymalnie dwie cyfry po kropce. Jest metadanymi podatkowymi wejścia, nie składnikiem ceny netto. |
@@ -57,7 +57,7 @@ Wiersze z ujemną ceną, wartością spoza zakresu, nieobsługiwaną jednostką,
 
 Każdy wiersz rozpatruje się wyłącznie w obrębie organizacji aktora:
 
-1. Wyszukaj `raw_materials.code = ingredient_id`. Nigdy nie wyszukuj po `ingredient_name`, nie próbuj „najlepszego dopasowania” i nie remapuj kodu.
+1. Wyszukaj dokładnie `raw_materials.code = ingredient_id`. Akceptuj kody `RAW-…` i zachowane kody historyczne `SUR-…`; nigdy nie przepisuj ani nie zamieniaj prefiksu. Nie wyszukuj po `ingredient_name`, nie próbuj „najlepszego dopasowania” i nie remapuj kodu.
 2. Brak kodu w organizacji oznacza `NIEZNANY_IDENTYFIKATOR`; cały import nie przechodzi walidacji.
 3. Rekord `BLOCKED`, `ARCHIVED`, bez zatwierdzonej rewizji lub nieaktywny nie jest kwalifikowany do zmiany ceny. Raportuje się konkretny błąd; nie reaktywuje się ani nie tworzy składnika.
 4. Porównaj `ingredient_name` znak w znak z nazwą bieżącej zatwierdzonej rewizji. Brak zgodności daje `NIEZGODNA_NAZWA` z eksportowaną nazwą i aktualną nazwą VELTRA. Wiersz nie może być zatwierdzony do importu do czasu ponownego eksportu/świadomego przygotowania pliku; nazwa nie zmienia identyfikacji i nie następuje automatyczna zmiana, remapowanie ani korekta nazwy.
@@ -141,7 +141,7 @@ Zakres wymaga migracji Stage 2E dopiero po osobnej autoryzacji implementacji. Te
 
 ## 13. Kryteria akceptacji kontraktu
 
-1. Identyfikator `SUR-…` jest jedynym kluczem dopasowania; brak/niezgodność nazwy nigdy nie remapuje składnika.
+1. Dokładny identyfikator `RAW-…` albo historyczny `SUR-…` jest jedynym kluczem dopasowania; brak/niezgodność nazwy nigdy nie remapuje składnika.
 2. Eksport zawiera dokładną nazwę aktualnej zatwierdzonej rewizji i nie ujawnia cen.
 3. Parser przestrzega UTF-8, `;`, kropki dziesiętnej, ścisłego nagłówka i obsługi quoting; błędny format nie daje częściowych zapisów.
 4. Cena jest przeliczana wyłącznie w obrębie wymiaru i dokładnych współczynników zatwierdzonej rewizji; używa PLN i istniejącej historii cen referencyjnych.

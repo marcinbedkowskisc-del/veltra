@@ -4,6 +4,8 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Sku\SkuAllocationService;
+use App\Domain\Sku\SkuPrefix;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
@@ -17,6 +19,7 @@ final class RawMaterialService
     public function __construct(
         private RawMaterialAuthorization $authorization,
         private AuthorizationMutationContext $contexts,
+        private SkuAllocationService $skuAllocation,
     ) {}
 
     public function categories(User $actor, Location $context): array
@@ -211,23 +214,17 @@ final class RawMaterialService
             $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
             $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
             $this->assertNoDuplicateTerms($actor, $aliases, null);
-            $this->ensureCounter($actor->organization_id);
-            $counter = DB::table('raw_material_code_counters')->where('organization_id', $actor->organization_id)
-                ->where('prefix', 'SUR')->lockForUpdate()->firstOrFail();
-            $next = $counter->last_value + 1;
-            if ($next > 999999999) {
+            $materialId = Str::uuid()->toString();
+            $revisionId = Str::uuid()->toString();
+            $now = now();
+            try {
+                $code = $this->skuAllocation->allocateNext($actor, SkuPrefix::Raw, $materialId);
+            } catch (\InvalidArgumentException $exception) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_CODE_CAPACITY_REACHED',
                     __('messages.raw_material_code_capacity_reached'),
                 );
             }
-            DB::table('raw_material_code_counters')->where('organization_id', $actor->organization_id)
-                ->where('prefix', 'SUR')->update(['last_value' => $next, 'updated_at' => now()]);
-
-            $materialId = Str::uuid()->toString();
-            $revisionId = Str::uuid()->toString();
-            $now = now();
-            $code = 'SUR-'.str_pad((string) $next, 6, '0', STR_PAD_LEFT);
             DB::table('raw_materials')->insert([
                 'id' => $materialId,
                 'organization_id' => $actor->organization_id,
@@ -1371,16 +1368,6 @@ final class RawMaterialService
         }
 
         return $category;
-    }
-
-    private function ensureCounter(string $organizationId): void
-    {
-        DB::table('raw_material_code_counters')->insertOrIgnore([
-            'organization_id' => $organizationId,
-            'prefix' => 'SUR',
-            'last_value' => 0,
-            'updated_at' => now(),
-        ]);
     }
 
     private function material(User $actor, string $materialId, bool $lock = false): object

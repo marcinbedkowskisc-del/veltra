@@ -60,10 +60,10 @@ final class RawMaterialCsvParser
             }
 
             [$ingredientId, $ingredientName, $priceNet, $vatRate, $unit, $effectiveDate] = $fields;
-            if (! preg_match('/\ASUR-[0-9]{6,}\z/', $ingredientId)) {
+            if (! preg_match('/\A(?:RAW|SUR)-[0-9]{6,9}\z/', $ingredientId)) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_CSV_IDENTIFIER_INVALID',
-                    "Wiersz {$rowNumber} zawiera nieprawidłowy identyfikator SUR.",
+                    "Wiersz {$rowNumber} zawiera nieprawidłowy identyfikator RAW albo historyczny SUR.",
                     422,
                     ['row_number' => $rowNumber],
                 );

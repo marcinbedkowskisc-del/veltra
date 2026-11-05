@@ -164,6 +164,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.mutate');
     }
 
+    public static function skuAllocate(): self
+    {
+        return new self('sku.allocate');
+    }
+
     public static function rawMaterialAllergenManage(): self
     {
         return new self('raw-material.allergen.manage');

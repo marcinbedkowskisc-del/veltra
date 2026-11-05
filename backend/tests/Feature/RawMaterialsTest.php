@@ -605,6 +605,188 @@ class RawMaterialsTest extends AuthorizationTestCase
         ])->assertForbidden();
     }
 
+    public function test_catalog_csv_export_contains_only_exact_active_approved_names_and_is_sorted(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $categoryId = $this->category()['id'];
+        $this->declaredMaterial($categoryId, 'Nieopublikowany szkic');
+        $second = $this->activeCsvWorkflowMaterial('Mąka; "biała"', categoryId: $categoryId);
+        $first = $this->activeCsvWorkflowMaterial('Żurawina', categoryId: $categoryId);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        DB::enableQueryLog();
+        DB::flushQueryLog();
+        $created = $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertCreated()
+            ->assertJsonPath('data.row_count', 2);
+        $catalogQueries = collect(DB::getQueryLog())->filter(
+            fn (array $query): bool => str_contains(strtolower($query['query']), 'from "raw_materials" as "materials"'),
+        );
+        DB::disableQueryLog();
+        $this->assertCount(1, $catalogQueries);
+        $this->assertContains(
+            $this->steward->organization_id,
+            $catalogQueries->first()['bindings'],
+            'Katalog musi być ograniczony do organizacji aktora.',
+        );
+        $export = $created->json('data');
+        $this->assertSame(
+            '/api/v1/raw-materials/catalog-exports/'.$export['export_id'].'/download',
+            $export['download_url'],
+        );
+        $files = Storage::disk('raw_material_csv_exports')->allFiles();
+        $this->assertCount(1, $files);
+        $this->assertStringNotContainsString('SUR-', $files[0]);
+        $this->assertStringNotContainsString('://', $files[0]);
+
+        $download = $this->actingAs($this->steward, 'web')->get($export['download_url'])->assertOk();
+        $download->assertHeader('content-type', 'text/csv; charset=UTF-8')
+            ->assertHeader('cache-control', 'no-store, private')
+            ->assertHeader('x-content-type-options', 'nosniff');
+        $csv = $download->streamedContent();
+        $this->assertSame(hash('sha256', $csv), $export['sha256']);
+        $stream = fopen('php://temp', 'w+b');
+        fwrite($stream, $csv);
+        rewind($stream);
+        $rows = [];
+        while (($row = fgetcsv($stream, null, ';', '"', '')) !== false) {
+            $rows[] = $row;
+        }
+        fclose($stream);
+
+        $this->assertSame(['ingredient_id', 'ingredient_name'], $rows[0]);
+        $this->assertSame(2, count($rows[1]));
+        $this->assertSame(2, count($rows[2]));
+        $this->assertSame(
+            [$second['code'], $first['code']],
+            array_column(array_slice($rows, 1), 0),
+        );
+        $this->assertSame(
+            [$second['name'], $first['name']],
+            array_column(array_slice($rows, 1), 1),
+        );
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $export['export_id'])
+            ->where('event_code', 'CSV_CATALOG_EXPORT_CREATED')
+            ->where('outcome', 'ACCEPTED')
+            ->count());
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $export['export_id'])
+            ->where('event_code', 'CSV_CATALOG_EXPORT_DOWNLOADED')
+            ->where('outcome', 'ACCEPTED')
+            ->count());
+    }
+
+    public function test_catalog_csv_export_rejects_formula_risk_names_without_creating_a_file(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $categoryId = $this->category()['id'];
+        $materials = [];
+        foreach ([' =1+1', '+1', '-1', '@SUM(A1:A2)', "\tvalue", "\x01value"] as $name) {
+            $materials[] = $this->activeCsvWorkflowMaterial($name, categoryId: $categoryId);
+        }
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertUnprocessable()
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_EXPORT_FORMULA_RISK')
+            ->assertJsonPath('error.details.ingredient_ids', array_column($materials, 'code'));
+
+        $this->assertSame([], Storage::disk('raw_material_csv_exports')->allFiles());
+        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
+            ->where('event_code', 'CSV_CATALOG_EXPORT_REJECTED')
+            ->where('reason_code', 'FORMULA_RISK_NAME')
+            ->where('outcome', 'REJECTED')
+            ->count());
+    }
+
+    public function test_catalog_csv_export_requires_view_permission_and_reauthorizes_download(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $this->activeCsvWorkflowMaterial('Widoczny składnik');
+        $viewer = $this->user('raw-material-catalog-reader@example.test');
+        app(MembershipService::class)->assign($viewer, $this->location);
+        $grant = app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $viewer,
+            RawMaterialPermission::View,
+            'Eksport zatwierdzonego katalogu',
+        );
+        $this->selectRawMaterialApiContext($viewer);
+        $export = $this->actingAs($viewer, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertCreated()
+            ->json('data');
+
+        app(OrganizationRawMaterialPermissionAdministration::class)->revoke(
+            $this->steward,
+            $this->location,
+            $grant['id'],
+            'Wycofanie dostępu do katalogu',
+        );
+        $this->selectRawMaterialApiContext($viewer);
+        $this->actingAs($viewer, 'web')
+            ->get($export['download_url'])
+            ->assertForbidden();
+        $this->actingAs($viewer, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertForbidden();
+
+        $this->assertSame(0, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $export['export_id'])
+            ->where('event_code', 'CSV_CATALOG_EXPORT_DOWNLOADED')
+            ->count());
+    }
+
+    public function test_catalog_csv_export_limits_leave_no_partial_file_and_readiness_gate_blocks_export(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $this->activeCsvWorkflowMaterial('Składnik testu limitu');
+        $this->selectRawMaterialApiContext($this->steward);
+        config(['raw_material_csv.export_max_rows' => 0]);
+
+        $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertStatus(413)
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_EXPORT_ROW_LIMIT');
+        $this->assertSame([], Storage::disk('raw_material_csv_exports')->allFiles());
+
+        config(['raw_material_csv.export_max_rows' => 5000]);
+        config(['raw_material_csv.export_max_bytes' => 1]);
+
+        $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertStatus(413)
+            ->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_EXPORT_SIZE_LIMIT');
+        $this->assertSame([], Storage::disk('raw_material_csv_exports')->allFiles());
+
+        config(['raw_material_csv.export_max_bytes' => 5 * 1024 * 1024]);
+        $export = $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertCreated()
+            ->json('data');
+        $this->app->instance(ModuleCatalog::class, new DefinedModuleCatalog([
+            new ModuleDefinition(
+                'RAW_MATERIALS',
+                'Surowce',
+                'RAW_MATERIALS_VIEW',
+                [LocationType::CentralKitchen, LocationType::Restaurant],
+            ),
+        ]));
+
+        $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertStatus(503)
+            ->assertJsonPath('error.code', 'RAW_MATERIALS_MODULE_UNAVAILABLE');
+        $this->actingAs($this->steward, 'web')
+            ->get($export['download_url'])
+            ->assertStatus(503)
+            ->assertJsonPath('error.code', 'RAW_MATERIALS_MODULE_UNAVAILABLE');
+    }
+
     public function test_view_only_reader_cannot_discover_drafts_or_pending_revisions(): void
     {
         $category = $this->category();

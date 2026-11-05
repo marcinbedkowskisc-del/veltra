@@ -12,6 +12,9 @@ class RequireSpaSession
     {
         abort_unless($request->hasSession() && $request->attributes->get('sanctum'), 401, __('messages.first_party_session_required'));
 
-        return $next($request)->header('Cache-Control', 'no-store');
+        $response = $next($request);
+        $response->headers->set('Cache-Control', 'no-store');
+
+        return $response;
     }
 }

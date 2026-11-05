@@ -2,9 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
@@ -226,7 +229,151 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         ]));
     }
 
+    public function test_v1_declared_revision_cannot_be_approved_as_v2_without_a_new_exact_revision_attestation(): void
+    {
+        $legacy = $this->createLegacyDeclaredV1Revision();
+        $legacyRevision = DB::table('raw_material_revisions')->where('id', $legacy['revision_id'])->first();
+        $this->assertSame(1, (int) $legacyRevision->content_hash_version);
+        $this->assertSame($legacy['hash'], $this->calculateRevisionHash($legacyRevision));
+
+        $v2 = $this->rawMaterials->revise($this->steward, $this->location, $legacy['material_id'], [
+            'category_id' => $this->categoryId,
+            'name' => 'Historyczny materiał po rewizji',
+            'base_unit_code' => 'g',
+        ]);
+        $v2RevisionId = $v2['revision']['id'];
+        $v2Revision = DB::table('raw_material_revisions')->where('id', $v2RevisionId)->first();
+        $this->assertSame(2, (int) $v2Revision->content_hash_version);
+        $this->assertSame('DECLARED', $v2Revision->allergen_state);
+        $this->assertSame(0, DB::table('raw_material_revision_allergen_attestations')
+            ->where('revision_id', $v2RevisionId)->count());
+        $this->assertRevisionHashMatches($v2Revision);
+
+        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id']);
+        try {
+            $this->rawMaterials->approve(
+                $this->steward,
+                $this->location,
+                $legacy['material_id'],
+                'Próba zatwierdzenia bez nowego atestu',
+            );
+            $this->fail('A v2 revision inherited DECLARED state without an exact-revision attestation.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', $exception->errorCode);
+        }
+
+        $this->rawMaterials->returnForChanges(
+            $this->steward,
+            $this->location,
+            $legacy['material_id'],
+            'Wymagany nowy atest',
+        );
+        $catalogVersionId = $this->publishedCatalog([
+            ['allergen_code' => 'TEST_WHEAT', 'name_pl' => 'Pszenica'],
+        ]);
+        $attested = $this->rawMaterials->reviseAllergenDeclaration(
+            $this->steward,
+            $this->location,
+            $legacy['material_id'],
+            [
+                'status' => 'DECLARED',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
+            ],
+        );
+        $attestedRevisionId = $attested['revision']['id'];
+        $attestedRevision = DB::table('raw_material_revisions')->where('id', $attestedRevisionId)->first();
+        $this->assertRevisionHashMatches($attestedRevision);
+        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id']);
+        $approved = $this->rawMaterials->approve(
+            $this->steward,
+            $this->location,
+            $legacy['material_id'],
+            'Zatwierdzenie po jawnym atestowaniu',
+        );
+
+        $this->assertSame($attestedRevisionId, $approved['approved_revision_id']);
+        $this->assertSame($legacy['hash'], DB::table('raw_material_revisions')
+            ->where('id', $legacy['revision_id'])->value('content_hash'));
+    }
+
+    public function test_runtime_inserts_require_scoped_signed_mutation_context_for_stage2d_tables(): void
+    {
+        $catalogVersionId = $this->publishedCatalog([
+            ['allergen_code' => 'TEST_WHEAT', 'name_pl' => 'Pszenica'],
+            ['allergen_code' => 'TEST_MILK', 'name_pl' => 'Mleko'],
+        ]);
+        $material = $this->createMaterial('Materiał z podpisanymi mutacjami', [
+            'allergen_declaration' => [
+                'status' => 'DECLARED',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
+            ],
+            'storage_variants' => [$this->storageVariant()],
+        ]);
+        $revisionId = $material['revision']['id'];
+        $attestation = DB::table('raw_material_revision_allergen_attestations')
+            ->where('revision_id', $revisionId)->first();
+
+        $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection
+            ->table('raw_material_revision_allergen_attestations')->insert([
+                'revision_id' => $revisionId,
+                'organization_id' => $this->steward->organization_id,
+                'catalog_version_id' => $attestation->catalog_version_id,
+                'attestation_status' => $attestation->attestation_status,
+                'attested_by' => $attestation->attested_by,
+                'attested_at' => $attestation->attested_at,
+            ]));
+
+        $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection
+            ->table('raw_material_revision_allergen_declarations')->insert([
+                'revision_id' => $revisionId,
+                'organization_id' => $this->steward->organization_id,
+                'catalog_version_id' => $catalogVersionId,
+                'allergen_code' => 'TEST_MILK',
+                'exposure_kind' => 'DIRECT',
+            ]));
+
+        $this->assertRuntimeDatabaseRejects('42501', fn () => app(AuthorizationMutationContext::class)
+            ->runForSubject(
+                AuthorizationMutationScope::rawMaterialAllergenManage(),
+                $this->steward->id,
+                Str::uuid()->toString(),
+                fn () => DB::connection('pgsql')->table('raw_material_revision_allergen_declarations')->insert([
+                    'revision_id' => $revisionId,
+                    'organization_id' => $this->steward->organization_id,
+                    'catalog_version_id' => $catalogVersionId,
+                    'allergen_code' => 'TEST_MILK',
+                    'exposure_kind' => 'DIRECT',
+                ]),
+            ));
+
+        $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection
+            ->table('raw_material_revision_storage_variants')->insert([
+                'id' => Str::uuid()->toString(),
+                'revision_id' => $revisionId,
+                'organization_id' => $this->steward->organization_id,
+                ...$this->storageVariant('COLD', isDefault: false),
+            ]));
+
+        $this->assertSame(1, DB::table('raw_material_revision_allergen_attestations')
+            ->where('revision_id', $revisionId)->count());
+        $this->assertSame(1, DB::table('raw_material_revision_allergen_declarations')
+            ->where('revision_id', $revisionId)->count());
+        $this->assertSame(1, DB::table('raw_material_revision_storage_variants')
+            ->where('revision_id', $revisionId)->count());
+        $this->assertRevisionHashMatches(DB::table('raw_material_revisions')->where('id', $revisionId)->first());
+    }
+
     public function test_historical_revision_hash_format_remains_version_one(): void
+    {
+        $legacy = $this->createLegacyDeclaredV1Revision();
+        $revision = DB::table('raw_material_revisions')->where('id', $legacy['revision_id'])->first();
+        $this->assertSame(1, (int) $revision->content_hash_version);
+        $this->assertSame($legacy['hash'], $this->calculateRevisionHash($revision));
+    }
+
+    private function createLegacyDeclaredV1Revision(): array
     {
         $materialId = Str::uuid()->toString();
         $revisionId = Str::uuid()->toString();
@@ -269,7 +416,8 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
                 'prefix' => 'SUR',
                 'last_value' => 0,
             ]);
-            $connection->table('raw_material_code_counters')->where('organization_id', $this->steward->organization_id)
+            $connection->table('raw_material_code_counters')
+                ->where('organization_id', $this->steward->organization_id)
                 ->where('prefix', 'SUR')->update(['last_value' => 1]);
             $connection->table('raw_materials')->insert([
                 'id' => $materialId,
@@ -310,9 +458,11 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             ]);
         });
 
-        $revision = DB::table('raw_material_revisions')->where('id', $revisionId)->first();
-        $this->assertSame(1, (int) $revision->content_hash_version);
-        $this->assertSame($legacyHash, $this->calculateRevisionHash($revision));
+        return [
+            'material_id' => $materialId,
+            'revision_id' => $revisionId,
+            'hash' => $legacyHash,
+        ];
     }
 
     private function createMaterial(string $name, array $extra = []): array
@@ -398,6 +548,19 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         }
 
         $this->fail("PostgreSQL did not reject the operation with SQLSTATE {$sqlState}.");
+    }
+
+    protected function assertRuntimeDatabaseRejects(string $sqlState, callable $operation): void
+    {
+        try {
+            $operation(DB::connection('pgsql'));
+        } catch (QueryException $exception) {
+            $this->assertSame($sqlState, $exception->errorInfo[0] ?? null);
+
+            return;
+        }
+
+        $this->fail("PostgreSQL runtime role did not reject the operation with SQLSTATE {$sqlState}.");
     }
 
     private function bootstrapFixtureGrants(): void

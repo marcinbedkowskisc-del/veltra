@@ -240,6 +240,7 @@ final class RawMaterialService
             ]);
             $revision = $this->insertRevision(
                 $actor,
+                $context,
                 $materialId,
                 $revisionId,
                 1,
@@ -484,6 +485,7 @@ final class RawMaterialService
             $criticalChange = $material->lifecycle_state === 'ACTIVE';
             $revision = $this->insertRevision(
                 $actor,
+                $context,
                 $materialId,
                 $revisionId,
                 $latestNo + 1,
@@ -644,8 +646,11 @@ final class RawMaterialService
                 'reason' => $reason,
                 'content_hash' => $revision->content_hash,
             ]);
+            $returnedState = $material->lifecycle_state === 'VERIFICATION'
+                ? ($material->approved_revision_id === null ? 'DRAFT' : 'ACTIVE')
+                : $material->lifecycle_state;
             DB::table('raw_materials')->where('id', $materialId)->update([
-                'lifecycle_state' => $material->lifecycle_state === 'VERIFICATION' ? 'DRAFT' : $material->lifecycle_state,
+                'lifecycle_state' => $returnedState,
                 'pending_revision_id' => null,
                 'working_revision_id' => $revision->id,
                 'updated_at' => now(),
@@ -672,6 +677,14 @@ final class RawMaterialService
             }
             $revision = DB::table('raw_material_revisions')->where('id', $material->pending_revision_id)->firstOrFail();
             if ($revision->allergen_state !== 'DECLARED') {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED',
+                    __('messages.raw_material_allergen_declaration_required'),
+                    422,
+                );
+            }
+            if ((int) $revision->content_hash_version === 2
+                && ! $this->hasValidV2AllergenAttestation($revision)) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED',
                     __('messages.raw_material_allergen_declaration_required'),
@@ -847,6 +860,7 @@ final class RawMaterialService
             $input['storage_variants'] = $this->storageVariantsForRevision($approved->id);
             $revision = $this->insertRevision(
                 $actor,
+                $context,
                 $materialId,
                 $revisionId,
                 $latestNo + 1,
@@ -877,6 +891,7 @@ final class RawMaterialService
 
     private function insertRevision(
         User $actor,
+        Location $context,
         string $materialId,
         string $revisionId,
         int $revisionNo,
@@ -887,12 +902,20 @@ final class RawMaterialService
         ?string $reason,
         string $allergenState = 'UNKNOWN',
     ): array {
+        $createdAt = now();
         $stage2d = $this->prepareStage2dSnapshot(
             $input['allergen_declaration'] ?? null,
             $input['storage_variants'] ?? [],
             $actor,
             $allergenState,
+            $createdAt,
         );
+        if ($stage2d['attestation'] !== null) {
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AllergenManage);
+        }
+        if ($stage2d['storage_rows'] !== []) {
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::StorageManage);
+        }
         $payload = [
             'category_id' => $input['category_id'],
             'name' => trim($input['name']),
@@ -917,7 +940,7 @@ final class RawMaterialService
             'critical_change' => $critical,
             'change_reason' => $reason,
             'created_by' => $actor->id,
-            'created_at' => now(),
+            'created_at' => $createdAt,
             'content_hash_version' => 2,
             'content_hash' => $hash,
         ];
@@ -942,30 +965,99 @@ final class RawMaterialService
             ]);
         }
         if ($stage2d['attestation'] !== null) {
-            DB::table('raw_material_revision_allergen_attestations')->insert([
-                'revision_id' => $revisionId,
-                'organization_id' => $actor->organization_id,
-                ...$stage2d['attestation'],
-            ]);
-            foreach ($stage2d['declarations'] as $declaration) {
-                DB::table('raw_material_revision_allergen_declarations')->insert([
-                    'revision_id' => $revisionId,
-                    'organization_id' => $actor->organization_id,
-                    'catalog_version_id' => $stage2d['attestation']['catalog_version_id'],
-                    ...$declaration,
-                ]);
-            }
+            $this->contexts->runForSubject(
+                AuthorizationMutationScope::rawMaterialAllergenManage(),
+                $actor->id,
+                $actor->organization_id,
+                function () use ($actor, $revisionId, $stage2d): void {
+                    DB::table('raw_material_revision_allergen_attestations')->insert([
+                        'revision_id' => $revisionId,
+                        'organization_id' => $actor->organization_id,
+                        ...$stage2d['attestation'],
+                    ]);
+                    foreach ($stage2d['declarations'] as $declaration) {
+                        DB::table('raw_material_revision_allergen_declarations')->insert([
+                            'revision_id' => $revisionId,
+                            'organization_id' => $actor->organization_id,
+                            'catalog_version_id' => $stage2d['attestation']['catalog_version_id'],
+                            ...$declaration,
+                        ]);
+                    }
+                },
+            );
         }
-        foreach ($stage2d['storage_rows'] as $storageVariant) {
-            DB::table('raw_material_revision_storage_variants')->insert([
-                'id' => Str::uuid()->toString(),
-                'revision_id' => $revisionId,
-                'organization_id' => $actor->organization_id,
-                ...$storageVariant,
-            ]);
+        if ($stage2d['storage_rows'] !== []) {
+            $this->contexts->runForSubject(
+                AuthorizationMutationScope::rawMaterialStorageManage(),
+                $actor->id,
+                $actor->organization_id,
+                function () use ($actor, $revisionId, $stage2d): void {
+                    foreach ($stage2d['storage_rows'] as $storageVariant) {
+                        DB::table('raw_material_revision_storage_variants')->insert([
+                            'id' => Str::uuid()->toString(),
+                            'revision_id' => $revisionId,
+                            'organization_id' => $actor->organization_id,
+                            ...$storageVariant,
+                        ]);
+                    }
+                },
+            );
         }
 
         return $revision;
+    }
+
+    private function hasValidV2AllergenAttestation(object $revision): bool
+    {
+        $attestation = DB::table('raw_material_revision_allergen_attestations as attestations')
+            ->join('raw_material_allergen_catalog_versions as versions', 'versions.id', '=', 'attestations.catalog_version_id')
+            ->join('users', function ($join): void {
+                $join->on('users.id', '=', 'attestations.attested_by')
+                    ->on('users.organization_id', '=', 'attestations.organization_id');
+            })
+            ->where('attestations.revision_id', $revision->id)
+            ->where('attestations.organization_id', $revision->organization_id)
+            ->where('versions.status', 'PUBLISHED')
+            ->select([
+                'attestations.catalog_version_id',
+                'attestations.attestation_status',
+                'attestations.attested_at',
+            ])
+            ->first();
+
+        if ($attestation === null) {
+            return false;
+        }
+
+        $attestedAt = Carbon::parse($attestation->attested_at);
+        if ($attestedAt->gt(now())) {
+            return false;
+        }
+
+        $declarations = DB::table('raw_material_revision_allergen_declarations as declarations')
+            ->leftJoin('raw_material_allergen_definitions as definitions', function ($join): void {
+                $join->on('definitions.catalog_version_id', '=', 'declarations.catalog_version_id')
+                    ->on('definitions.allergen_code', '=', 'declarations.allergen_code');
+            })
+            ->where('declarations.revision_id', $revision->id)
+            ->where('declarations.organization_id', $revision->organization_id)
+            ->where('declarations.catalog_version_id', $attestation->catalog_version_id);
+        $declarationCount = (clone $declarations)->count();
+        $hasInvalidDeclaration = (clone $declarations)
+            ->where(function ($query): void {
+                $query->whereNull('definitions.allergen_code')
+                    ->orWhere('definitions.is_active', false);
+            })
+            ->exists();
+
+        return match ($attestation->attestation_status) {
+            'DECLARED' => $revision->allergen_state === 'DECLARED'
+                && $declarationCount > 0
+                && ! $hasInvalidDeclaration,
+            'NO_KNOWN_ALLERGENS' => $revision->allergen_state === 'DECLARED'
+                && $declarationCount === 0,
+            default => false,
+        };
     }
 
     private function hashFromDatabase(object $revision): string
@@ -1077,6 +1169,7 @@ final class RawMaterialService
         array $storageVariants,
         User $actor,
         string $allergenState,
+        Carbon $revisionCreatedAt,
     ): array {
         $attestation = null;
         $declarations = [];
@@ -1107,7 +1200,7 @@ final class RawMaterialService
             }
 
             $attestedBy = $allergenDeclaration['attested_by'] ?? $actor->id;
-            $attestedAt = $allergenDeclaration['attested_at'] ?? now();
+            $attestedAt = $allergenDeclaration['attested_at'] ?? $revisionCreatedAt;
             $canonicalDeclaration = [
                 'status' => $status,
                 'catalog_version_number' => (int) $catalogVersionNumber,

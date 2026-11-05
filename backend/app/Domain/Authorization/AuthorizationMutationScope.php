@@ -164,6 +164,16 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.mutate');
     }
 
+    public static function rawMaterialAllergenManage(): self
+    {
+        return new self('raw-material.allergen.manage');
+    }
+
+    public static function rawMaterialStorageManage(): self
+    {
+        return new self('raw-material.storage.manage');
+    }
+
     public static function rawMaterialDocumentScanResult(): self
     {
         return new self('raw-material.document.scan-result');

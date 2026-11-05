@@ -194,13 +194,16 @@ class RawMaterialsTest extends AuthorizationTestCase
             'description' => 'Zmiana oczekuje na zatwierdzenie',
             'base_unit_code' => 'g',
         ]);
-        $pendingRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
-        $this->assertNotSame($approvedRevisionId, $pendingRevisionId);
+        $unattestedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
+        $this->assertNotSame($approvedRevisionId, $unattestedRevisionId);
         $this->assertSame('DECLARED', DB::table('raw_material_revisions')
-            ->where('id', $pendingRevisionId)->value('allergen_state'));
+            ->where('id', $unattestedRevisionId)->value('allergen_state'));
         $this->assertSame('Materiał przed zmianą', $this->rawMaterialService
             ->show($this->steward, $this->location, $materialId)['revision']['name']);
 
+        $this->attestWorkingRevision($materialId);
+        $pendingRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
+        $this->assertNotSame($unattestedRevisionId, $pendingRevisionId);
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
         $this->assertSame($approvedRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id'));
         $this->assertSame($pendingRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('pending_revision_id'));
@@ -312,6 +315,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $materialId = $this->declaredMaterial($category['id'], 'Sól morska');
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
         $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsza akceptacja');
+        $approvedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
         $code = DB::table('raw_materials')->where('id', $materialId)->value('code');
 
         $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola bezpieczeństwa');
@@ -327,16 +331,27 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->rawMaterialService->archive($this->steward, $this->location, $materialId, 'Wycofanie z katalogu');
         $this->rawMaterialService->restore($this->steward, $this->location, $materialId, 'Ponowna walidacja');
         $this->assertSame('VERIFICATION', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
+        $this->rawMaterialService->returnForChanges(
+            $this->steward,
+            $this->location,
+            $materialId,
+            'Wymagany nowy atest po przywróceniu',
+        );
+        $returnedMaterial = DB::table('raw_materials')->where('id', $materialId)->first();
+        $this->assertSame('ACTIVE', $returnedMaterial->lifecycle_state);
+        $this->assertSame($approvedRevisionId, $returnedMaterial->approved_revision_id);
+        $this->attestWorkingRevision($materialId);
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
         $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowna akceptacja');
 
         $this->assertSame($code, DB::table('raw_materials')->where('id', $materialId)->value('code'));
-        $this->assertSame(2, DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->count());
+        $this->assertSame(3, DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->count());
         $this->assertSame(2, DB::table('raw_material_revision_approval_events as approvals')
             ->join('raw_material_revisions as revisions', 'revisions.id', '=', 'approvals.revision_id')
             ->where('revisions.raw_material_id', $materialId)
             ->where('approvals.outcome', 'APPROVED')->count());
         $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
-        $this->assertSame(7, DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count());
+        $this->assertSame(10, DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count());
     }
 
     public function test_unblock_state_and_immutable_audit_record_roll_back_together(): void
@@ -1352,5 +1367,34 @@ class RawMaterialsTest extends AuthorizationTestCase
 
             return $materialId;
         });
+    }
+
+    private function attestWorkingRevision(string $materialId): void
+    {
+        $catalogVersionId = Str::uuid()->toString();
+        $versionNumber = (int) DB::connection('pgsql_setup')
+            ->table('raw_material_allergen_catalog_versions')->max('version_number') + 1;
+        $this->withSetupTransaction(function (Connection $connection) use ($catalogVersionId, $versionNumber): void {
+            $connection->table('raw_material_allergen_catalog_versions')->insert([
+                'id' => $catalogVersionId,
+                'version_number' => $versionNumber,
+                'status' => 'DRAFT',
+            ]);
+            $connection->table('raw_material_allergen_definitions')->insert([
+                'catalog_version_id' => $catalogVersionId,
+                'allergen_code' => 'TEST_WHEAT',
+                'name_pl' => 'Pszenica',
+                'display_order' => 1,
+            ]);
+            $connection->table('raw_material_allergen_catalog_versions')
+                ->where('id', $catalogVersionId)
+                ->update(['status' => 'PUBLISHED', 'published_at' => now()]);
+        });
+
+        $this->rawMaterialService->reviseAllergenDeclaration($this->steward, $this->location, $materialId, [
+            'status' => 'NO_KNOWN_ALLERGENS',
+            'catalog_version_id' => $catalogVersionId,
+            'items' => [],
+        ]);
     }
 }

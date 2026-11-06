@@ -257,6 +257,73 @@ final class RawMaterialService
         }));
     }
 
+    public function createImported(User $actor, Location $context, string $sku, array $input): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $sku, $input): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+            $this->requireCategory($actor, $input['category_id']);
+            $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], []);
+            $materialId = Str::uuid()->toString();
+            $revisionId = Str::uuid()->toString();
+            $now = now();
+
+            try {
+                $this->skuAllocation->reserveImported($actor, SkuPrefix::Raw, $sku, $materialId);
+            } catch (\InvalidArgumentException $exception) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_CATALOG_IMPORT_SKU_INVALID',
+                    'Importowany SKU nie odpowiada formatowi kategorii RAW.',
+                    422,
+                );
+            } catch (\DomainException $exception) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_CATALOG_IMPORT_SKU_CONFLICT',
+                    'Importowany SKU został już użyty albo zarezerwowany w organizacji.',
+                    409,
+                );
+            }
+
+            DB::table('raw_materials')->insert([
+                'id' => $materialId,
+                'organization_id' => $actor->organization_id,
+                'code' => $sku,
+                'lifecycle_state' => 'DRAFT',
+                'working_revision_id' => $revisionId,
+                'created_by' => $actor->id,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+            $revision = $this->insertRevision(
+                $actor,
+                $context,
+                $materialId,
+                $revisionId,
+                1,
+                $input,
+                $unitData,
+                [],
+                false,
+                'Import katalogu CSV',
+                'UNKNOWN',
+                true,
+            );
+            $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'CREATED', null, [
+                'code' => $sku,
+                'revision_id' => $revisionId,
+                'revision_hash' => $revision['content_hash'],
+                'source' => 'CATALOG_CSV_IMPORT',
+            ]);
+
+            return $this->presentMaterial(
+                DB::table('raw_materials')->where('id', $materialId)->first(),
+                (object) $revision,
+            );
+        }));
+    }
+
     public function revise(User $actor, Location $context, string $materialId, array $input): array
     {
         return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit);
@@ -898,6 +965,7 @@ final class RawMaterialService
         bool $critical,
         ?string $reason,
         string $allergenState = 'UNKNOWN',
+        bool $preserveExactName = false,
     ): array {
         $createdAt = now();
         $stage2d = $this->prepareStage2dSnapshot(
@@ -915,7 +983,7 @@ final class RawMaterialService
         }
         $payload = [
             'category_id' => $input['category_id'],
-            'name' => trim($input['name']),
+            'name' => $preserveExactName ? $input['name'] : trim($input['name']),
             'description' => $input['description'] ?? null,
             'base_unit_code' => $unitData['base_unit_code'],
             'base_unit_dimension' => $unitData['base_unit_dimension'],

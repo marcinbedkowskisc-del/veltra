@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
 use App\Http\Controllers\Api\V1\OrganizationController;
+use App\Http\Controllers\Api\V1\RawMaterialCatalogCsvImportController;
 use App\Http\Controllers\Api\V1\RawMaterialController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvCatalogExportController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvImportController;
@@ -63,9 +64,20 @@ Route::prefix('v1/raw-materials')->middleware([
     'throttle:security',
     RequireRawMaterialsAvailability::class,
 ])->group(function (): void {
+    Route::post('/catalog-imports', [RawMaterialCatalogCsvImportController::class, 'upload']);
+    Route::post('/catalog-imports/{preview}/commit', [RawMaterialCatalogCsvImportController::class, 'commit'])
+        ->whereUuid('preview');
+    Route::get('/catalog-imports/results/{batch}', [RawMaterialCatalogCsvImportController::class, 'result'])
+        ->whereUuid('batch');
     Route::post('/imports', [RawMaterialCsvImportController::class, 'upload']);
     Route::post('/imports/{preview}/commit', [RawMaterialCsvImportController::class, 'commit'])->whereUuid('preview');
     Route::get('/imports/results/{batch}', [RawMaterialCsvImportController::class, 'result'])->whereUuid('batch');
+    Route::post('/catalog-exports/extended', [RawMaterialCsvCatalogExportController::class, 'createExtended']);
+    Route::get('/catalog-exports/extended/{export}/download', [RawMaterialCsvCatalogExportController::class, 'downloadExtended'])
+        ->whereUuid('export');
+    Route::post('/reference-price-exports', [RawMaterialCsvCatalogExportController::class, 'createReferencePrices']);
+    Route::get('/reference-price-exports/{export}/download', [RawMaterialCsvCatalogExportController::class, 'downloadReferencePrices'])
+        ->whereUuid('export');
     Route::post('/catalog-exports', [RawMaterialCsvCatalogExportController::class, 'create']);
     Route::get('/catalog-exports/{export}/download', [RawMaterialCsvCatalogExportController::class, 'download'])
         ->whereUuid('export');

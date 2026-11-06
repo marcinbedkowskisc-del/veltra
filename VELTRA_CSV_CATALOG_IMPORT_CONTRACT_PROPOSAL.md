@@ -1,8 +1,10 @@
 # VELTRA 2.0 — Propozycja kontraktu importu katalogu CSV
 
-**Status:** PROPOZYCJA DO DECYZJI WŁAŚCICIELA — NIEZATWIERDZONA  
-**Data:** 6 listopada 2026 r.  
-**Zakres:** projekt kontraktu; nie jest specyfikacją wdrożeniową ani zgodą na implementację importera.
+**Status:** RAW v1 wdrożony w Stage 2E.4; rozszerzenia INT/PRD/MEN pozostają propozycją niezatwierdzoną
+
+**Data:** 6 listopada 2026 r.
+
+**Zakres:** aktualny kontrakt importu RAW v1 oraz niezatwierdzona propozycja przyszłych kategorii.
 
 ## 1. Cel i rozdzielenie przepływów
 
@@ -14,9 +16,39 @@ Import katalogu tworzy nowe rekordy katalogowe albo rozpoznaje identyczny rekord
 
 Plik katalogu nie zawiera cen, VAT, ilości zakupowych ani danych dostawców. Import nie jest kopią bazy v1.x ani bezpośrednią migracją rekordów.
 
-## 2. Proponowany format wspólny
+## Zakres wdrożony Stage 2E.4 — RAW v1
 
-Proponowana wersja 1 ma kodowanie UTF-8, separator `;`, standardowe cytowanie CSV, dokładny nagłówek i stałą kolejność:
+Obowiązujący nagłówek i kolejność kolumn:
+
+```csv
+sku;entity_type;name;description;base_unit_code;category_code
+RAW-001042;RAW;"Mąka pszenna, typ 650";"Mąka do pieczywa; przechowywać sucho";g;GRAINS
+```
+
+Wiersz tworzy szkic RAW wyłącznie wtedy, gdy podane SKU jest wolne w organizacji. Import zachowuje SKU oraz dokładną wartość `name`; nie normalizuje nazwy ani opisu.
+
+| Kolumna | Reguła RAW v1 |
+|---|---|
+| `sku` | Wymagana, dokładny format `RAW-` i 6–9 cyfr. Zachowywana wartość jest rezerwowana w istniejącym alokatorze SKU. Brak lub nieprawidłowy SKU jest błędem; importer niczego nie generuje. |
+| `entity_type` | Wymagana i równa dokładnie `RAW`. `INT`, `PRD`, `MEN` oraz inne wartości są odrzucane. |
+| `name` | Wymagana, niepusta, maksymalnie 200 znaków UTF-8. Wartość trafia do rewizji bez trimowania ani normalizacji. |
+| `description` | Opcjonalna. Puste pole zapisuje `NULL`; niepuste jest zachowywane dokładnie. |
+| `base_unit_code` | Wymagana; dozwolone wartości: `mg`, `g`, `kg`, `ml`, `l`, `pc`. |
+| `category_code` | Wymagana; kod w formacie `A-Z`, cyfr, `_` lub `-`, do 50 znaków, musi już istnieć w bieżącej organizacji. Import nie tworzy kategorii. |
+
+Plik musi mieć poprawne UTF-8, separator `;`, dokładny nagłówek, sześć pól w każdym wierszu oraz prawidłowe cytowanie CSV z podwajaniem cudzysłowów. Obsługiwane są zakończenia LF/CRLF. Limity są konfigurowalne; wartości domyślne wynoszą 5 MiB, 5000 wierszy danych i 30 minut ważności podglądu.
+
+Pełny podgląd pokazuje każdy wiersz jako `UTWORZENIE`, `BEZ ZMIAN`, `KONFLIKT` albo `BŁĄD`. Powtórzone SKU w pliku, brak SKU, niepoprawny typ, jednostka lub kategoria blokują zatwierdzenie całego pliku. Istniejący SKU z identycznym typem i atrybutami daje `BEZ ZMIAN`; każda różnica lub inna encja jest konfliktem, bez upsertu.
+
+RAW v1 odrzuca historyczne kody `SUR` w pliku katalogowym, ponieważ przyjmuje wyłącznie format `RAW-` i typ `RAW`. Istniejące rekordy i odwołania `SUR` pozostają bez zmian, a dotychczasowy import cen nadal dopasowuje je dokładnie.
+
+Upload i zatwierdzenie wymagają istniejącego członkostwa, lokalizacji operacyjnej i `RAW_MATERIALS_CREATE`; wynik wymaga `RAW_MATERIALS_VIEW`. Gotowość `RAW_MATERIALS` pozostaje obowiązkowa, a `NOT_READY` zwraca HTTP 503. Zatwierdzenie wymaga jawnego potwierdzenia, klucza idempotencji i ponownej walidacji snapshotu. Zapis SKU, szkicu, historii i audytu jest atomowy oraz używa podpisanego zakresu mutacji.
+
+Nowy rekord rozpoczyna stan `DRAFT` z niezatwierdzoną rewizją i `allergen_state=UNKNOWN`. Import nie aktywuje ani nie zatwierdza produktu, nie potwierdza alergenów, nie tworzy atestacji dostawcy ani produktu dostawcy, nie zapisuje cen i nie modyfikuje istniejącej rewizji. Brak SKU w późniejszym pliku nie usuwa ani nie archiwizuje produktu. Plik źródłowy pozostaje prywatny; API nie zwraca publicznego URL.
+
+## 2. Proponowany format wspólny dla przyszłych domen — niezatwierdzony i niewdrożony
+
+Poniższy szerszy przykład nie jest formatem aktywnego importera RAW v1. Wymaga odrębnej decyzji właściciela i nie oznacza obsługi `INT`, `PRD` ani `MEN`.
 
 ```csv
 sku;category;name;unit;category_code;description
@@ -47,7 +79,7 @@ Wszystkie kolumny mają być obecne w nagłówku, nawet jeśli nie dotyczą dane
 1. SKU jest identyfikatorem biznesowym, nie UUID. Import zachowuje dokładnie przekazaną wartość i wiąże ją z nowym wewnętrznym identyfikatorem.
 2. Brak SKU jest błędem. Import nie przydziela numeru automatycznie ani po cichu.
 3. Prefiks jest wymagany dla kategorii: `RAW`/`INT`/`PRD`/`MEN`. Nowy surowiec nie może otrzymać `SUR`.
-4. Historyczny `SUR` może pozostać przypisany do istniejącego surowca i może zostać zaakceptowany wyłącznie w jasno określonej operacji ponownego rozpoznania tego samego rekordu. Propozycja odrzuca utworzenie nowego rekordu RAW z `SUR`; wymaga potwierdzenia właściciela.
+4. Historyczny `SUR` pozostaje przypisany do istniejącego surowca. Wdrożony RAW v1 odrzuca `SUR` w pliku katalogowym; nie tworzy ani nie przepisuje historycznych rekordów. Rozpoznawanie istniejącego SUR w przyszłym imporcie wymaga osobnej decyzji.
 5. Powtórzenie SKU w jednym pliku odrzuca cały plik, niezależnie od zgodności pozostałych kolumn.
 6. SKU zajęte w organizacji przez inny rekord albo inną kategorię jest konfliktem; brak nadpisania, remapowania i cichego scalania.
 7. Rezerwacja importowanego numeru i utworzenie rekordu odbywają się w jednej transakcji. Licznik dla organizacji i prefiksu nie cofa się; generator nie może ponownie przydzielić wcześniej zarezerwowanego numeru.
@@ -96,4 +128,4 @@ Przed implementacją właściciel powinien zatwierdzić lub zmienić co najmniej
 6. uprawnienia, gotowość domen i wymagania lokalizacyjne dla każdej kategorii;
 7. limity pliku/wierszy, okres ważności podglądu i przechowywanie audytowe.
 
-**Niniejsza propozycja nie zatwierdza kontraktu ani nie autoryzuje implementacji pełnego importera katalogu.**
+**RAW v1 opisany wyżej jest zakresem wdrożonym Stage 2E.4. Pozostałe propozycje, w tym katalogi `INT`, `PRD` i `MEN`, nie są zatwierdzone ani zaimplementowane.**

@@ -22,6 +22,7 @@ final class SkuAllocationService
             $actor->id,
             $subjectId,
             function () use ($actor, $prefix, $subjectId): string {
+                $this->lockOrganization($actor);
                 $counter = $this->lockCounter($actor, $prefix);
                 $next = (int) $counter->last_value + 1;
                 $sku = $prefix->format($next);
@@ -51,6 +52,7 @@ final class SkuAllocationService
             $actor->id,
             $subjectId,
             function () use ($actor, $prefix, $sku, $subjectId, $sequence): string {
+                $this->lockOrganization($actor);
                 $counter = $this->lockCounter($actor, $prefix);
                 if (DB::table('organization_sku_assignments')
                     ->where('organization_id', $actor->organization_id)
@@ -73,8 +75,26 @@ final class SkuAllocationService
         );
     }
 
+    private function lockOrganization(User $actor): void
+    {
+        DB::table('organizations')
+            ->where('id', $actor->organization_id)
+            ->lockForUpdate()
+            ->firstOrFail();
+    }
+
     private function lockCounter(User $actor, SkuPrefix $prefix): object
     {
+        $counter = DB::table('organization_sku_counters')
+            ->where('organization_id', $actor->organization_id)
+            ->where('prefix', $prefix->value)
+            ->lockForUpdate()
+            ->first();
+
+        if ($counter !== null) {
+            return $counter;
+        }
+
         DB::table('organization_sku_counters')->insertOrIgnore([
             'organization_id' => $actor->organization_id,
             'prefix' => $prefix->value,

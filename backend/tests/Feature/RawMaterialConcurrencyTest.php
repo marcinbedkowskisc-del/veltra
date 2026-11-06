@@ -102,6 +102,110 @@ class RawMaterialConcurrencyTest extends TestCase
         }
     }
 
+    public function test_parallel_imported_reservation_and_generated_allocation_use_one_counter_without_duplicates(): void
+    {
+        $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
+        $this->resetTestDatabase();
+        $processes = [];
+
+        try {
+            $installation = app(InstallationService::class);
+            $organization = $installation->initializeOrganization(['name' => 'Concurrent Catalog Import', 'code' => 'CATCONC']);
+            $location = $installation->createLocation([
+                'name' => 'Kuchnia',
+                'code' => 'CK1',
+                'type' => 'CENTRAL_KITCHEN',
+            ]);
+            $location = $installation->updateLocation($location, ['is_active' => true]);
+            $administrator = $this->user($organization, 'catalog-concurrency-admin@example.test');
+            RoleAssignment::on('pgsql_setup')->create([
+                'organization_id' => $organization->id,
+                'user_id' => $administrator->id,
+                'role' => BusinessRole::Administrator,
+            ]);
+            app(MembershipService::class)->assign($administrator, $location);
+            $steward = $this->user($organization, 'catalog-concurrency-steward@example.test');
+            app(MembershipService::class)->assign($steward, $location);
+            $this->updateFixture($organization, ['authorization_initialized' => true]);
+            $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
+            LocationModuleState::on('pgsql_setup')->create([
+                'organization_id' => $organization->id,
+                'location_id' => $location->id,
+                'module_key' => 'RAW_MATERIALS',
+                'enabled' => true,
+                'created_by' => $administrator->id,
+                'updated_by' => $administrator->id,
+            ]);
+            $this->bootstrapPermissions($administrator, $steward);
+            $categoryId = Str::uuid()->toString();
+            DB::connection('pgsql_setup')->table('raw_material_categories')->insert([
+                'id' => $categoryId,
+                'organization_id' => $organization->id,
+                'code' => 'BASIC',
+                'name' => 'Podstawowe',
+                'depth' => 1,
+                'created_by' => $steward->id,
+            ]);
+            DB::connection('pgsql_setup')->table('organization_sku_counters')->insertOrIgnore([
+                'organization_id' => $organization->id,
+                'prefix' => 'RAW',
+                'last_value' => 0,
+                'updated_at' => now(),
+            ]);
+
+            DB::beginTransaction();
+            DB::table('organization_sku_counters')
+                ->where('organization_id', $organization->id)
+                ->where('prefix', 'RAW')
+                ->lockForUpdate()
+                ->firstOrFail();
+            $reserveName = 'catalog-reserve-'.Str::lower(Str::random(8));
+            $reserveProcess = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/concurrent_raw_material_sku_reservation.php'),
+                $steward->id,
+                'RAW-000050',
+                Str::uuid()->toString(),
+                $reserveName,
+            ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+            $reserveProcess->setTimeout(30);
+            $reserveProcess->start();
+            $processes[] = $reserveProcess;
+            $this->assertWaitingOnOrganizationLock($reserveProcess, $reserveName);
+
+            [$createProcess, $createName] = $this->startCreateProcess(
+                $steward,
+                $location,
+                $categoryId,
+                'Równoległy produkt',
+                'catalog-create-',
+            );
+            $processes[] = $createProcess;
+            $this->assertWaitingOnOrganizationLock($createProcess, $createName);
+
+            DB::commit();
+            $reservation = $this->finishReservationProcess($reserveProcess);
+            $created = $this->finishProcess($createProcess);
+
+            $this->assertSame(['status' => 'reserved', 'sku' => 'RAW-000050'], $reservation);
+            $this->assertNotSame('RAW-000050', $created['code']);
+            $this->assertSame(2, DB::table('organization_sku_assignments')
+                ->where('organization_id', $organization->id)
+                ->where('prefix', 'RAW')
+                ->count());
+            $this->assertSame(2, (int) DB::table('organization_sku_assignments')
+                ->where('organization_id', $organization->id)
+                ->selectRaw('count(DISTINCT sku) AS count')
+                ->value('count'));
+            $this->assertSame(
+                (int) DB::table('organization_sku_assignments')->where('organization_id', $organization->id)->where('prefix', 'RAW')->max('sequence_number'),
+                (int) DB::table('organization_sku_counters')->where('organization_id', $organization->id)->where('prefix', 'RAW')->value('last_value'),
+            );
+        } finally {
+            $this->cleanup($processes);
+        }
+    }
+
     public function test_concurrent_membership_and_user_suspension_permanently_revoke_delegated_grants(): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
@@ -359,7 +463,23 @@ class RawMaterialConcurrencyTest extends TestCase
         $process->wait();
         $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
 
-        return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        try {
+            return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            $this->fail('Proces alokacji zwrócił nieprawidłowy JSON: '.$process->getOutput());
+        }
+    }
+
+    private function finishReservationProcess(Process $process): array
+    {
+        $process->wait();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+
+        try {
+            return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            $this->fail('Proces rezerwacji SKU zwrócił nieprawidłowy JSON: '.$process->getOutput());
+        }
     }
 
     private function cleanup(array $processes): void

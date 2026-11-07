@@ -389,9 +389,14 @@ class AuthorizationMutationBoundaryTest extends TestCase
             ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value'));
 
         $auditCountBefore = (int) $connection->table('raw_materials_commercial_audit_events')->count();
-        $this->assertSame(1, $connection->table('public.organization_suppliers')
-            ->where('id', $supplierId)->update(['display_name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]));
+        $auditBefore = $connection->table('raw_materials_commercial_audit_events')->orderBy('id')->get()->toArray();
+        $supplierBefore = $connection->table('public.organization_suppliers')->where('id', $supplierId)->first();
+        $this->assertNotNull($supplierBefore);
+        $this->assertRuntimeDenied(fn () => $connection->table('public.organization_suppliers')
+            ->where('id', $supplierId)->update(['display_name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]), '23514');
+        $this->assertEquals($supplierBefore, $connection->table('public.organization_suppliers')->where('id', $supplierId)->first());
         $this->assertSame($auditCountBefore, (int) $connection->table('raw_materials_commercial_audit_events')->count());
+        $this->assertEquals($auditBefore, $connection->table('raw_materials_commercial_audit_events')->orderBy('id')->get()->toArray());
 
         $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_revisions')
             ->where('id', $revision->id)->update(['name' => 'Niedozwolona zmiana']));
@@ -460,7 +465,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
         ]));
     }
 
-    private function assertRuntimeDenied(callable $operation): void
+    private function assertRuntimeDenied(callable $operation, ?string $expectedSqlState = null): void
     {
         $connection = DB::connection($this->connectionName);
         $before = $this->protectedAuthorizationTableCounts($connection);
@@ -469,6 +474,9 @@ class AuthorizationMutationBoundaryTest extends TestCase
             $connection->transaction($operation);
         } catch (QueryException $exception) {
             $this->assertContains($exception->errorInfo[0] ?? null, ['42501', '22023', '23514']);
+            if ($expectedSqlState !== null) {
+                $this->assertSame($expectedSqlState, $exception->errorInfo[0] ?? null);
+            }
             $this->assertSame($before, $this->protectedAuthorizationTableCounts($connection));
 
             return;

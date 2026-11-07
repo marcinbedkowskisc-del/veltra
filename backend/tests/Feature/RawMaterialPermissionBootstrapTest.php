@@ -6,6 +6,7 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\Modules\ModuleConfigurationService;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialException;
@@ -14,9 +15,9 @@ use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
 use App\Domain\RawMaterials\RawMaterialPermissionUpgrade;
 use App\Models\Location;
 use App\Models\LocationModuleState;
-use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -30,8 +31,11 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
 {
     public function test_migration_role_is_not_superuser_or_database_owner(): void
     {
-        $role = DB::selectOne(<<<'SQL'
+        $role = $this->setupConnection()->selectOne(<<<'SQL'
             SELECT
+                current_user AS role_name,
+                session_user AS session_role,
+                current_database() AS database_name,
                 CASE WHEN rol.rolsuper THEN 1 ELSE 0 END AS superuser,
                 CASE WHEN rol.rolcreatedb THEN 1 ELSE 0 END AS createdb,
                 CASE WHEN rol.rolcreaterole THEN 1 ELSE 0 END AS createrole,
@@ -42,6 +46,10 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             WHERE rol.rolname = current_user
             SQL);
 
+        $this->assertSame('veltra_migrator', $role->role_name);
+        $this->assertSame('veltra_migrator', $role->session_role);
+        $this->assertSame('veltra_testing', $role->database_name);
+        $this->assertRuntimeConnection();
         $this->assertSame(0, (int) $role->superuser);
         $this->assertSame(0, (int) $role->createdb);
         $this->assertSame(0, (int) $role->createrole);
@@ -55,11 +63,12 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $runtimePassword = (string) env('APP_DB_PASSWORD', '');
         $this->assertNotSame('', $runtimeUsername);
         $this->assertNotSame('', $runtimePassword);
-        $this->assertNotSame(
+        $this->assertSame(
             config('database.connections.pgsql.username'),
             $runtimeUsername,
-            'The test connection must use a separate migration role.',
+            'Domyślne połączenie aplikacji musi używać ograniczonej roli runtime.',
         );
+        $this->assertNotSame($this->setupConnection()->getConfig('username'), $runtimeUsername);
 
         $connection = config('database.connections.pgsql');
         $pdo = new PDO(
@@ -73,6 +82,11 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             $runtimePassword,
             [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
         );
+        $identity = $pdo->query('SELECT current_user, session_user, current_database() AS database_name')
+            ->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('veltra_app', $identity['current_user']);
+        $this->assertSame('veltra_app', $identity['session_user']);
+        $this->assertSame('veltra_testing', $identity['database_name']);
 
         $privileges = $pdo->query(<<<'SQL'
             SELECT
@@ -321,7 +335,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($administrator, $location);
         $recipient = $this->user('bootstrap-steward@example.test');
         app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $permissions = [
             RawMaterialPermission::View->value,
             RawMaterialPermission::PermissionDelegate->value,
@@ -376,7 +390,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($administrator, $location);
         $steward = $this->user('bootstrap-replay-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $this->enableRawMaterials($administrator, $location);
 
         $grants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
@@ -432,7 +446,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($administrator, $location);
         $recipient = $this->user('bootstrap-legacy-duplicate-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
 
         $grants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $administrator->id,
@@ -446,33 +460,35 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         );
         $grant = DB::table('organization_permission_grants')->where('id', $grants[0]['id'])->first();
 
-        try {
-            DB::statement(
-                'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_validate'
-            );
-            DB::statement(
-                'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
-            );
-            DB::table('organization_permission_grants')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $grant->organization_id,
-                'user_id' => $grant->user_id,
-                'permission' => $grant->permission,
-                'granted_by' => $grant->granted_by,
-                'valid_from' => $grant->valid_from,
-                'valid_until' => $grant->valid_until,
-                'delegation_source_id' => $grant->delegation_source_id,
-                'bootstrap_operation_id' => $grant->bootstrap_operation_id,
-                'reason_code' => $grant->reason_code,
-            ]);
-        } finally {
-            DB::statement(
-                'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
-            );
-            DB::statement(
-                'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_validate'
-            );
-        }
+        $this->withSetupTransaction(function (Connection $connection) use ($grant): void {
+            try {
+                $connection->statement(
+                    'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_validate'
+                );
+                $connection->statement(
+                    'ALTER TABLE organization_permission_grants DISABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
+                );
+                $connection->table('organization_permission_grants')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $grant->organization_id,
+                    'user_id' => $grant->user_id,
+                    'permission' => $grant->permission,
+                    'granted_by' => $grant->granted_by,
+                    'valid_from' => $grant->valid_from,
+                    'valid_until' => $grant->valid_until,
+                    'delegation_source_id' => $grant->delegation_source_id,
+                    'bootstrap_operation_id' => $grant->bootstrap_operation_id,
+                    'reason_code' => $grant->reason_code,
+                ]);
+            } finally {
+                $connection->statement(
+                    'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_bootstrap_replay_guard'
+                );
+                $connection->statement(
+                    'ALTER TABLE organization_permission_grants ENABLE TRIGGER organization_permission_grants_validate'
+                );
+            }
+        });
 
         try {
             DB::select('SELECT raw_materials_assert_no_active_bootstrap_replays()');
@@ -491,7 +507,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($administrator, $location);
         $recipient = $this->user('bootstrap-invalid-steward@example.test');
         app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
 
         foreach ([
             fn () => app(RawMaterialPermissionBootstrap::class)->grantInitial(
@@ -530,7 +546,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->role($steward, BusinessRole::Administrator);
         $recipient = $this->user('permission-upgrade-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $initialGrants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $administrator->id,
             $steward->id,
@@ -633,11 +649,11 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             $this->assertSame('23514', $exception->errorInfo[0]);
         }
 
-        User::whereKey($steward->id)->update(['is_active' => false]);
+        app(IdentityService::class)->disable($steward);
         $grantIds = collect($result['grants'])->pluck('id');
         $this->assertSame($grantIds->count(), DB::table('organization_permission_grant_events')
             ->whereIn('grant_id', $grantIds)->where('event_type', 'REVOKED')->count());
-        User::whereKey($steward->id)->update(['is_active' => true]);
+        $this->updateFixture($steward, ['is_active' => true]);
         $this->assertSame([], app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($recipient, RawMaterialPermission::SupplierView));
         $this->assertSame([], app(RawMaterialAuthorization::class)
@@ -660,17 +676,8 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($recipient, $location);
         $directSqlRecipient = $this->user('nested-upgrade-sql-recipient@example.test');
         app(MembershipService::class)->assign($directSqlRecipient, $location);
-        Organization::whereKey($bootstrapAdministrator->organization_id)
-            ->update(['authorization_initialized' => true]);
-        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-        LocationModuleState::create([
-            'organization_id' => $bootstrapAdministrator->organization_id,
-            'location_id' => $location->id,
-            'module_key' => 'RAW_MATERIALS',
-            'enabled' => true,
-            'created_by' => $bootstrapAdministrator->id,
-            'updated_by' => $bootstrapAdministrator->id,
-        ]);
+        $this->updateFixture($bootstrapAdministrator->organization, ['authorization_initialized' => true]);
+        $this->enableRawMaterials($bootstrapAdministrator, $location);
 
         $initialGrants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $bootstrapAdministrator->id,
@@ -822,7 +829,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($administrator, $location);
         $recipient = $this->user('permission-upgrade-denied-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $service = app(RawMaterialPermissionUpgrade::class);
 
         try {
@@ -870,16 +877,8 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($recipient, $location);
         $suspensionRecipient = $this->user('suspension-delegation-recipient@example.test');
         app(MembershipService::class)->assign($suspensionRecipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
-        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-        LocationModuleState::create([
-            'organization_id' => $administrator->organization_id,
-            'location_id' => $location->id,
-            'module_key' => 'RAW_MATERIALS',
-            'enabled' => true,
-            'created_by' => $administrator->id,
-            'updated_by' => $administrator->id,
-        ]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
+        $this->enableRawMaterials($administrator, $location);
         $bootstrapGrants = app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $administrator->id,
             $steward->id,
@@ -934,7 +933,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             'location_id' => $location->id,
         ]);
         $this->assertSame(200, $contextResponse->status(), $contextResponse->getContent());
-        User::whereKey($steward->id)->update(['is_active' => false]);
+        app(IdentityService::class)->disable($steward);
         $this->assertEmpty(app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($suspensionRecipient, RawMaterialPermission::View));
         $this->assertSame(1, DB::table('organization_permission_grant_events')
@@ -963,7 +962,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         } catch (QueryException $exception) {
             $this->assertSame('23514', $exception->errorInfo[0] ?? null);
         }
-        User::whereKey($steward->id)->update(['is_active' => true]);
+        $this->updateFixture($steward, ['is_active' => true]);
         $this->assertEmpty(app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($suspensionRecipient, RawMaterialPermission::View));
 
@@ -1004,7 +1003,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($steward, $location);
         $recipient = $this->user('permanent-revoke-recipient@example.test');
         $recipientMembership = app(MembershipService::class)->assign($recipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $this->enableRawMaterials($administrator, $location);
 
         $bootstrap = app(RawMaterialPermissionBootstrap::class)->grantInitial(
@@ -1089,7 +1088,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->assertSame(1, DB::table('organization_permission_grant_events')
             ->where('grant_id', $thirdDelegation['id'])
             ->where('reason_code', 'USER_DEACTIVATED')->count());
-        User::whereKey($recipient->id)->update(['is_active' => true]);
+        $this->updateFixture($recipient, ['is_active' => true]);
         $this->assertEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::View));
         $this->assertSame(0, DB::table('organization_permission_grant_events')
             ->where('grant_id', $sourceGrant['id'])->count());
@@ -1109,7 +1108,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         app(MembershipService::class)->assign($viewRecipient, $location);
         $createRecipient = $this->user('expiry-create-recipient@example.test');
         app(MembershipService::class)->assign($createRecipient, $location);
-        Organization::whereKey($administrator->organization_id)->update(['authorization_initialized' => true]);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         $this->enableRawMaterials($administrator, $location);
 
         $viewExpiresAt = now()->addSeconds(30);
@@ -1164,13 +1163,11 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
     private function enableRawMaterials(User $administrator, Location $location): void
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-        LocationModuleState::create([
-            'organization_id' => $administrator->organization_id,
-            'location_id' => $location->id,
-            'module_key' => 'RAW_MATERIALS',
+        app(ModuleConfigurationService::class)->configure($administrator, $location, [
+            'module_ids' => ['RAW_MATERIALS'],
+            'location_ids' => [$location->id],
             'enabled' => true,
-            'created_by' => $administrator->id,
-            'updated_by' => $administrator->id,
+            'current_password' => self::PASSWORD,
         ]);
     }
 
@@ -1180,42 +1177,44 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
      */
     private function insertBootstrapGrants(User $administrator, User $recipient, array $expiries): array
     {
-        $operationId = Str::uuid()->toString();
-        $permissions = array_keys($expiries);
-        DB::table('raw_material_audit_events')->insert([
-            'id' => Str::uuid()->toString(),
-            'organization_id' => $administrator->organization_id,
-            'operation_id' => $operationId,
-            'actor_user_id' => $administrator->id,
-            'subject_type' => 'ORGANIZATION',
-            'subject_id' => $administrator->organization_id,
-            'event_code' => 'PERMISSION_BOOTSTRAP',
-            'outcome' => 'ACCEPTED',
-            'reason_code' => 'INITIAL_STEWARD',
-            'metadata' => json_encode([
-                'recipient_user_id' => $recipient->id,
-                'permissions' => $permissions,
-            ], JSON_THROW_ON_ERROR),
-        ]);
-
-        $grants = [];
-        foreach ($expiries as $permission => $validUntil) {
-            $id = Str::uuid()->toString();
-            DB::table('organization_permission_grants')->insert([
-                'id' => $id,
+        return $this->withSetupTransaction(function (Connection $connection) use ($administrator, $recipient, $expiries): array {
+            $operationId = Str::uuid()->toString();
+            $permissions = array_keys($expiries);
+            $connection->table('raw_material_audit_events')->insert([
+                'id' => Str::uuid()->toString(),
                 'organization_id' => $administrator->organization_id,
-                'user_id' => $recipient->id,
-                'permission' => $permission,
-                'granted_by' => $administrator->id,
-                'valid_from' => now()->subSecond(),
-                'valid_until' => $validUntil,
-                'delegation_source_id' => null,
-                'bootstrap_operation_id' => $operationId,
+                'operation_id' => $operationId,
+                'actor_user_id' => $administrator->id,
+                'subject_type' => 'ORGANIZATION',
+                'subject_id' => $administrator->organization_id,
+                'event_code' => 'PERMISSION_BOOTSTRAP',
+                'outcome' => 'ACCEPTED',
                 'reason_code' => 'INITIAL_STEWARD',
+                'metadata' => json_encode([
+                    'recipient_user_id' => $recipient->id,
+                    'permissions' => $permissions,
+                ], JSON_THROW_ON_ERROR),
             ]);
-            $grants[] = ['id' => $id, 'permission' => $permission];
-        }
 
-        return $grants;
+            $grants = [];
+            foreach ($expiries as $permission => $validUntil) {
+                $id = Str::uuid()->toString();
+                $connection->table('organization_permission_grants')->insert([
+                    'id' => $id,
+                    'organization_id' => $administrator->organization_id,
+                    'user_id' => $recipient->id,
+                    'permission' => $permission,
+                    'granted_by' => $administrator->id,
+                    'valid_from' => now()->subSecond(),
+                    'valid_until' => $validUntil,
+                    'delegation_source_id' => null,
+                    'bootstrap_operation_id' => $operationId,
+                    'reason_code' => 'INITIAL_STEWARD',
+                ]);
+                $grants[] = ['id' => $id, 'permission' => $permission];
+            }
+
+            return $grants;
+        });
     }
 }

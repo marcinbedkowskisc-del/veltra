@@ -55,9 +55,10 @@ class RoleAdministrationTest extends AuthorizationTestCase
         $actor = $this->user();
         $actor = $this->updateFixture($actor, ['email_verified_at' => now()]);
         $role = $this->role($actor, BusinessRole::Administrator);
-        $this->updateFixture($actor->organization, ['authorization_initialized' => true]);
         $context = $this->kitchen();
         app(MembershipService::class)->assign($actor, $context);
+        $organization = $this->updateFixture($actor->organization, ['authorization_initialized' => true]);
+        $this->assertTrue($organization->authorization_initialized);
         $roles = app(RoleAdministration::class);
         foreach ([
             fn () => $roles->revoke($actor, $context, $role, self::PASSWORD),
@@ -73,7 +74,7 @@ class RoleAdministrationTest extends AuthorizationTestCase
         }
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($actor)->update(['is_active' => false]));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($role)->update(['revoked_at' => now()]));
-        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($actor->organization)->forceFill(['authorization_initialized' => false])->save());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($organization)->forceFill(['authorization_initialized' => false])->save());
         $membership = $actor->memberships()->firstOrFail();
         $this->assertRuntimeDatabaseRejects('23514', fn () => app(MembershipService::class)->deactivate($membership, 'Attempted context removal'));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($context)->update(['is_active' => false]));

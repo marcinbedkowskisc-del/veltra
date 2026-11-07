@@ -448,24 +448,53 @@ class AuthorizationMutationBoundaryTest extends TestCase
         ]));
 
         $productId = (string) Str::uuid();
-        $this->assertSame(1, $connection->table('public.supplier_products')->insertOrIgnore([
-            'id' => $productId,
-            'organization_id' => $organizationId,
-            'supplier_id' => $supplierId,
-            'raw_material_id' => $materialId,
-            'created_by' => $actorId,
-        ]));
-        $this->assertSame('ACTIVE', $connection->table('supplier_products')->where('id', $productId)
-            ->value('lifecycle_state'));
-        $this->assertRuntimeDenied(fn () => $connection->table('public.supplier_offers')->insert([
-            'id' => (string) Str::uuid(),
-            'organization_id' => $organizationId,
-            'supplier_product_id' => $productId,
-            'created_by' => $actorId,
-        ]));
+        $identity = (array) $connection->selectOne('SELECT current_user, session_user, current_database() AS database_name');
+        $this->assertSame('veltra_app', $identity['current_user']);
+        $this->assertSame('veltra_app', $identity['session_user']);
+        $this->assertSame('veltra_testing', $identity['database_name']);
+        $productSnapshot = fn (): array => [
+            'products' => $connection->table('supplier_products')->orderBy('id')->get()->toArray(),
+            'revisions' => $connection->table('supplier_product_revisions')->orderBy('id')->get()->toArray(),
+            'offers' => $connection->table('supplier_offers')->orderBy('id')->get()->toArray(),
+            'raw_revisions' => $connection->table('raw_material_revisions')->orderBy('id')->get()->toArray(),
+            'audit' => $connection->table('raw_materials_commercial_audit_events')->orderBy('id')->get()->toArray(),
+            'raw_audit' => $connection->table('raw_material_audit_events')->orderBy('id')->get()->toArray(),
+            'offer_events' => $connection->table('supplier_offer_events')->orderBy('id')->get()->toArray(),
+        ];
+        $beforeProduct = $productSnapshot();
+        $enforcingProductConstraint = false;
+        $this->assertRuntimeDenied(function () use ($connection, $productId, $organizationId, $supplierId, $materialId, $actorId, &$enforcingProductConstraint): void {
+            $this->assertSame(1, $connection->table('public.supplier_products')->insertOrIgnore([
+                'id' => $productId,
+                'organization_id' => $organizationId,
+                'supplier_id' => $supplierId,
+                'raw_material_id' => $materialId,
+                'created_by' => $actorId,
+            ]));
+            $this->assertSame('ACTIVE', $connection->table('supplier_products')->where('id', $productId)
+                ->value('lifecycle_state'));
+            $this->assertRuntimeDenied(fn () => $connection->table('public.supplier_offers')->insert([
+                'id' => (string) Str::uuid(),
+                'organization_id' => $organizationId,
+                'supplier_product_id' => $productId,
+                'created_by' => $actorId,
+            ]));
+            $enforcingProductConstraint = true;
+            $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+        }, '23514', 'supplier_product_initial_revision_validate');
+        $afterProduct = $productSnapshot();
+        fwrite(STDERR, json_encode([
+            'case' => 'deferred-invalid-supplier-product', 'identity' => $identity,
+            'enforcement_boundary_reached' => $enforcingProductConstraint,
+            'before' => $beforeProduct, 'after' => $afterProduct,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE).PHP_EOL);
+        $this->assertTrue($enforcingProductConstraint);
+        $this->assertEquals($beforeProduct, $afterProduct);
+        $this->assertSame(0, $connection->table('supplier_products')->where('id', $productId)->count());
+        $this->assertSame(0, $connection->table('supplier_product_revisions')->where('supplier_product_id', $productId)->count());
     }
 
-    private function assertRuntimeDenied(callable $operation, ?string $expectedSqlState = null): void
+    private function assertRuntimeDenied(callable $operation, ?string $expectedSqlState = null, ?string $expectedDatabaseError = null): void
     {
         $connection = DB::connection($this->connectionName);
         $before = $this->protectedAuthorizationTableCounts($connection);
@@ -475,7 +504,17 @@ class AuthorizationMutationBoundaryTest extends TestCase
         } catch (QueryException $exception) {
             $this->assertContains($exception->errorInfo[0] ?? null, ['42501', '22023', '23514']);
             if ($expectedSqlState !== null) {
+                fwrite(STDERR, json_encode([
+                    'case' => 'runtime-denial',
+                    'identity' => $connection->selectOne('SELECT current_user, session_user, current_database() AS database_name'),
+                    'expected_sqlstate' => $expectedSqlState,
+                    'actual_sqlstate' => $exception->errorInfo[0] ?? null,
+                    'database_error' => $exception->errorInfo[2] ?? null,
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE).PHP_EOL);
                 $this->assertSame($expectedSqlState, $exception->errorInfo[0] ?? null);
+            }
+            if ($expectedDatabaseError !== null) {
+                $this->assertStringContainsString($expectedDatabaseError, $exception->getMessage());
             }
             $this->assertSame($before, $this->protectedAuthorizationTableCounts($connection));
 

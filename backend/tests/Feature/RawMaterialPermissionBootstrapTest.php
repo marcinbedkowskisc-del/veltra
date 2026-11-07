@@ -411,22 +411,17 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->assertSame([], app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($steward, RawMaterialPermission::View));
 
-        try {
-            DB::transaction(fn () => DB::table('organization_permission_grants')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $administrator->organization_id,
-                'user_id' => $steward->id,
-                'permission' => RawMaterialPermission::View->value,
-                'granted_by' => $administrator->id,
-                'valid_from' => now(),
-                'delegation_source_id' => null,
-                'bootstrap_operation_id' => $operationId,
-                'reason_code' => 'INITIAL_STEWARD',
-            ]));
-            $this->fail('A historical bootstrap operation ID must not restore a revoked permission.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0]);
-        }
+        $this->assertUnsignedRuntimeGrantDenied('bootstrap-replay', fn () => DB::table('organization_permission_grants')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $administrator->organization_id,
+            'user_id' => $steward->id,
+            'permission' => RawMaterialPermission::View->value,
+            'granted_by' => $administrator->id,
+            'valid_from' => now(),
+            'delegation_source_id' => null,
+            'bootstrap_operation_id' => $operationId,
+            'reason_code' => 'INITIAL_STEWARD',
+        ]));
 
         $this->assertSame(1, DB::table('organization_permission_grants')
             ->where('id', $viewGrant['id'])->count());
@@ -759,66 +754,67 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         }
 
         $forgedOperationId = (string) Str::uuid();
-        try {
-            DB::transaction(function () use (
-                $forgedOperationId,
-                $bootstrapAdministrator,
-                $delegatedAdministrator,
-                $directSqlRecipient,
-                $delegatedAuthority,
-            ): void {
-                DB::table('raw_material_permission_upgrade_operations')->insert([
-                    'id' => $forgedOperationId,
-                    'organization_id' => $bootstrapAdministrator->organization_id,
-                    'idempotency_key' => 'nested-upgrade-sql-001',
-                    'request_hash' => hash('sha256', 'direct SQL attempt'),
-                    'actor_user_id' => $delegatedAdministrator->id,
+        $this->assertUnsignedRuntimeGrantDenied('revoked-upgrade-authority', function () use (
+            $forgedOperationId,
+            $bootstrapAdministrator,
+            $delegatedAdministrator,
+            $directSqlRecipient,
+            $delegatedAuthority,
+        ): void {
+            DB::table('raw_material_permission_upgrade_operations')->insert([
+                'id' => $forgedOperationId,
+                'organization_id' => $bootstrapAdministrator->organization_id,
+                'idempotency_key' => 'nested-upgrade-sql-001',
+                'request_hash' => hash('sha256', 'direct SQL attempt'),
+                'actor_user_id' => $delegatedAdministrator->id,
+                'recipient_user_id' => $directSqlRecipient->id,
+                'authority_grant_id' => $delegatedAuthority->id,
+                'permissions' => json_encode(
+                    [RawMaterialPermission::SupplierManage->value],
+                    JSON_THROW_ON_ERROR,
+                ),
+                'reason' => 'Próba bezpośredniego SQL po cofnięciu authority',
+                'created_at' => now(),
+            ]);
+            DB::table('raw_material_audit_events')->insert([
+                'id' => (string) Str::uuid(),
+                'organization_id' => $bootstrapAdministrator->organization_id,
+                'operation_id' => $forgedOperationId,
+                'actor_user_id' => $delegatedAdministrator->id,
+                'subject_type' => 'ORGANIZATION',
+                'subject_id' => $bootstrapAdministrator->organization_id,
+                'event_code' => 'PERMISSION_UPGRADE',
+                'outcome' => 'ACCEPTED',
+                'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
+                'metadata' => json_encode([
                     'recipient_user_id' => $directSqlRecipient->id,
-                    'authority_grant_id' => $delegatedAuthority->id,
-                    'permissions' => json_encode(
-                        [RawMaterialPermission::SupplierManage->value],
-                        JSON_THROW_ON_ERROR,
-                    ),
+                    'permissions' => [RawMaterialPermission::SupplierManage->value],
                     'reason' => 'Próba bezpośredniego SQL po cofnięciu authority',
-                    'created_at' => now(),
-                ]);
-                DB::table('raw_material_audit_events')->insert([
-                    'id' => (string) Str::uuid(),
-                    'organization_id' => $bootstrapAdministrator->organization_id,
-                    'operation_id' => $forgedOperationId,
-                    'actor_user_id' => $delegatedAdministrator->id,
-                    'subject_type' => 'ORGANIZATION',
-                    'subject_id' => $bootstrapAdministrator->organization_id,
-                    'event_code' => 'PERMISSION_UPGRADE',
-                    'outcome' => 'ACCEPTED',
-                    'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
-                    'metadata' => json_encode([
-                        'recipient_user_id' => $directSqlRecipient->id,
-                        'permissions' => [RawMaterialPermission::SupplierManage->value],
-                        'reason' => 'Próba bezpośredniego SQL po cofnięciu authority',
-                        'authority_grant_id' => $delegatedAuthority->id,
-                        'idempotency_key' => 'nested-upgrade-sql-001',
-                    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                ]);
-                DB::table('organization_permission_grants')->insert([
-                    'id' => (string) Str::uuid(),
-                    'organization_id' => $bootstrapAdministrator->organization_id,
-                    'user_id' => $directSqlRecipient->id,
-                    'permission' => RawMaterialPermission::SupplierManage->value,
-                    'granted_by' => $delegatedAdministrator->id,
-                    'valid_from' => now(),
-                    'delegation_source_id' => null,
-                    'bootstrap_operation_id' => $forgedOperationId,
-                    'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
-                ]);
-            });
-            $this->fail('PostgreSQL accepted a grant backed by revoked upstream authority.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
-            $this->assertSame(2, DB::table('raw_material_permission_upgrade_operations')->count());
-            $this->assertSame(2, DB::table('raw_material_audit_events')
-                ->where('event_code', 'PERMISSION_UPGRADE')->count());
-        }
+                    'authority_grant_id' => $delegatedAuthority->id,
+                    'idempotency_key' => 'nested-upgrade-sql-001',
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            ]);
+            DB::table('organization_permission_grants')->insert([
+                'id' => (string) Str::uuid(),
+                'organization_id' => $bootstrapAdministrator->organization_id,
+                'user_id' => $directSqlRecipient->id,
+                'permission' => RawMaterialPermission::SupplierManage->value,
+                'granted_by' => $delegatedAdministrator->id,
+                'valid_from' => now(),
+                'delegation_source_id' => null,
+                'bootstrap_operation_id' => $forgedOperationId,
+                'reason_code' => 'EXPLICIT_ADMIN_UPGRADE',
+            ]);
+        });
+        $this->assertSame(2, DB::table('raw_material_permission_upgrade_operations')->count());
+        $this->assertSame(2, DB::table('raw_material_audit_events')
+            ->where('event_code', 'PERMISSION_UPGRADE')->count());
+        $this->assertEmpty($authorization->effectiveGrantIds($delegatedAdministrator->fresh(), RawMaterialPermission::PermissionDelegate));
+        $this->assertEmpty($authorization->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::SupplierView));
+        $this->assertFalse((bool) DB::scalar(
+            'SELECT raw_materials_permission_upgrade_authority_is_effective(?, ?)',
+            [$bootstrapAdministrator->organization_id, $secondUpgrade['operation_id']],
+        ));
     }
 
     public function test_permission_upgrade_denies_administrators_without_delegate_authority_and_rejects_forged_sql_grants(): void
@@ -847,22 +843,18 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             $this->assertSame(0, DB::table('organization_permission_grants')->count());
         }
 
-        try {
-            DB::table('organization_permission_grants')->insert([
-                'id' => (string) Str::uuid(),
-                'organization_id' => $administrator->organization_id,
-                'user_id' => $recipient->id,
-                'permission' => RawMaterialPermission::SupplierManage->value,
-                'granted_by' => $administrator->id,
-                'valid_from' => now(),
-                'delegation_source_id' => null,
-                'bootstrap_operation_id' => (string) Str::uuid(),
-                'reason_code' => 'DIRECT_SQL_PROBE',
-            ]);
-            $this->fail('A root grant without an audited bootstrap or upgrade operation must be rejected.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0]);
-        }
+        $this->assertUnsignedRuntimeGrantDenied('forged-root-grant', fn () => DB::table('organization_permission_grants')->insert([
+            'id' => (string) Str::uuid(),
+            'organization_id' => $administrator->organization_id,
+            'user_id' => $recipient->id,
+            'permission' => RawMaterialPermission::SupplierManage->value,
+            'granted_by' => $administrator->id,
+            'valid_from' => now(),
+            'delegation_source_id' => null,
+            'bootstrap_operation_id' => (string) Str::uuid(),
+            'reason_code' => 'DIRECT_SQL_PROBE',
+        ]));
+        $this->assertEmpty(app(RawMaterialAuthorization::class)->effectiveGrantIds($recipient->fresh(), RawMaterialPermission::SupplierManage));
     }
 
     public function test_delegation_is_limited_to_effective_authority_and_revocation_is_audited(): void
@@ -946,22 +938,19 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             ->where('reason_code', 'USER_DEACTIVATED')
             ->whereNull('actor_user_id')->count());
         $this->getJson('/api/v1/raw-materials')->assertForbidden();
-        try {
-            DB::transaction(fn () => DB::table('organization_permission_grants')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $steward->organization_id,
-                'user_id' => $administrator->id,
-                'permission' => RawMaterialPermission::View->value,
-                'granted_by' => $steward->id,
-                'valid_from' => now(),
-                'delegation_source_id' => $viewGrant['id'],
-                'bootstrap_operation_id' => null,
-                'reason_code' => 'DIRECT_SQL_PROBE',
-            ]));
-            $this->fail('A suspended grantor created a delegated grant through direct SQL.');
-        } catch (QueryException $exception) {
-            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
-        }
+        $this->assertUnsignedRuntimeGrantDenied('suspended-grantor', fn () => DB::table('organization_permission_grants')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $steward->organization_id,
+            'user_id' => $administrator->id,
+            'permission' => RawMaterialPermission::View->value,
+            'granted_by' => $steward->id,
+            'valid_from' => now(),
+            'delegation_source_id' => $viewGrant['id'],
+            'bootstrap_operation_id' => null,
+            'reason_code' => 'DIRECT_SQL_PROBE',
+        ]));
+        $this->assertEmpty(app(RawMaterialAuthorization::class)
+            ->effectiveGrantIds($suspensionRecipient->fresh(), RawMaterialPermission::View));
         $this->updateFixture($steward, ['is_active' => true]);
         $this->assertEmpty(app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($suspensionRecipient, RawMaterialPermission::View));
@@ -1158,6 +1147,57 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('organization_permission_grant_events')
             ->whereIn('grant_id', [$viewGrant['id'], $createGrant['id']])->count());
         $this->assertCount(3, $bootstrap);
+    }
+
+    private function assertUnsignedRuntimeGrantDenied(string $case, callable $operation): void
+    {
+        $this->assertRuntimeConnection();
+        $connection = DB::connection('pgsql');
+        $identity = (array) $connection->selectOne('SELECT current_user, session_user, current_database() AS database_name');
+        $this->assertSame('veltra_app', $identity['current_user']);
+        $this->assertSame('veltra_app', $identity['session_user']);
+        $this->assertSame('veltra_testing', $identity['database_name']);
+        $before = $this->grantSecuritySnapshot();
+
+        try {
+            $connection->transaction(function () use ($operation, $connection): void {
+                $operation();
+                $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+                $this->fail('PostgreSQL zaakceptował niepodpisaną mutację uprawnień runtime.');
+            });
+        } catch (QueryException $exception) {
+            $after = $this->grantSecuritySnapshot();
+            fwrite(STDERR, json_encode([
+                'case' => $case, 'identity' => $identity,
+                'expected_sqlstate' => '42501', 'actual_sqlstate' => $exception->errorInfo[0] ?? null,
+                'database_error' => $exception->errorInfo[2] ?? null,
+                'before' => $before, 'after' => $after,
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE).PHP_EOL);
+            $this->assertSame('42501', $exception->errorInfo[0] ?? null);
+            $this->assertStringContainsString('A signed authorization mutation ticket is required', $exception->getMessage());
+            $this->assertEquals($before, $after);
+            $this->assertRuntimeConnection();
+        }
+    }
+
+    private function grantSecuritySnapshot(): array
+    {
+        $tables = [
+            'organization_permission_grants', 'organization_permission_grant_events',
+            'raw_material_permission_upgrade_operations', 'raw_material_permission_grant_operation_uses',
+            'raw_material_audit_events', 'security_events', 'role_assignments',
+            'location_memberships', 'permission_grants', 'locations',
+        ];
+        $snapshot = [];
+        foreach ($tables as $table) {
+            $snapshot[$table] = DB::connection('pgsql')->table($table)->orderBy('id')->get()->toArray();
+        }
+        $snapshot['users'] = DB::connection('pgsql')->table('users')
+            ->orderBy('id')->get(['id', 'is_active', 'auth_version', 'email_verified_at'])->toArray();
+        $snapshot['organizations'] = DB::connection('pgsql')->table('organizations')
+            ->orderBy('id')->get(['id', 'authorization_initialized'])->toArray();
+
+        return $snapshot;
     }
 
     private function enableRawMaterials(User $administrator, Location $location): void

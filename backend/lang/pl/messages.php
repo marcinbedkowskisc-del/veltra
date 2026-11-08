@@ -54,6 +54,8 @@ return [
     'module_target_authorization_required' => 'Nie masz uprawnień do wybranej lokalizacji.',
     'operating_location_required' => 'Najpierw wybierz aktywną lokalizację operacyjną.',
     'operating_location_unavailable' => 'Wybrana lokalizacja operacyjna nie jest już dostępna. Wybierz przypisaną, aktywną lokalizację.',
+    'primary_central_kitchen_inactive' => 'Główna kuchnia centralna jest nieaktywna. Bootstrap nie może wybrać ani utworzyć innej kuchni.',
+    'primary_central_kitchen_unresolved' => 'Nie można wiarygodnie ustalić pierwszej kuchni centralnej tej istniejącej instalacji. Bootstrap przerwany; wymagany jest zatwierdzony przegląd historii.',
     'request_received' => 'Przyjęliśmy zgłoszenie. Uprawnieni użytkownicy otrzymają instrukcje e-mailem; wnioski o przypisanie istniejących użytkowników wymagają zatwierdzenia.',
     'resource_not_found' => 'Nie znaleziono żądanego zasobu.',
     'restaurant_active_manager_required' => 'Aktywna restauracja musi mieć aktualną, aktywną kuchnię zarządzającą.',

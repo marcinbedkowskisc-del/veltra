@@ -9,7 +9,6 @@ use App\Domain\Identity\AccountLinks;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Domain\Installation\InstallationService;
-use App\Models\Location;
 use App\Models\Organization;
 use App\Models\RoleAssignment;
 use App\Models\User;
@@ -52,12 +51,27 @@ class BootstrapAuthorization extends Command
             return self::FAILURE;
         }
         unset($password);
-        $location = Location::where('type', 'CENTRAL_KITCHEN')->where('is_active', true)->orderBy('code')->first();
+        $location = null;
         $profile = null;
-        if (! $location) {
-            $profile = ['name' => $this->ask('Initial central kitchen name'), 'code' => $this->ask('Initial central kitchen code')];
-        }
         try {
+            $organization = Organization::whereKey($user->organization_id)->first();
+            if (! $organization) {
+                throw new BusinessRuleViolation(__('messages.installation_organization_required'));
+            }
+            $location = $organization->primaryCentralKitchen()->first();
+            if (! $location && ($organization->primary_central_kitchen_unresolved
+                || $organization->locations()->where('type', 'CENTRAL_KITCHEN')->exists())) {
+                throw new BusinessRuleViolation(__('messages.primary_central_kitchen_unresolved'));
+            }
+            if ($location && ! $location->is_active) {
+                throw new BusinessRuleViolation(__('messages.primary_central_kitchen_inactive'));
+            }
+            if (! $location) {
+                $profile = [
+                    'name' => $this->ask('Initial central kitchen name'),
+                    'code' => $this->ask('Initial central kitchen code'),
+                ];
+            }
             if ($profile) {
                 validator($profile, ['name' => ['required', 'string', 'max:200'], 'code' => ['required', 'regex:/^[A-Z0-9_-]+$/', 'max:50']])->validate();
             }
@@ -66,8 +80,20 @@ class BootstrapAuthorization extends Command
                 if ($organization->authorization_initialized || ! $user->fresh()->is_active || $user->fresh()->email_verified_at !== null) {
                     throw new BusinessRuleViolation(__('messages.initial_authorization_unavailable'));
                 }
+                $location = $organization->primaryCentralKitchen()->first();
+                if (! $location && ($organization->primary_central_kitchen_unresolved
+                    || $organization->locations()->where('type', 'CENTRAL_KITCHEN')->exists())) {
+                    throw new BusinessRuleViolation(__('messages.primary_central_kitchen_unresolved'));
+                }
                 if (! $location) {
                     $location = app(InstallationService::class)->createLocation([...$profile, 'type' => 'CENTRAL_KITCHEN']);
+                    $location->refresh();
+                }
+                if (! $location->is_primary_central_kitchen) {
+                    throw new BusinessRuleViolation(__('messages.primary_central_kitchen_unresolved'));
+                }
+                if (! $location->is_active) {
+                    throw new BusinessRuleViolation(__('messages.primary_central_kitchen_inactive'));
                 }
                 if (! app(MembershipService::class)->available($user)->where('location_id', $location->id)->exists()) {
                     app(MembershipService::class)->assign($user, $location);

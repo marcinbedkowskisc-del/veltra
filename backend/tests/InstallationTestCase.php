@@ -46,11 +46,38 @@ abstract class InstallationTestCase extends TestCase
         return $this->service->createLocation(['name' => $code, 'code' => $code, 'type' => 'RESTAURANT']);
     }
 
+    protected function createLegacyUndesignatedKitchen(Organization $organization, string $code = 'LEGACY'): Location
+    {
+        $locationId = $this->withSetupTransaction(function (Connection $connection) use ($organization, $code): string {
+            $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+            $connection->statement('ALTER TABLE locations DISABLE TRIGGER locations_assign_primary_central_kitchen');
+            $connection->statement('ALTER TABLE organizations DISABLE TRIGGER organizations_primary_central_kitchen_resolution_immutable');
+            $location = Location::on('pgsql_setup')->create([
+                'organization_id' => $organization->id,
+                'name' => $code,
+                'code' => $code,
+                'type' => 'CENTRAL_KITCHEN',
+                'is_active' => true,
+            ]);
+            $connection->table('organizations')
+                ->where('id', $organization->id)
+                ->update(['primary_central_kitchen_unresolved' => true]);
+            $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+            $connection->statement('ALTER TABLE locations ENABLE TRIGGER locations_assign_primary_central_kitchen');
+            $connection->statement('ALTER TABLE organizations ENABLE TRIGGER organizations_primary_central_kitchen_resolution_immutable');
+
+            return $location->id;
+        });
+
+        return Location::on('pgsql')->findOrFail($locationId);
+    }
+
     protected function withForeignOrganizationFixture(callable $operation): mixed
     {
         [$organizationId, $locationId] = $this->withSetupTransaction(function (Connection $connection): array {
             $connection->statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
             $organization = Organization::on('pgsql_setup')->create(['name' => 'Foreign fixture', 'code' => 'FOREIGN_ORG']);
+            $connection->statement('ALTER TABLE locations DISABLE TRIGGER locations_assign_primary_central_kitchen');
             $location = Location::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
                 'name' => 'Foreign kitchen',
@@ -58,6 +85,8 @@ abstract class InstallationTestCase extends TestCase
                 'type' => 'CENTRAL_KITCHEN',
                 'is_active' => true,
             ]);
+            $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+            $connection->statement('ALTER TABLE locations ENABLE TRIGGER locations_assign_primary_central_kitchen');
 
             return [$organization->id, $location->id];
         });
@@ -93,7 +122,7 @@ abstract class InstallationTestCase extends TestCase
     {
         try {
             DB::transaction(function () use ($operation): void {
-                $operation();
+                $operation(DB::connection());
                 DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
             });
         } catch (QueryException $exception) {

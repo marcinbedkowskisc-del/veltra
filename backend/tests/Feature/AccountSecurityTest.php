@@ -10,6 +10,7 @@ use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Mail\IdentityLink;
+use App\Models\Location;
 use App\Models\RoleAssignment;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -34,6 +35,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         $this->assertSame(0, $tester->execute([], ['interactive' => true]));
         $this->assertStringNotContainsString(self::PASSWORD, $tester->getDisplay());
         $this->assertSame(1, $user->memberships()->where('is_active', true)->count());
+        $this->assertTrue(Location::where('is_primary_central_kitchen', true)->sole()->is($user->memberships()->firstOrFail()->location));
         $this->travel(61)->seconds();
         $tester->setInputs([self::PASSWORD]);
         $this->assertSame(0, $tester->execute([], ['interactive' => true]));
@@ -41,6 +43,50 @@ class AccountSecurityTest extends AuthorizationTestCase
         app(AccountLinks::class)->consume('activation', $user->email, $this->sentToken(), 'New-Password!42');
         $this->assertSame(1, $tester->execute([], ['interactive' => true]));
         $this->assertStringContainsString('Authorization is already initialized.', $tester->getDisplay());
+    }
+
+    public function test_bootstrap_uses_the_verified_primary_instead_of_location_code_order(): void
+    {
+        Mail::fake();
+        $user = app(IdentityService::class)->provisionInitial([
+            'first_name' => 'Initial',
+            'last_name' => 'Admin',
+            'email' => 'primary@example.test',
+        ], self::PASSWORD);
+        $primary = $this->kitchen('ZZ');
+        $this->kitchen('AA');
+        $command = app(BootstrapAuthorization::class);
+        $command->setLaravel($this->app);
+        $tester = new CommandTester($command);
+        $tester->setInputs([self::PASSWORD]);
+
+        $this->assertSame(0, $tester->execute([], ['interactive' => true]));
+        $this->assertSame(
+            $primary->id,
+            $user->memberships()->where('is_active', true)->sole()->location_id,
+        );
+        app(AccountLinks::class)->consume('activation', $user->email, $this->sentToken(), 'New-Password!42');
+    }
+
+    public function test_bootstrap_fails_closed_for_an_unresolved_legacy_kitchen(): void
+    {
+        Mail::fake();
+        $user = app(IdentityService::class)->provisionInitial([
+            'first_name' => 'Initial',
+            'last_name' => 'Admin',
+            'email' => 'legacy-primary@example.test',
+        ], self::PASSWORD);
+        $organization = $user->organization;
+        $this->createLegacyUndesignatedKitchen($organization);
+        $command = app(BootstrapAuthorization::class);
+        $command->setLaravel($this->app);
+        $tester = new CommandTester($command);
+        $tester->setInputs([self::PASSWORD]);
+
+        $this->assertSame(1, $tester->execute([], ['interactive' => true]));
+        $this->assertStringContainsString(__('messages.primary_central_kitchen_unresolved'), $tester->getDisplay());
+        $this->assertSame(0, RoleAssignment::count());
+        $this->assertSame(0, $user->memberships()->count());
     }
 
     private function sentToken(): string
@@ -62,7 +108,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         $links = app(AccountLinks::class);
         $links->issue($user, 'activation', 'cli-bootstrap', bootstrap: true);
         $token = $this->sentToken();
-        $stored = DB::table('activation_tokens')->value('token');
+        $stored = DB::table('activation_tokens')->where('email', $user->email)->value('token');
         $this->assertNotSame($token, $stored);
         $this->assertTrue(Hash::check($token, $stored));
         $links->consume('activation', $user->email, $token, 'New-Password!42');

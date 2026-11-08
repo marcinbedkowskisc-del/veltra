@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Domain\Installation\LocationType;
 use App\Models\Location;
@@ -50,6 +52,50 @@ class InstallationDomainTest extends InstallationTestCase
         $this->assertSame(2, $organization->locations()->count());
         $this->service->updateLocation($restaurant, ['name' => 'Renamed', 'code' => 'R2']);
         $this->assertSame('Renamed', $restaurant->fresh()->name);
+    }
+
+    public function test_first_central_kitchen_is_primary_and_later_kitchens_are_not(): void
+    {
+        $organization = $this->initialize();
+        $first = $this->kitchen('ZZ');
+        $second = $this->kitchen('AA');
+
+        $this->assertTrue($first->fresh()->is_primary_central_kitchen);
+        $this->assertFalse($second->fresh()->is_primary_central_kitchen);
+        $this->assertSame($first->id, $organization->fresh()->primaryCentralKitchen->id);
+    }
+
+    public function test_legacy_installation_without_verified_primary_stays_unresolved(): void
+    {
+        $organization = $this->initialize();
+        $legacy = $this->createLegacyUndesignatedKitchen($organization);
+        $later = $this->kitchen('CK2');
+
+        $this->assertTrue($organization->fresh()->primary_central_kitchen_unresolved);
+        $this->assertFalse($legacy->fresh()->is_primary_central_kitchen);
+        $this->assertFalse($later->fresh()->is_primary_central_kitchen);
+        $this->assertNull($organization->fresh()->primaryCentralKitchen);
+    }
+
+    public function test_runtime_sql_and_database_owner_cannot_change_primary_identity(): void
+    {
+        $organization = $this->initialize();
+        $primary = $this->kitchen();
+        $secondary = $this->kitchen('CK2');
+
+        $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('locations')
+            ->where('id', $primary->id)->update(['is_primary_central_kitchen' => false]));
+        $this->assertRuntimeDatabaseRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::installationLocationUpdate(),
+            null,
+            fn () => DB::table('locations')->where('id', $primary->id)->update(['is_primary_central_kitchen' => false]),
+        ));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('locations')
+            ->where('id', $secondary->id)->update(['is_primary_central_kitchen' => true]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('locations')
+            ->where('id', $primary->id)->delete());
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('organizations')
+            ->where('id', $organization->id)->update(['primary_central_kitchen_unresolved' => true]));
     }
 
     public function test_database_rejects_invalid_types_duplicate_codes_and_identity_changes(): void

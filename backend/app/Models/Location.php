@@ -16,7 +16,11 @@ class Location extends Model
 
     protected function casts(): array
     {
-        return ['type' => LocationType::class, 'is_active' => 'boolean'];
+        return [
+            'type' => LocationType::class,
+            'is_active' => 'boolean',
+            'is_primary_central_kitchen' => 'boolean',
+        ];
     }
 
     public function organization(): BelongsTo

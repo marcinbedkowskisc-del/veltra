@@ -148,6 +148,115 @@ final class RawMaterialCommercialService
         );
     }
 
+    public function correctSupplier(
+        User $actor,
+        Location $context,
+        string $supplierId,
+        array $input,
+        string $idempotencyKey,
+    ): array {
+        $changes = array_diff_key($input, ['reason' => true]);
+        if ($changes === []) {
+            throw ValidationException::withMessages([
+                'request' => [__('messages.raw_material_supplier_correction_required')],
+            ]);
+        }
+
+        $reason = $input['reason'];
+
+        return $this->mutate(
+            $actor,
+            $context,
+            [RawMaterialPermission::SupplierManage],
+            'supplier.correct',
+            $idempotencyKey,
+            ['supplier_id' => $supplierId, ...$input],
+            function (string $operationId) use ($actor, $context, $supplierId, $changes, $reason): array {
+                $supplier = DB::table('organization_suppliers')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('id', $supplierId)
+                    ->lockForUpdate()
+                    ->first();
+                if (! $supplier) {
+                    $this->notFound();
+                }
+                if ($supplier->lifecycle_state !== 'ACTIVE') {
+                    $this->conflict('RAW_MATERIAL_SUPPLIER_STATE_INVALID', 'Dane archiwalnego dostawcy nie mogą być korygowane.');
+                }
+
+                $updates = [];
+                $changedFields = [];
+                foreach (['display_name', 'legal_name'] as $field) {
+                    if (array_key_exists($field, $changes)) {
+                        $value = $changes[$field] === null ? null : trim($changes[$field]);
+                        if ($value !== $supplier->{$field}) {
+                            $updates[$field] = $value;
+                            $changedFields[] = $field;
+                        }
+                    }
+                }
+
+                $beforeTaxFingerprint = $this->supplierTaxIdentifierFingerprint($supplier->tax_identifier_ciphertext);
+                $afterTaxFingerprint = $beforeTaxFingerprint;
+                if (array_key_exists('tax_identifier', $changes)) {
+                    $taxIdentifier = $changes['tax_identifier'] === null ? null : trim($changes['tax_identifier']);
+                    $currentTaxIdentifier = $supplier->tax_identifier_ciphertext === null
+                        ? null
+                        : Crypt::decryptString($supplier->tax_identifier_ciphertext);
+                    if ($taxIdentifier !== $currentTaxIdentifier) {
+                        $updates['tax_identifier_ciphertext'] = $taxIdentifier === null
+                            ? null
+                            : Crypt::encryptString($taxIdentifier);
+                        $changedFields[] = 'tax_identifier';
+                        $afterTaxFingerprint = $this->supplierTaxIdentifierFingerprint($updates['tax_identifier_ciphertext']);
+                    }
+                }
+
+                if ($updates !== []) {
+                    $updates['updated_at'] = now();
+                    $this->contexts->runForSubject(
+                        AuthorizationMutationScope::rawMaterialSupplierCorrection(),
+                        $actor->id,
+                        $supplierId,
+                        fn (): int => DB::table('organization_suppliers')
+                            ->where('organization_id', $actor->organization_id)
+                            ->where('id', $supplierId)
+                            ->update($updates),
+                    );
+                }
+
+                $before = [
+                    'id' => $supplier->id,
+                    'supplier_code' => $supplier->supplier_code,
+                    'display_name' => $supplier->display_name,
+                    'legal_name' => $supplier->legal_name,
+                    'lifecycle_state' => $supplier->lifecycle_state,
+                    'tax_identifier_fingerprint' => $beforeTaxFingerprint,
+                ];
+                $after = $this->supplier($actor, $supplierId);
+                $auditAfter = [...$after, 'tax_identifier_fingerprint' => $afterTaxFingerprint];
+                $this->audit(
+                    $actor,
+                    $context,
+                    $operationId,
+                    'SUPPLIER',
+                    $supplierId,
+                    'SUPPLIER_DETAILS_CORRECTED',
+                    $before,
+                    $auditAfter,
+                    $reason,
+                    [
+                        'changed_fields' => $changedFields,
+                        'tax_identifier_before_fingerprint' => $beforeTaxFingerprint,
+                        'tax_identifier_after_fingerprint' => $afterTaxFingerprint,
+                    ],
+                );
+
+                return ['data' => $after];
+            },
+        );
+    }
+
     public function products(User $actor, Location $context, string $materialId, array $filters = []): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
@@ -1462,6 +1571,7 @@ final class RawMaterialCommercialService
         mixed $before,
         mixed $after,
         ?string $reason = null,
+        array $additionalMetadata = [],
     ): void {
         DB::table('raw_materials_commercial_audit_events')->insert([
             'id' => Str::uuid()->toString(),
@@ -1479,8 +1589,18 @@ final class RawMaterialCommercialService
             'metadata' => json_encode([
                 'reason' => $reason,
                 'record' => $this->safeMetadata($after),
+                ...$additionalMetadata,
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
         ]);
+    }
+
+    private function supplierTaxIdentifierFingerprint(?string $ciphertext): ?string
+    {
+        if ($ciphertext === null) {
+            return null;
+        }
+
+        return hash_hmac('sha256', $ciphertext, (string) config('app.key'));
     }
 
     private function safeMetadata(mixed $value): mixed

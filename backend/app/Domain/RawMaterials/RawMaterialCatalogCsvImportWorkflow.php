@@ -251,59 +251,59 @@ final class RawMaterialCatalogCsvImportWorkflow
     ): array {
         $requestHash = hash('sha256', $data['source_sha256']."\0".$data['snapshot_hash']);
 
-        return $this->contexts->runForSubject(
-            AuthorizationMutationScope::rawMaterialCsvImport(),
-            $actor->id,
-            $actor->organization_id,
-            fn (): array => DB::transaction(function () use (
-                $actor,
-                $context,
-                $data,
-                $rows,
-                $idempotencyKey,
-                $requestHash,
-            ): array {
-                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
-                $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+        return DB::transaction(function () use (
+            $actor,
+            $context,
+            $data,
+            $rows,
+            $idempotencyKey,
+            $requestHash,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
 
-                $existingByKey = DB::table('raw_material_catalog_import_batches')
-                    ->where('organization_id', $actor->organization_id)
-                    ->where('actor_user_id', $actor->id)
-                    ->where('idempotency_key', $idempotencyKey)
-                    ->first();
-                if ($existingByKey) {
-                    if (! hash_equals($existingByKey->request_hash, $requestHash)) {
-                        throw new RawMaterialException(
-                            'RAW_MATERIAL_CATALOG_CSV_IDEMPOTENCY_CONFLICT',
-                            'Klucz idempotencji został już użyty dla innego pliku lub podglądu.',
-                            409,
-                        );
-                    }
-
-                    return $this->presentBatch($actor, $existingByKey->id);
-                }
-
-                $existingByPreview = $this->batchForPreview($actor, $data['preview_id']);
-                if ($existingByPreview !== null) {
+            $existingByKey = DB::table('raw_material_catalog_import_batches')
+                ->where('organization_id', $actor->organization_id)
+                ->where('actor_user_id', $actor->id)
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+            if ($existingByKey) {
+                if (! hash_equals($existingByKey->request_hash, $requestHash)) {
                     throw new RawMaterialException(
                         'RAW_MATERIAL_CATALOG_CSV_IDEMPOTENCY_CONFLICT',
-                        'Podgląd został już zatwierdzony z innym kluczem idempotencji.',
+                        'Klucz idempotencji został już użyty dla innego pliku lub podglądu.',
                         409,
                     );
                 }
 
-                $fresh = $this->buildPreview($actor, $rows);
-                if (! $fresh['can_commit'] || ! hash_equals($data['snapshot_hash'], $fresh['snapshot_hash'])) {
-                    throw new RawMaterialException(
-                        'RAW_MATERIAL_CATALOG_CSV_PREVIEW_STALE',
-                        'Katalog zmienił się od czasu podglądu. Wykonaj nowy podgląd przed zatwierdzeniem.',
-                        409,
-                        ['preview_id' => $data['preview_id']],
-                    );
-                }
+                return $this->presentBatch($actor, $existingByKey->id);
+            }
 
-                $batchId = Str::uuid()->toString();
-                DB::table('raw_material_catalog_import_batches')->insert([
+            $existingByPreview = $this->batchForPreview($actor, $data['preview_id']);
+            if ($existingByPreview !== null) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_CATALOG_CSV_IDEMPOTENCY_CONFLICT',
+                    'Podgląd został już zatwierdzony z innym kluczem idempotencji.',
+                    409,
+                );
+            }
+
+            $fresh = $this->buildPreview($actor, $rows);
+            if (! $fresh['can_commit'] || ! hash_equals($data['snapshot_hash'], $fresh['snapshot_hash'])) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_CATALOG_CSV_PREVIEW_STALE',
+                    'Katalog zmienił się od czasu podglądu. Wykonaj nowy podgląd przed zatwierdzeniem.',
+                    409,
+                    ['preview_id' => $data['preview_id']],
+                );
+            }
+
+            $batchId = Str::uuid()->toString();
+            $this->contexts->runForSubject(
+                AuthorizationMutationScope::rawMaterialCsvImport(),
+                $actor->id,
+                $actor->organization_id,
+                fn () => DB::table('raw_material_catalog_import_batches')->insert([
                     'id' => $batchId,
                     'organization_id' => $actor->organization_id,
                     'actor_user_id' => $actor->id,
@@ -314,26 +314,31 @@ final class RawMaterialCatalogCsvImportWorkflow
                     'source_sha256' => $data['source_sha256'],
                     'batch_status' => 'COMMITTED',
                     'row_count' => count($fresh['prepared_rows']),
-                ]);
+                ]),
+            );
 
-                foreach ($fresh['prepared_rows'] as $row) {
-                    $materialId = $row['raw_material_id'];
-                    if ($row['status_code'] === 'CREATE') {
-                        $material = $this->rawMaterials->createImported(
-                            $actor,
-                            $context,
-                            $row['sku'],
-                            [
-                                'category_id' => $row['category_id'],
-                                'name' => $row['name'],
-                                'description' => $row['description'],
-                                'base_unit_code' => $row['base_unit_code'],
-                            ],
-                        );
-                        $materialId = $material['id'];
-                    }
+            foreach ($fresh['prepared_rows'] as $row) {
+                $materialId = $row['raw_material_id'];
+                if ($row['status_code'] === 'CREATE') {
+                    $material = $this->rawMaterials->createImported(
+                        $actor,
+                        $context,
+                        $row['sku'],
+                        [
+                            'category_id' => $row['category_id'],
+                            'name' => $row['name'],
+                            'description' => $row['description'],
+                            'base_unit_code' => $row['base_unit_code'],
+                        ],
+                    );
+                    $materialId = $material['id'];
+                }
 
-                    DB::table('raw_material_catalog_import_rows')->insert([
+                $this->contexts->runForSubject(
+                    AuthorizationMutationScope::rawMaterialCsvImport(),
+                    $actor->id,
+                    $actor->organization_id,
+                    fn () => DB::table('raw_material_catalog_import_rows')->insert([
                         'id' => Str::uuid()->toString(),
                         'organization_id' => $actor->organization_id,
                         'batch_id' => $batchId,
@@ -346,27 +351,27 @@ final class RawMaterialCatalogCsvImportWorkflow
                         'base_unit_code' => $row['base_unit_code'],
                         'category_code' => $row['category_code'],
                         'result_code' => $row['status_code'] === 'CREATE' ? 'CREATED' : 'NO_CHANGE',
-                    ]);
-                }
-
-                $this->insertAudit(
-                    $actor,
-                    $context,
-                    $batchId,
-                    'RAW_MATERIAL_CATALOG_IMPORT_BATCH',
-                    'CATALOG_CSV_IMPORT_COMMITTED',
-                    'ACCEPTED',
-                    [
-                        'preview_id' => $data['preview_id'],
-                        'source_sha256' => $data['source_sha256'],
-                        'request_hash' => $requestHash,
-                        'row_count' => count($fresh['prepared_rows']),
-                    ],
+                    ]),
                 );
+            }
 
-                return $this->presentBatch($actor, $batchId);
-            }, attempts: 1),
-        );
+            $this->recordAudit(
+                $actor,
+                $context,
+                $batchId,
+                'RAW_MATERIAL_CATALOG_IMPORT_BATCH',
+                'CATALOG_CSV_IMPORT_COMMITTED',
+                'ACCEPTED',
+                [
+                    'preview_id' => $data['preview_id'],
+                    'source_sha256' => $data['source_sha256'],
+                    'request_hash' => $requestHash,
+                    'row_count' => count($fresh['prepared_rows']),
+                ],
+            );
+
+            return $this->presentBatch($actor, $batchId);
+        }, attempts: 1);
     }
 
     private function buildPreview(User $actor, array $rows): array

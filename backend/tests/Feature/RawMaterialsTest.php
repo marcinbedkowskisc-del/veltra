@@ -30,6 +30,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -2476,8 +2477,11 @@ class RawMaterialsTest extends AuthorizationTestCase
         ], 'supplier-details-create-0001');
         $supplierId = $created['data']['id'];
 
-        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
-            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_CREATED')->count());
+        $createdAudit = DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_CREATED')->first();
+        $this->assertNotNull($createdAudit);
+        $this->assertSame($this->steward->id, $createdAudit->actor_user_id);
+        $this->assertSame($this->location->id, $createdAudit->actor_location_id);
 
         $commercial->archiveSupplier(
             $this->steward,
@@ -2492,8 +2496,131 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame('Dostawca z danymi stałymi', $supplier->display_name);
         $this->assertSame('Dostawca z danymi stałymi sp. z o.o.', $supplier->legal_name);
         $this->assertNotEmpty($supplier->tax_identifier_ciphertext);
-        $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
-            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_ARCHIVED')->count());
+        $archiveAudit = DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->where('event_code', 'SUPPLIER_ARCHIVED')->first();
+        $this->assertNotNull($archiveAudit);
+        $this->assertSame($this->steward->id, $archiveAudit->actor_user_id);
+        $this->assertSame($this->location->id, $archiveAudit->actor_location_id);
+    }
+
+    public function test_supplier_corrections_are_authorized_audited_and_preserve_commercial_references(): void
+    {
+        $references = $this->createCommercialOfferFixture(
+            'Mąka do korekty dostawcy',
+            'CORRECTION_01',
+            'CORRECTION_SKU_01',
+            'supplier-correction',
+        );
+        $supplierId = $references['supplier_id'];
+        $supplierBefore = DB::table('organization_suppliers')->where('id', $supplierId)->first();
+        $productBefore = DB::table('supplier_products')->where('id', $references['product_id'])->first();
+        $productRevisionsBefore = DB::table('supplier_product_revisions')
+            ->where('supplier_product_id', $references['product_id'])->orderBy('revision_no')->get()->toArray();
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->actingAs($this->steward, 'web')->patchJson(
+            '/api/v1/raw-materials/suppliers/'.$supplierId,
+            [
+                'display_name' => 'Młyn po korekcie',
+                'legal_name' => 'Młyn po korekcie sp. z o.o.',
+                'tax_identifier' => '9876543210',
+                'reason' => 'Korekta danych dostawcy',
+            ],
+            ['Idempotency-Key' => 'supplier-correction-0001'],
+        )->assertOk()
+            ->assertJsonPath('data.id', $supplierId)
+            ->assertJsonPath('data.supplier_code', 'CORRECTION_01')
+            ->assertJsonPath('data.display_name', 'Młyn po korekcie')
+            ->assertJsonPath('data.legal_name', 'Młyn po korekcie sp. z o.o.')
+            ->assertJsonMissing(['tax_identifier' => '9876543210']);
+
+        $supplierAfter = DB::table('organization_suppliers')->where('id', $supplierId)->first();
+        $this->assertSame($supplierBefore->id, $supplierAfter->id);
+        $this->assertSame($supplierBefore->organization_id, $supplierAfter->organization_id);
+        $this->assertSame($supplierBefore->supplier_code, $supplierAfter->supplier_code);
+        $this->assertSame($supplierBefore->created_by, $supplierAfter->created_by);
+        $this->assertSame('Młyn po korekcie', $supplierAfter->display_name);
+        $this->assertSame('Młyn po korekcie sp. z o.o.', $supplierAfter->legal_name);
+        $this->assertSame('9876543210', Crypt::decryptString($supplierAfter->tax_identifier_ciphertext));
+        $this->assertEquals($productBefore, DB::table('supplier_products')->where('id', $references['product_id'])->first());
+        $this->assertEquals($productRevisionsBefore, DB::table('supplier_product_revisions')
+            ->where('supplier_product_id', $references['product_id'])->orderBy('revision_no')->get()->toArray());
+
+        $audit = DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)
+            ->where('event_code', 'SUPPLIER_DETAILS_CORRECTED')
+            ->first();
+        $this->assertNotNull($audit);
+        $this->assertSame($this->steward->id, $audit->actor_user_id);
+        $this->assertSame($this->location->id, $audit->actor_location_id);
+        $this->assertSame('ACCEPTED', $audit->outcome);
+        $this->assertNotSame($audit->before_hash, $audit->after_hash);
+        $metadata = json_decode($audit->metadata, true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame('Korekta danych dostawcy', $metadata['reason']);
+        $this->assertSame(['display_name', 'legal_name', 'tax_identifier'], $metadata['changed_fields']);
+        $this->assertNotNull($metadata['tax_identifier_after_fingerprint']);
+        $this->assertStringNotContainsString('9876543210', $audit->metadata);
+        $this->assertSame(1, DB::table('raw_materials_commercial_idempotency')
+            ->where('actor_user_id', $this->steward->id)
+            ->where('operation_code', 'supplier.correct')
+            ->where('idempotency_key', 'supplier-correction-0001')->count());
+
+        $this->actingAs($this->steward, 'web')->patchJson(
+            '/api/v1/raw-materials/suppliers/'.$supplierId,
+            ['tax_identifier' => '1234567890', 'reason' => 'Korekta identyfikatora'],
+            ['Idempotency-Key' => 'supplier-correction-tax-only-0001'],
+        )->assertOk()->assertJsonMissing(['tax_identifier' => '1234567890']);
+        $taxOnlyAudit = DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)
+            ->where('event_code', 'SUPPLIER_DETAILS_CORRECTED')
+            ->orderByDesc('occurred_at')
+            ->first();
+        $this->assertNotSame($taxOnlyAudit->before_hash, $taxOnlyAudit->after_hash);
+        $taxOnlyMetadata = json_decode($taxOnlyAudit->metadata, true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame(['tax_identifier'], $taxOnlyMetadata['changed_fields']);
+        $this->assertNotSame(
+            $taxOnlyMetadata['tax_identifier_before_fingerprint'],
+            $taxOnlyMetadata['tax_identifier_after_fingerprint'],
+        );
+        $this->assertStringNotContainsString('1234567890', $taxOnlyAudit->metadata);
+        $this->assertSame('1234567890', Crypt::decryptString(
+            DB::table('organization_suppliers')->where('id', $supplierId)->value('tax_identifier_ciphertext'),
+        ));
+
+        $this->actingAs($this->steward, 'web')->patchJson(
+            '/api/v1/raw-materials/suppliers/'.$supplierId,
+            ['supplier_code' => 'FORGED_CODE', 'reason' => 'Próba zmiany tożsamości'],
+            ['Idempotency-Key' => 'supplier-correction-invalid-0001'],
+        )->assertUnprocessable()
+            ->assertJsonValidationErrors('request');
+        $this->assertSame('CORRECTION_01', DB::table('organization_suppliers')
+            ->where('id', $supplierId)->value('supplier_code'));
+    }
+
+    public function test_supplier_correction_requires_supplier_manage_permission(): void
+    {
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->steward,
+            $this->location,
+            ['supplier_code' => 'CORRECTION_DENIED', 'display_name' => 'Dostawca chroniony'],
+            'supplier-correction-denied-create-0001',
+        );
+        $supplierId = $supplier['data']['id'];
+        $reader = $this->user('supplier-correction-reader@example.test');
+        app(MembershipService::class)->assign($reader, $this->location);
+        $this->selectRawMaterialApiContext($reader);
+        $auditCount = DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->count();
+
+        $this->actingAs($reader, 'web')->patchJson(
+            '/api/v1/raw-materials/suppliers/'.$supplierId,
+            ['display_name' => 'Zmiana bez uprawnienia', 'reason' => 'Nieuprawniona korekta'],
+            ['Idempotency-Key' => 'supplier-correction-denied-0001'],
+        )->assertForbidden();
+        $this->assertSame('Dostawca chroniony', DB::table('organization_suppliers')
+            ->where('id', $supplierId)->value('display_name'));
+        $this->assertSame($auditCount, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplierId)->count());
     }
 
     public function test_supplier_products_offer_prices_and_cost_permissions_are_isolated(): void
@@ -3102,6 +3229,107 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertDatabaseMissing('raw_materials_commercial_audit_events', [
             'organization_id' => $this->steward->organization_id,
             'event_code' => 'SUPPLIER_CREATED',
+        ]);
+    }
+
+    public function test_category_supplier_correction_and_archive_roll_back_when_their_audits_fail(): void
+    {
+        $category = $this->category();
+        $renamed = $this->rawMaterialService->renameCategory(
+            $this->steward,
+            $this->location,
+            $category['id'],
+            'Kategoria z audytem',
+        );
+        $this->assertSame('Kategoria z audytem', $renamed['name']);
+        $categoryAudit = DB::table('raw_material_audit_events')
+            ->where('subject_id', $category['id'])
+            ->where('event_code', 'CATEGORY_RENAMED')
+            ->first();
+        $this->assertNotNull($categoryAudit);
+        $this->assertSame($this->steward->id, $categoryAudit->actor_user_id);
+
+        $commercial = app(RawMaterialCommercialService::class);
+        $supplier = $commercial->createSupplier($this->steward, $this->location, [
+            'supplier_code' => 'AUDIT_ROLLBACK',
+            'display_name' => 'Dostawca przed korektą',
+            'legal_name' => 'Dostawca przed korektą sp. z o.o.',
+        ], 'supplier-audit-rollback-create-0001')['data'];
+        $supplierBefore = DB::table('organization_suppliers')->where('id', $supplier['id'])->first();
+
+        $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+            CREATE FUNCTION public.test_fail_stage2e_business_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.event_code IN ('CATEGORY_RENAMED', 'SUPPLIER_DETAILS_CORRECTED', 'SUPPLIER_ARCHIVED') THEN
+                    RAISE EXCEPTION 'Injected business audit failure' USING ERRCODE = 'P0001';
+                END IF;
+                RETURN NEW;
+            END
+            $$;
+            CREATE TRIGGER test_fail_stage2e_category_audit
+                BEFORE INSERT ON public.raw_material_audit_events
+                FOR EACH ROW EXECUTE FUNCTION public.test_fail_stage2e_business_audit();
+            CREATE TRIGGER test_fail_stage2e_supplier_audit
+                BEFORE INSERT ON public.raw_materials_commercial_audit_events
+                FOR EACH ROW EXECUTE FUNCTION public.test_fail_stage2e_business_audit();
+            SQL));
+
+        try {
+            foreach ([
+                fn () => $this->rawMaterialService->renameCategory(
+                    $this->steward,
+                    $this->location,
+                    $category['id'],
+                    'Zmiana wycofana',
+                ),
+                fn () => $commercial->correctSupplier(
+                    $this->steward,
+                    $this->location,
+                    $supplier['id'],
+                    [
+                        'display_name' => 'Korekta wycofana',
+                        'reason' => 'Korekta do testu rollback',
+                    ],
+                    'supplier-audit-rollback-correct-0001',
+                ),
+                fn () => $commercial->archiveSupplier(
+                    $this->steward,
+                    $this->location,
+                    $supplier['id'],
+                    'Archiwizacja do testu rollback',
+                    'supplier-audit-rollback-archive-0001',
+                ),
+            ] as $mutation) {
+                try {
+                    $mutation();
+                    $this->fail('Mutacja biznesowa powiodła się mimo błędu audytu.');
+                } catch (QueryException $exception) {
+                    $this->assertSame('P0001', $exception->errorInfo[0] ?? null);
+                }
+            }
+        } finally {
+            $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+                DROP TRIGGER test_fail_stage2e_supplier_audit ON public.raw_materials_commercial_audit_events;
+                DROP TRIGGER test_fail_stage2e_category_audit ON public.raw_material_audit_events;
+                DROP FUNCTION public.test_fail_stage2e_business_audit();
+                SQL));
+        }
+
+        $this->assertSame('Kategoria z audytem', DB::table('raw_material_categories')
+            ->where('id', $category['id'])->value('name'));
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_id', $category['id'])->where('event_code', 'CATEGORY_RENAMED')->count());
+        $this->assertEquals($supplierBefore, DB::table('organization_suppliers')->where('id', $supplier['id'])->first());
+        $this->assertSame(0, DB::table('raw_materials_commercial_audit_events')
+            ->where('subject_id', $supplier['id'])
+            ->whereIn('event_code', ['SUPPLIER_DETAILS_CORRECTED', 'SUPPLIER_ARCHIVED'])->count());
+        $this->assertDatabaseMissing('raw_materials_commercial_idempotency', [
+            'organization_id' => $this->steward->organization_id,
+            'idempotency_key' => 'supplier-audit-rollback-correct-0001',
+        ]);
+        $this->assertDatabaseMissing('raw_materials_commercial_idempotency', [
+            'organization_id' => $this->steward->organization_id,
+            'idempotency_key' => 'supplier-audit-rollback-archive-0001',
         ]);
     }
 

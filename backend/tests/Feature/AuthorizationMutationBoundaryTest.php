@@ -230,6 +230,13 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'code' => 'BASIC',
             'name' => 'Podstawowe',
         ]);
+        $categoryCreationAudit = $connection->table('raw_material_audit_events')
+            ->where('subject_id', $category['id'])
+            ->where('event_code', 'CATEGORY_CREATED')
+            ->first();
+        $this->assertNotNull($categoryCreationAudit);
+        $this->assertSame($administrator->id, $categoryCreationAudit->actor_user_id);
+        $this->assertSame($location->id, $categoryCreationAudit->actor_location_id);
         $material = app(RawMaterialService::class)->create($administrator, $location, [
             'category_id' => $category['id'],
             'name' => 'Mąka testowa',
@@ -237,7 +244,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'conversions' => [['unit_code' => 'g']],
             'aliases' => ['Mąka do testów'],
         ]);
-        $this->assertTempApprovalCannotBeForged($connection, $material['id']);
+        $this->assertTempApprovalCannotBeForged($connection, $administrator->id, $material['id']);
         $supplier = app(RawMaterialCommercialService::class)->createSupplier(
             $administrator,
             $location,
@@ -280,16 +287,20 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
     }
 
-    private function assertTempApprovalCannotBeForged(Connection $connection, string $materialId): void
+    private function assertTempApprovalCannotBeForged(Connection $connection, string $actorId, string $materialId): void
     {
         $material = $connection->table('raw_materials')->where('id', $materialId)->first();
         $this->assertNotNull($material?->working_revision_id);
 
-        $connection->table('raw_materials')->where('id', $materialId)->update([
-            'lifecycle_state' => 'VERIFICATION',
-            'pending_revision_id' => $material->working_revision_id,
-            'working_revision_id' => null,
-        ]);
+        app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::rawMaterialMutate(),
+            $actorId,
+            fn () => $connection->table('raw_materials')->where('id', $materialId)->update([
+                'lifecycle_state' => 'VERIFICATION',
+                'pending_revision_id' => $material->working_revision_id,
+                'working_revision_id' => null,
+            ]),
+        );
         $revision = $connection->table('raw_material_revisions')->where('id', $material->working_revision_id)->first();
         $this->assertNotNull($revision);
 
@@ -309,13 +320,17 @@ class AuthorizationMutationBoundaryTest extends TestCase
         ]);
         $connection->statement('SET LOCAL search_path = pg_temp, public');
 
-        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_materials')
-            ->where('id', $materialId)
-            ->update([
-                'lifecycle_state' => 'ACTIVE',
-                'approved_revision_id' => $revision->id,
-                'pending_revision_id' => null,
-            ]));
+        $this->assertRuntimeDenied(fn () => app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::rawMaterialMutate(),
+            $actorId,
+            fn () => $connection->table('public.raw_materials')
+                ->where('id', $materialId)
+                ->update([
+                    'lifecycle_state' => 'ACTIVE',
+                    'approved_revision_id' => $revision->id,
+                    'pending_revision_id' => null,
+                ]),
+        ), '23514');
 
         $after = $connection->table('public.raw_materials')->where('id', $materialId)->first();
         $this->assertSame('VERIFICATION', $after->lifecycle_state);
@@ -378,8 +393,25 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $alias = $connection->table('raw_material_aliases')
             ->where('revision_id', $revision->id)->first();
 
-        $this->assertSame(1, $connection->table('public.raw_material_categories')
-            ->where('id', $categoryId)->update(['name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]));
+        $categoryBefore = $connection->table('public.raw_material_categories')->where('id', $categoryId)->first();
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_categories')
+            ->where('id', $categoryId)->update(['name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]), '42501');
+        $categoryAuditCount = (int) $connection->table('raw_material_audit_events')->count();
+        $forgedCategoryId = (string) Str::uuid();
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_categories')->insert([
+            'id' => $forgedCategoryId,
+            'organization_id' => $organizationId,
+            'parent_id' => null,
+            'code' => 'DIRECT_SQL_FORGED',
+            'name' => 'Kategoria bez audytu',
+            'depth' => 1,
+            'created_by' => $actorId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]), '42501');
+        $this->assertSame(0, $connection->table('raw_material_categories')->where('id', $forgedCategoryId)->count());
+        $this->assertSame($categoryAuditCount, (int) $connection->table('raw_material_audit_events')->count());
+        $this->assertEquals($categoryBefore, $connection->table('public.raw_material_categories')->where('id', $categoryId)->first());
         $counterBefore = (int) $connection->table('organization_sku_counters')
             ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value');
         $this->assertRuntimeDenied(fn () => $connection->table('public.organization_sku_counters')
@@ -387,13 +419,40 @@ class AuthorizationMutationBoundaryTest extends TestCase
             ->update(['last_value' => DB::raw('last_value + 1'), 'updated_at' => now()]));
         $this->assertSame($counterBefore, (int) $connection->table('organization_sku_counters')
             ->where('organization_id', $organizationId)->where('prefix', 'RAW')->value('last_value'));
+        $assignmentBefore = $connection->table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->where('entity_type', 'RAW')
+            ->where('entity_id', $materialId)->first();
+        $this->assertNotNull($assignmentBefore);
+        $this->assertRuntimeDenied(fn () => $connection->table('public.organization_sku_assignments')
+            ->where('organization_id', $organizationId)->where('sku', $assignmentBefore->sku)
+            ->update(['sku' => 'RAW-999999', 'sequence_number' => 999999]), '42501');
+        $this->assertEquals($assignmentBefore, $connection->table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->where('sku', $assignmentBefore->sku)->first());
+        $assignmentCount = (int) $connection->table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->count();
+        $this->assertRuntimeDenied(fn () => $connection->table('public.organization_sku_assignments')->insert([
+            'organization_id' => $organizationId,
+            'sku' => 'RAW-888888',
+            'prefix' => 'RAW',
+            'sequence_number' => 888888,
+            'entity_type' => 'RAW',
+            'entity_id' => (string) Str::uuid(),
+            'allocation_source' => 'IMPORTED',
+            'assigned_by' => $actorId,
+            'created_at' => now(),
+        ]), '42501');
+        $this->assertSame($assignmentCount, (int) $connection->table('organization_sku_assignments')
+            ->where('organization_id', $organizationId)->count());
 
         $auditCountBefore = (int) $connection->table('raw_materials_commercial_audit_events')->count();
         $auditBefore = $connection->table('raw_materials_commercial_audit_events')->orderBy('id')->get()->toArray();
         $supplierBefore = $connection->table('public.organization_suppliers')->where('id', $supplierId)->first();
         $this->assertNotNull($supplierBefore);
         $this->assertRuntimeDenied(fn () => $connection->table('public.organization_suppliers')
-            ->where('id', $supplierId)->update(['display_name' => 'Nazwa zmieniona bez audytu', 'updated_at' => now()]), '23514');
+            ->where('id', $supplierId)->update(['display_name' => 'Korekta bez audytu', 'updated_at' => now()]), '42501');
+        $this->assertEquals($supplierBefore, $connection->table('public.organization_suppliers')->where('id', $supplierId)->first());
+        $this->assertRuntimeDenied(fn () => $connection->table('public.organization_suppliers')
+            ->where('id', $supplierId)->update(['lifecycle_state' => 'ARCHIVED', 'updated_at' => now()]), '42501');
         $this->assertEquals($supplierBefore, $connection->table('public.organization_suppliers')->where('id', $supplierId)->first());
         $this->assertSame($auditCountBefore, (int) $connection->table('raw_materials_commercial_audit_events')->count());
         $this->assertEquals($auditBefore, $connection->table('raw_materials_commercial_audit_events')->orderBy('id')->get()->toArray());
@@ -405,16 +464,16 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_aliases')
             ->where('id', $alias->id)->update(['alias' => 'Niedozwolony alias']));
 
-        $workingRevisionId = $material->pending_revision_id;
-        $this->assertSame(1, $connection->table('public.raw_materials')->where('id', $materialId)->update([
+        $newRevisionId = (string) Str::uuid();
+        $materialBeforeForgery = $connection->table('public.raw_materials')->where('id', $materialId)->first();
+        $this->assertSame('VERIFICATION', $materialBeforeForgery->lifecycle_state);
+        $this->assertNotNull($materialBeforeForgery->pending_revision_id);
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_materials')->where('id', $materialId)->update([
             'lifecycle_state' => 'DRAFT',
             'pending_revision_id' => null,
-            'working_revision_id' => $workingRevisionId,
-        ]));
-        $newRevisionId = (string) Str::uuid();
-        $connection->table('public.raw_materials')->where('id', $materialId)
-            ->update(['working_revision_id' => $newRevisionId]);
-        $this->assertTrue($connection->table('public.raw_material_revisions')->insert([
+            'working_revision_id' => $newRevisionId,
+        ]), '42501');
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_revisions')->insert([
             'id' => $newRevisionId,
             'organization_id' => $organizationId,
             'raw_material_id' => $materialId,
@@ -427,8 +486,8 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'critical_change' => false,
             'created_by' => $actorId,
             'content_hash' => str_repeat('0', 64),
-        ]));
-        $this->assertTrue($connection->table('public.raw_material_revision_units')->insert([
+        ]), '42501');
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_revision_units')->insert([
             'id' => (string) Str::uuid(),
             'organization_id' => $organizationId,
             'revision_id' => $newRevisionId,
@@ -437,15 +496,20 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'conversion_kind' => 'MATERIAL_SPECIFIC',
             'to_base_factor' => '1',
             'basis' => 'Przeliczenie testowe',
-        ]));
-        $this->assertTrue($connection->table('public.raw_material_aliases')->insert([
+        ]), '42501');
+        $this->assertRuntimeDenied(fn () => $connection->table('public.raw_material_aliases')->insert([
             'id' => (string) Str::uuid(),
             'organization_id' => $organizationId,
             'raw_material_id' => $materialId,
             'revision_id' => $newRevisionId,
             'alias' => 'Alias dodany bez kontroli Laravel',
             'normalized_alias' => 'alias dodany bez kontroli laravel',
-        ]));
+        ]), '42501');
+        $materialAfterForgery = $connection->table('public.raw_materials')->where('id', $materialId)->first();
+        $this->assertEquals($materialBeforeForgery, $materialAfterForgery);
+        $this->assertSame(0, $connection->table('public.raw_material_revisions')->where('id', $newRevisionId)->count());
+        $this->assertSame(0, $connection->table('public.raw_material_revision_units')->where('revision_id', $newRevisionId)->count());
+        $this->assertSame(0, $connection->table('public.raw_material_aliases')->where('revision_id', $newRevisionId)->count());
 
         $productId = (string) Str::uuid();
         $identity = (array) $connection->selectOne('SELECT current_user, session_user, current_database() AS database_name');

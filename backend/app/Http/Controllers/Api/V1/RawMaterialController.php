@@ -29,6 +29,7 @@ use App\Http\Requests\RawMaterialReferencePriceQueryRequest;
 use App\Http\Requests\RawMaterialReferencePriceRequest;
 use App\Http\Requests\RawMaterialRestatementRequest;
 use App\Http\Requests\RawMaterialStorageVariantsRequest;
+use App\Http\Requests\RawMaterialSupplierCorrectionRequest;
 use App\Http\Requests\RawMaterialSupplierListRequest;
 use App\Http\Requests\RawMaterialSupplierRequest;
 use App\Models\User;
@@ -66,6 +67,20 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $supplier,
             $request->validated('reason'),
+            $request->idempotencyKey(),
+        ));
+    }
+
+    public function correctSupplier(
+        RawMaterialSupplierCorrectionRequest $request,
+        string $supplier,
+        RawMaterialCommercialService $service,
+    ): JsonResponse {
+        return response()->json($service->correctSupplier(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $supplier,
+            $request->validated(),
             $request->idempotencyKey(),
         ));
     }

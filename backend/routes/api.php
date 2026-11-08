@@ -83,6 +83,8 @@ Route::prefix('v1/raw-materials')->middleware([
         ->whereUuid('export');
     Route::get('/suppliers', [RawMaterialController::class, 'suppliers']);
     Route::post('/suppliers', [RawMaterialController::class, 'storeSupplier']);
+    Route::patch('/suppliers/{supplier}', [RawMaterialController::class, 'correctSupplier'])
+        ->whereUuid('supplier');
     Route::post('/suppliers/{supplier}/archive', [RawMaterialController::class, 'archiveSupplier'])
         ->whereUuid('supplier');
     Route::get('/{material}/supplier-products', [RawMaterialController::class, 'supplierProducts'])

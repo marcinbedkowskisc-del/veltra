@@ -110,6 +110,7 @@ return [
     'raw_materials_idempotency_key_required' => 'Wymagany jest prawidłowy nagłówek Idempotency-Key.',
     'raw_material_idempotency_key_required' => 'Wymagany jest prawidłowy nagłówek Idempotency-Key.',
     'raw_material_idempotency_conflict' => 'Klucz idempotencji został już użyty dla innego żądania.',
+    'raw_material_supplier_correction_required' => 'Podaj co najmniej jedno obsługiwane pole do korekty dostawcy.',
     'raw_materials_nbp_response_invalid' => 'Otrzymano nieprawidłową odpowiedź z serwisu kursów NBP.',
     'raw_materials_nbp_unavailable' => 'Serwis kursów NBP jest tymczasowo niedostępny.',
     'raw_materials_pln_rate_not_importable' => 'Kurs PLN jest kursem tożsamościowym i nie podlega importowi z NBP.',

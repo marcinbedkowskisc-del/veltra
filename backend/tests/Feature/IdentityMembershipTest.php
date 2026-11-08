@@ -90,7 +90,8 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_inactive_location_invalidates_selected_context_and_is_not_listed(): void
     {
         $user = $this->user();
-        $location = $this->kitchen();
+        $this->kitchen('PRIMARY');
+        $location = $this->kitchen('SECONDARY');
         app(MembershipService::class)->assign($user, $location);
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])->assertOk();
         $this->service->updateLocation($location, ['is_active' => false]);
@@ -124,7 +125,8 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_assignment_rejects_disabled_users_and_locations(): void
     {
         $user = $this->user();
-        $location = $this->kitchen();
+        $this->kitchen('PRIMARY');
+        $location = $this->kitchen('SECONDARY');
         $location = $this->updateFixture($location, ['is_active' => false]);
         $this->expectException(BusinessRuleViolation::class);
         app(MembershipService::class)->assign($user, $location);

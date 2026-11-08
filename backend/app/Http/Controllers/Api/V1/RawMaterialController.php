@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialCompatibilityAssessmentService;
+use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Http\Controllers\Controller;
@@ -28,6 +29,8 @@ use App\Http\Requests\RawMaterialReasonRequest;
 use App\Http\Requests\RawMaterialReferencePriceQueryRequest;
 use App\Http\Requests\RawMaterialReferencePriceRequest;
 use App\Http\Requests\RawMaterialRestatementRequest;
+use App\Http\Requests\RawMaterialShareRequest;
+use App\Http\Requests\RawMaterialShareRevocationRequest;
 use App\Http\Requests\RawMaterialStorageVariantsRequest;
 use App\Http\Requests\RawMaterialSupplierCorrectionRequest;
 use App\Http\Requests\RawMaterialSupplierListRequest;
@@ -339,6 +342,46 @@ class RawMaterialController extends Controller
             $request->user(),
             $request->attributes->get('operating_location'),
             $request->validated(),
+        ));
+    }
+
+    public function shares(
+        Request $request,
+        string $material,
+        RawMaterialLocationShareAdministration $administration,
+    ): JsonResponse {
+        return response()->json($administration->list(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+        ));
+    }
+
+    public function createShare(
+        RawMaterialShareRequest $request,
+        string $material,
+        RawMaterialLocationShareAdministration $administration,
+    ): JsonResponse {
+        return response()->json($administration->share(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $request->validated('location_id'),
+        ), 201);
+    }
+
+    public function revokeShare(
+        RawMaterialShareRevocationRequest $request,
+        string $material,
+        string $location,
+        RawMaterialLocationShareAdministration $administration,
+    ): JsonResponse {
+        return response()->json($administration->revoke(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $location,
+            $request->validated('reason'),
         ));
     }
 

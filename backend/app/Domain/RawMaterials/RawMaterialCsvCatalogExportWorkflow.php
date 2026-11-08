@@ -18,6 +18,7 @@ final class RawMaterialCsvCatalogExportWorkflow
 {
     public function __construct(
         private readonly RawMaterialAuthorization $authorization,
+        private readonly RawMaterialLocationSharePolicy $sharePolicy,
         private readonly AuthorizationMutationContext $mutationContexts,
     ) {}
 
@@ -70,6 +71,7 @@ final class RawMaterialCsvCatalogExportWorkflow
             ->where('materials.lifecycle_state', 'ACTIVE')
             ->orderBy('materials.code')
             ->limit($maxRows + 1);
+        $this->sharePolicy->constrainVisibleMaterials($query, $actor, $context);
         $columns = match ($profile) {
             'extended_raw_catalog' => [
                 'materials.code as sku',
@@ -109,7 +111,7 @@ final class RawMaterialCsvCatalogExportWorkflow
                         ->on('roots.organization_id', '=', 'categories.organization_id');
                 });
         }
-        $query->select($columns);
+        $query->select($columns)->addSelect('materials.id as raw_material_id');
         if ($referencePrices) {
             $query
                 ->selectRaw(<<<'SQL'
@@ -348,6 +350,7 @@ final class RawMaterialCsvCatalogExportWorkflow
                 'storage_key' => $storageKey,
                 'sha256' => $hash,
                 'row_count' => $materials->count(),
+                'raw_material_ids' => $materials->pluck('raw_material_id')->all(),
                 'created_at' => now()->toIso8601String(),
             ];
             if ($asOfDate !== null) {
@@ -482,7 +485,8 @@ final class RawMaterialCsvCatalogExportWorkflow
             || ($manifest['organization_id'] ?? null) !== $actor->organization_id
             || ($manifest['actor_user_id'] ?? null) !== $actor->id
             || ($manifest['location_id'] ?? null) !== $context->id
-            || ($manifest['export_profile'] ?? null) !== $profile) {
+            || ($manifest['export_profile'] ?? null) !== $profile
+            || ! is_array($manifest['raw_material_ids'] ?? null)) {
             throw new RawMaterialException(
                 $referencePrices ? 'RAW_MATERIAL_REFERENCE_PRICE_EXPORT_NOT_FOUND' : 'RAW_MATERIAL_CSV_EXPORT_NOT_FOUND',
                 $referencePrices
@@ -490,6 +494,16 @@ final class RawMaterialCsvCatalogExportWorkflow
                     : 'Nie znaleziono eksportu katalogu w bieżącym kontekście organizacji.',
                 404,
             );
+        }
+        foreach ($manifest['raw_material_ids'] as $materialId) {
+            if (! is_string($materialId)) {
+                throw new RawMaterialException(
+                    $referencePrices ? 'RAW_MATERIAL_REFERENCE_PRICE_EXPORT_NOT_FOUND' : 'RAW_MATERIAL_CSV_EXPORT_NOT_FOUND',
+                    __('messages.resource_not_found'),
+                    404,
+                );
+            }
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
         }
 
         $disk = Storage::disk('raw_material_csv_exports');

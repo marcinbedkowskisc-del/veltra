@@ -72,15 +72,24 @@ class AccountLinks
         return true;
     }
 
-    public function issue(User $target, string $kind, string $ip, ?User $actor = null, ?Location $context = null, bool $bootstrap = false): void
-    {
+    public function issue(
+        User $target,
+        string $kind,
+        string $ip,
+        ?User $actor = null,
+        ?Location $context = null,
+        bool $bootstrap = false,
+        bool $selfProfileVerification = false,
+    ): void {
         $repository = $this->repository($kind);
-        $delivery = $this->contexts->run(AuthorizationMutationScope::accountIssue(), $actor?->id, fn (): ?array => DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $repository): ?array {
+        $delivery = $this->contexts->run(AuthorizationMutationScope::accountIssue(), $actor?->id, fn (): ?array => DB::transaction(function () use ($target, $kind, $ip, $actor, $context, $bootstrap, $selfProfileVerification, $repository): ?array {
             $organization = Organization::whereKey($target->organization_id)->lockForUpdate()->firstOrFail();
             $target = $target->fresh();
             $allowed = $bootstrap
                 ? ! $organization->authorization_initialized && $target->is_initial_identity && $actor === null && $kind === 'activation'
-                : $actor && $context && $this->canSend($actor, $context, $target);
+                : ($selfProfileVerification
+                    ? $this->canIssueSelfProfileVerification($actor, $context, $target, $organization, $kind)
+                    : $actor && $context && $this->canSend($actor, $context, $target));
             if (! $allowed || ! $target->is_active || ($kind === 'reset' && $target->email_verified_at === null)
                 || ($kind === 'activation' && $target->email_verified_at !== null)) {
                 throw new AuthorizationException;
@@ -117,6 +126,27 @@ class AccountLinks
             throw new BusinessRuleViolation(__('messages.identity_smtp_delivery_failed'));
         }
         unset($delivery);
+    }
+
+    private function canIssueSelfProfileVerification(
+        ?User $actor,
+        ?Location $context,
+        User $target,
+        Organization $organization,
+        string $kind,
+    ): bool {
+        $primary = $organization->primaryCentralKitchen()->first();
+
+        return $actor !== null && $context !== null && $actor->is($target)
+            && $target->is_initial_identity && $target->is_active && $target->email_verified_at === null
+            && $kind === 'activation' && $organization->is_active && $organization->authorization_initialized
+            && ! $organization->primary_central_kitchen_unresolved
+            && $primary !== null && $primary->is_active
+            && $context->organization_id === $organization->id && $context->is_active
+            && RoleAssignment::where('organization_id', $organization->id)->where('user_id', $target->id)
+                ->where('role', BusinessRole::Administrator)->whereNull('revoked_at')->exists()
+            && app(MembershipService::class)->available($target)->where('location_id', $primary->id)->exists()
+            && app(MembershipService::class)->available($target)->where('location_id', $context->id)->exists();
     }
 
     public function consume(string $kind, string $email, #[SensitiveParameter] string $token, #[SensitiveParameter] string $password): void

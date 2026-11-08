@@ -167,9 +167,30 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'Nadanie początkowej delegacji',
             self::password(),
         );
+        $upgradeRecipient = app(PersonnelAdministration::class)->requestPersonnel(
+            $administrator,
+            $location,
+            $location,
+            [
+                'first_name' => 'Pracownik',
+                'last_name' => 'Testowy',
+                'email' => 'upgrade-recipient@example.test',
+            ],
+        );
+        $this->assertNotNull($upgradeRecipient);
+        app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::accountConsume(),
+            null,
+            function () use ($upgradeRecipient): void {
+                $upgradeRecipient->forceFill([
+                    'email_verified_at' => now(),
+                    'password' => Hash::make(self::password()),
+                ])->save();
+            },
+        );
         $upgrade = app(RawMaterialPermissionUpgrade::class)->grant(
             $secondAdministrator->id,
-            $administrator->id,
+            $upgradeRecipient->id,
             [
                 RawMaterialPermission::CategoryManage->value,
                 RawMaterialPermission::Create->value,
@@ -226,7 +247,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'enabled' => true,
             'current_password' => self::password(),
         ]);
-        $category = app(RawMaterialService::class)->createCategory($administrator, $location, [
+        $category = app(RawMaterialService::class)->createCategory($upgradeRecipient, $location, [
             'code' => 'BASIC',
             'name' => 'Podstawowe',
         ]);
@@ -235,18 +256,18 @@ class AuthorizationMutationBoundaryTest extends TestCase
             ->where('event_code', 'CATEGORY_CREATED')
             ->first();
         $this->assertNotNull($categoryCreationAudit);
-        $this->assertSame($administrator->id, $categoryCreationAudit->actor_user_id);
+        $this->assertSame($upgradeRecipient->id, $categoryCreationAudit->actor_user_id);
         $this->assertSame($location->id, $categoryCreationAudit->actor_location_id);
-        $material = app(RawMaterialService::class)->create($administrator, $location, [
+        $material = app(RawMaterialService::class)->create($upgradeRecipient, $location, [
             'category_id' => $category['id'],
             'name' => 'Mąka testowa',
             'base_unit_code' => 'kg',
             'conversions' => [['unit_code' => 'g']],
             'aliases' => ['Mąka do testów'],
         ]);
-        $this->assertTempApprovalCannotBeForged($connection, $administrator->id, $material['id']);
+        $this->assertTempApprovalCannotBeForged($connection, $upgradeRecipient->id, $material['id']);
         $supplier = app(RawMaterialCommercialService::class)->createSupplier(
-            $administrator,
+            $upgradeRecipient,
             $location,
             ['supplier_code' => 'SUP-TEST', 'display_name' => 'Dostawca testowy'],
             'runtime-supplier-000022',
@@ -258,7 +279,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $this->assertNineTableRuntimeDmlMatrix(
             $connection,
             $organization->id,
-            $administrator->id,
+            $upgradeRecipient->id,
             $category['id'],
             $material['id'],
             $supplier['data']['id'],

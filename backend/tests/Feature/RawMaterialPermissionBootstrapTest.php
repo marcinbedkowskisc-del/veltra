@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
@@ -57,6 +58,32 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->assertSame(0, (int) $role->createrole);
         $this->assertSame(0, (int) $role->database_owner);
         $this->assertSame(1, (int) $role->can_create_schema_objects);
+    }
+
+    public function test_ordinary_administrator_cannot_bootstrap_permissions_for_another_administrator(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->user('bootstrap-ordinary-admin@example.test');
+        app(MembershipService::class)->assign($administrator, $location);
+        $this->role($administrator, BusinessRole::Administrator);
+        $targetAdministrator = $this->user('bootstrap-target-admin@example.test');
+        app(MembershipService::class)->assign($targetAdministrator, $location);
+        $this->role($targetAdministrator, BusinessRole::Administrator);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
+
+        try {
+            app(RawMaterialPermissionBootstrap::class)->grantInitial(
+                $administrator->id,
+                $targetAdministrator->id,
+                [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+                'Niedozwolone początkowe nadanie administratorowi',
+                self::PASSWORD,
+            );
+            $this->fail('An ordinary administrator bootstrapped permissions for another administrator.');
+        } catch (AuthorizationException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')
+                ->where('organization_id', $administrator->organization_id)->count());
+        }
     }
 
     public function test_runtime_cannot_write_to_permission_operation_ledger_directly(): void
@@ -334,7 +361,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('bootstrap-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $recipient = $this->user('bootstrap-steward@example.test');
         app(MembershipService::class)->assign($recipient, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
@@ -389,7 +416,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('bootstrap-replay-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $steward = $this->user('bootstrap-replay-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
@@ -458,7 +485,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('bootstrap-legacy-duplicate-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $recipient = $this->user('bootstrap-legacy-duplicate-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
@@ -519,7 +546,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('bootstrap-invalid-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $recipient = $this->user('bootstrap-invalid-steward@example.test');
         app(MembershipService::class)->assign($recipient, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
@@ -553,9 +580,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
     public function test_existing_organization_permission_upgrade_is_explicit_idempotent_and_permanently_revocable(): void
     {
         $location = $this->activeRestaurant();
-        $administrator = $this->user('permission-upgrade-bootstrap-admin@example.test');
-        $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        $administrator = $this->bootstrapSuperAdministrator($location, 'permission-upgrade-bootstrap-admin@example.test');
         $steward = $this->user('permission-upgrade-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $this->role($steward, BusinessRole::Administrator);
@@ -664,11 +689,11 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             $this->assertSame('23514', $exception->errorInfo[0]);
         }
 
-        app(IdentityService::class)->disable($steward);
+        app(RoleAdministration::class)->setAccountActive($administrator, $location, $steward, false);
         $grantIds = collect($result['grants'])->pluck('id');
         $this->assertSame($grantIds->count(), DB::table('organization_permission_grant_events')
             ->whereIn('grant_id', $grantIds)->where('event_type', 'REVOKED')->count());
-        $this->updateFixture($steward, ['is_active' => true]);
+        app(RoleAdministration::class)->setAccountActive($administrator, $location, $steward, true);
         $this->assertSame([], app(RawMaterialAuthorization::class)
             ->effectiveGrantIds($recipient, RawMaterialPermission::SupplierView));
         $this->assertSame([], app(RawMaterialAuthorization::class)
@@ -678,14 +703,10 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
     public function test_permission_upgrade_revocation_propagates_through_nested_upgrades_and_postgresql(): void
     {
         $location = $this->activeRestaurant();
-        $bootstrapAdministrator = $this->user('nested-upgrade-bootstrap-admin@example.test');
-        $this->role($bootstrapAdministrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($bootstrapAdministrator, $location);
+        $bootstrapAdministrator = $this->bootstrapSuperAdministrator($location, 'nested-upgrade-bootstrap-admin@example.test');
         $steward = $this->user('nested-upgrade-steward@example.test');
-        $this->role($steward, BusinessRole::Administrator);
         app(MembershipService::class)->assign($steward, $location);
         $delegatedAdministrator = $this->user('nested-upgrade-delegated-admin@example.test');
-        $this->role($delegatedAdministrator, BusinessRole::Administrator);
         app(MembershipService::class)->assign($delegatedAdministrator, $location);
         $recipient = $this->user('nested-upgrade-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
@@ -701,6 +722,8 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             'Jawne ustanowienie opiekuna',
             self::PASSWORD,
         );
+        $roles = app(RoleAdministration::class);
+        $roles->grant($bootstrapAdministrator, $location, $steward, BusinessRole::Administrator, null, self::PASSWORD);
         $rootAuthority = collect($initialGrants)
             ->firstWhere('permission', RawMaterialPermission::PermissionDelegate->value);
         $upgrade = app(RawMaterialPermissionUpgrade::class);
@@ -711,6 +734,9 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             'Jawne przekazanie delegowania',
             'nested-upgrade-first-001',
             self::PASSWORD,
+        );
+        $roles->grant(
+            $bootstrapAdministrator, $location, $delegatedAdministrator, BusinessRole::Administrator, null, self::PASSWORD,
         );
         $delegatedAuthority = DB::table('organization_permission_grants')
             ->where('bootstrap_operation_id', $firstUpgrade['operation_id'])
@@ -848,7 +874,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('permission-upgrade-denied-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $recipient = $this->user('permission-upgrade-denied-recipient@example.test');
         app(MembershipService::class)->assign($recipient, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
@@ -906,7 +932,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('delegation-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $steward = $this->user('delegation-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $recipient = $this->user('delegation-recipient@example.test');
@@ -1031,7 +1057,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('signed-delegation-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $steward = $this->user('signed-delegation-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $recipient = $this->user('signed-delegation-recipient@example.test');
@@ -1101,7 +1127,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('permanent-revoke-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $steward = $this->user('permanent-revoke-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $recipient = $this->user('permanent-revoke-recipient@example.test');
@@ -1204,7 +1230,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $location = $this->activeRestaurant();
         $administrator = $this->user('expiry-admin@example.test');
         $this->role($administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($administrator, $location);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
         $steward = $this->user('expiry-steward@example.test');
         app(MembershipService::class)->assign($steward, $location);
         $viewRecipient = $this->user('expiry-view-recipient@example.test');
@@ -1351,6 +1377,22 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
             'enabled' => true,
             'current_password' => self::PASSWORD,
         ]);
+    }
+
+    private function bootstrapSuperAdministrator(Location $location, string $email): User
+    {
+        $administrator = app(IdentityService::class)->provisionInitial([
+            'first_name' => 'Initial',
+            'last_name' => 'Administrator',
+            'email' => $email,
+        ], self::PASSWORD);
+        $administrator = $this->updateFixture($administrator, ['email_verified_at' => now()]);
+        $primaryKitchen = Location::where('type', 'CENTRAL_KITCHEN')->firstOrFail();
+        app(MembershipService::class)->assign($administrator, $primaryKitchen);
+        app(RoleAdministration::class)->bootstrapInitial($administrator);
+        app(MembershipService::class)->assign($administrator, $location, $administrator->id);
+
+        return $administrator->fresh();
     }
 
     /**

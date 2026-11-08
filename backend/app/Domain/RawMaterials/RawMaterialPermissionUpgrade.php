@@ -4,6 +4,7 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Organization;
@@ -77,6 +78,9 @@ final class RawMaterialPermissionUpgrade
             }
 
             $this->assertAuthorizedAdministrator($freshActor, $organization, $password);
+            if (! app(BusinessAuthorization::class)->canManageAccount($freshActor, $recipient)) {
+                throw new AuthorizationException(__('messages.unauthorized'));
+            }
 
             $existing = DB::table('raw_material_permission_upgrade_operations')
                 ->where('organization_id', $organization->id)

@@ -34,6 +34,11 @@ final readonly class AuthorizationMutationScope
         return new self('account.email_change');
     }
 
+    public static function accountProfileUpdate(): self
+    {
+        return new self('account.profile_update');
+    }
+
     public static function administratorBootstrap(): self
     {
         return new self('administrator.bootstrap');
@@ -164,6 +169,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.mutate');
     }
 
+    public static function rawMaterialShare(): self
+    {
+        return new self('raw-material.share');
+    }
+
     public static function skuAllocate(): self
     {
         return new self('sku.allocate');
@@ -227,6 +237,7 @@ final readonly class AuthorizationMutationScope
             'account.deactivate' => self::accountDeactivate(...),
             'account.reactivate' => self::accountReactivate(...),
             'account.email_change' => self::accountEmailChange(...),
+            'account.profile_update' => self::accountProfileUpdate(...),
             'structure.create' => self::installationLocationCreate(...),
             'structure.update' => self::installationLocationUpdate(...),
             'structure.management' => self::installationManagementAssign(...),

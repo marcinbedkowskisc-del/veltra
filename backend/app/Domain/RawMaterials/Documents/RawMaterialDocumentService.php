@@ -5,6 +5,7 @@ namespace App\Domain\RawMaterials\Documents;
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialLocationSharePolicy;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Jobs\ScanRawMaterialDocumentVersion;
 use App\Models\Location;
@@ -34,6 +35,7 @@ final class RawMaterialDocumentService
 
     public function __construct(
         private readonly RawMaterialAuthorization $authorization,
+        private readonly RawMaterialLocationSharePolicy $sharePolicy,
         private readonly AuthorizationMutationContext $contexts,
         private readonly PrivateDocumentStorage $storage,
     ) {}
@@ -204,6 +206,10 @@ final class RawMaterialDocumentService
                 $join->on('links.document_version_id', '=', 'versions.id')
                     ->on('links.organization_id', '=', 'versions.organization_id');
             })
+            ->join('raw_material_revisions as revisions', function ($join): void {
+                $join->on('revisions.id', '=', 'links.raw_material_revision_id')
+                    ->on('revisions.organization_id', '=', 'links.organization_id');
+            })
             ->where('versions.id', $versionId)
             ->where('versions.organization_id', $actor->organization_id)
             ->select([
@@ -218,6 +224,7 @@ final class RawMaterialDocumentService
                 'versions.storage_key',
                 'versions.stored_at',
                 'links.raw_material_revision_id',
+                'revisions.raw_material_id',
             ])->first();
         if (! $version) {
             throw new RawMaterialDocumentException(
@@ -225,6 +232,9 @@ final class RawMaterialDocumentService
                 'Nie znaleziono wersji dokumentu.',
                 404,
             );
+        }
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $version->raw_material_id);
         }
 
         try {

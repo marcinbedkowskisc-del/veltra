@@ -16,9 +16,9 @@ class MembershipService
 {
     public function __construct(private AuthorizationMutationContext $contexts) {}
 
-    public function assign(User $user, Location $location): LocationMembership
+    public function assign(User $user, Location $location, ?string $actorId = null): LocationMembership
     {
-        return $this->contexts->run(AuthorizationMutationScope::membershipAssign(), null, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
+        return $this->contexts->run(AuthorizationMutationScope::membershipAssign(), $actorId, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
             $organization = Organization::lockForUpdate()->firstOrFail();
             $user = $user->fresh();
             $location = $location->fresh();
@@ -41,10 +41,10 @@ class MembershipService
         }));
     }
 
-    public function deactivate(LocationMembership $membership, string $reason): void
+    public function deactivate(LocationMembership $membership, string $reason, ?string $actorId = null): void
     {
         validator(['reason' => $reason], ['reason' => ['required', 'string', 'max:250']])->validate();
-        $this->contexts->run(AuthorizationMutationScope::membershipDeactivate(), null, function () use ($membership, $reason): void {
+        $this->contexts->run(AuthorizationMutationScope::membershipDeactivate(), $actorId, function () use ($membership, $reason): void {
             DB::transaction(function () use ($membership, $reason): void {
                 $membership = LocationMembership::findOrFail($membership->id);
                 Organization::whereKey($membership->organization_id)->lockForUpdate()->firstOrFail();

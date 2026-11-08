@@ -4,6 +4,7 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Organization;
@@ -32,6 +33,7 @@ final class RawMaterialPermissionBootstrap
     ): array {
         $actor = User::with('organization')->find($actorId);
         $recipient = User::find($recipientId);
+        $authorization = app(BusinessAuthorization::class);
         $permissions = array_values(array_unique($permissions));
         $allowed = array_map(fn (RawMaterialPermission $permission): string => $permission->value, RawMaterialPermission::cases());
 
@@ -40,6 +42,7 @@ final class RawMaterialPermissionBootstrap
             || ! $actor->is_active || $actor->email_verified_at === null
             || ! $actor->organization->is_active || ! $actor->organization->authorization_initialized
             || ! $recipient->is_active || $recipient->email_verified_at === null
+            || ! $authorization->canManageAccount($actor, $recipient)
             || ! app(MembershipService::class)->available($actor)->exists()
             || ! app(MembershipService::class)->available($recipient)->exists()
             || ! RoleAssignment::effective()->where('organization_id', $actor->organization_id)
@@ -52,7 +55,7 @@ final class RawMaterialPermissionBootstrap
             throw new AuthorizationException(__('messages.raw_material_bootstrap_denied'));
         }
 
-        return $this->contexts->run(AuthorizationMutationScope::permissionBootstrap(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $recipient, $permissions, $reason, $password): array {
+        return $this->contexts->run(AuthorizationMutationScope::permissionBootstrap(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $recipient, $permissions, $reason, $password, $authorization): array {
             $organization = Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $freshActor = User::with('organization')->find($actor->id);
             $freshRecipient = User::find($recipient->id);
@@ -60,6 +63,7 @@ final class RawMaterialPermissionBootstrap
                 || ! $organization->is_active || ! $organization->authorization_initialized
                 || $freshRecipient->organization_id !== $organization->id || ! $freshRecipient->is_active
                 || $freshRecipient->email_verified_at === null || $freshActor->is($freshRecipient)
+                || ! $authorization->canManageAccount($freshActor, $freshRecipient)
                 || ! Hash::check($password, $freshActor->password)
                 || ! RoleAssignment::effective()->where('organization_id', $organization->id)
                     ->where('user_id', $freshActor->id)->where('role', BusinessRole::Administrator)

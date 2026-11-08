@@ -64,6 +64,7 @@ class PermissionAdministration
     private function authorize(User $actor, Location $context, User $target, Location $location, Permission $permission): void
     {
         if (! $this->authorization->eligible($actor, $context, $location) || $target->organization_id !== $actor->organization_id
+            || ! $this->authorization->canManageAccount($actor, $target)
             || $location->type !== LocationType::Restaurant || (! $permission->special() && $permission->module() === null)) {
             throw new AuthorizationException;
         }

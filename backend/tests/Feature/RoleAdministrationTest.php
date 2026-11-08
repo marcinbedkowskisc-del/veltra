@@ -43,10 +43,10 @@ class RoleAdministrationTest extends AuthorizationTestCase
             $this->assertSame(1, DB::table('security_events')->where('outcome', 'rejected')->count());
         }
         $second = $roles->grant($actor, $context, $other, BusinessRole::Administrator, null, self::PASSWORD);
-        app(MembershipService::class)->assign($other, $context);
-        $roles->revoke($actor, $context, RoleAssignment::where('user_id', $actor->id)->firstOrFail(), self::PASSWORD);
-        $this->assertNotNull(RoleAssignment::where('user_id', $actor->id)->firstOrFail()->revoked_at);
-        $this->assertNull($second->fresh()->revoked_at);
+        app(MembershipService::class)->assign($other, $context, $actor->id);
+        $roles->revoke($actor, $context, $second, self::PASSWORD);
+        $this->assertNull(RoleAssignment::where('user_id', $actor->id)->firstOrFail()->revoked_at);
+        $this->assertNotNull($second->fresh()->revoked_at);
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('security_events')->update(['outcome' => 'accepted']));
     }
 
@@ -56,21 +56,21 @@ class RoleAdministrationTest extends AuthorizationTestCase
         $actor = $this->updateFixture($actor, ['email_verified_at' => now()]);
         $role = $this->role($actor, BusinessRole::Administrator);
         $context = $this->kitchen();
-        app(MembershipService::class)->assign($actor, $context);
+        app(MembershipService::class)->assign($actor, $context, $actor->id);
         $organization = $this->updateFixture($actor->organization, ['authorization_initialized' => true]);
         $this->assertTrue($organization->authorization_initialized);
         $roles = app(RoleAdministration::class);
-        foreach ([
-            fn () => $roles->revoke($actor, $context, $role, self::PASSWORD),
-            fn () => $roles->setAccountActive($actor, $context, $actor, false),
-        ] as $mutation) {
-            try {
-                $mutation();
-                $this->fail('The last administrator was removed.');
-            } catch (BusinessRuleViolation) {
-                $this->assertTrue($actor->fresh()->is_active);
-                $this->assertNull($role->fresh()->revoked_at);
-            }
+        try {
+            $roles->revoke($actor, $context, $role, self::PASSWORD);
+            $this->fail('An ordinary administrator revoked their own administrator role.');
+        } catch (AuthorizationException) {
+            $this->assertNull($role->fresh()->revoked_at);
+        }
+        try {
+            $roles->setAccountActive($actor, $context, $actor, false);
+            $this->fail('The last administrator was disabled.');
+        } catch (BusinessRuleViolation) {
+            $this->assertTrue($actor->fresh()->is_active);
         }
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($actor)->update(['is_active' => false]));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($role)->update(['revoked_at' => now()]));

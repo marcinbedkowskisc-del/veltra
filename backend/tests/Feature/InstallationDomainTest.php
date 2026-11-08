@@ -65,6 +65,32 @@ class InstallationDomainTest extends InstallationTestCase
         $this->assertSame($first->id, $organization->fresh()->primaryCentralKitchen->id);
     }
 
+    public function test_primary_central_kitchen_must_be_created_active(): void
+    {
+        $organization = $this->initialize();
+
+        try {
+            $this->service->createLocation([
+                'name' => 'Inactive primary',
+                'code' => 'INACTIVE',
+                'type' => LocationType::CentralKitchen->value,
+                'is_active' => false,
+            ]);
+            $this->fail('The service created an inactive primary central kitchen.');
+        } catch (BusinessRuleViolation) {
+            $this->assertSame(0, Location::count());
+        }
+
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => Location::on('pgsql_setup')->create([
+            'organization_id' => $organization->id,
+            'name' => 'Inactive primary',
+            'code' => 'INACTIVE',
+            'type' => LocationType::CentralKitchen,
+            'is_active' => false,
+        ]));
+        $this->assertNull($organization->fresh()->primaryCentralKitchen);
+    }
+
     public function test_legacy_installation_without_verified_primary_stays_unresolved(): void
     {
         $organization = $this->initialize();

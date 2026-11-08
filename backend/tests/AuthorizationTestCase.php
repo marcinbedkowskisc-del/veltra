@@ -13,7 +13,7 @@ abstract class AuthorizationTestCase extends IdentityTestCase
     protected function role(User $user, BusinessRole $role, ?Location $location = null): RoleAssignment
     {
         $membership = $location ? app(MembershipService::class)->available($user)->where('location_id', $location->id)->first()
-            ?? app(MembershipService::class)->assign($user, $location) : null;
+            ?? app(MembershipService::class)->assign($user, $location, $user->id) : null;
 
         $assignment = RoleAssignment::on('pgsql_setup')->create([
             'organization_id' => $user->organization_id, 'user_id' => $user->id,

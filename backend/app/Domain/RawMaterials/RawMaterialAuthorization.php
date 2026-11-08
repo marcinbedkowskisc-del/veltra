@@ -23,6 +23,11 @@ final class RawMaterialAuthorization
             throw new AuthorizationException(__('messages.unauthorized'));
         }
 
+        if ($permission->requiresPrimaryCatalogContext()
+            && ! app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+
         if (! app(ModuleAvailability::class)->enabled($freshContext, 'RAW_MATERIALS')) {
             throw new RawMaterialException(
                 'RAW_MATERIALS_MODULE_UNAVAILABLE',

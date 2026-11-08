@@ -9,6 +9,7 @@ use App\Domain\Authorization\PermissionAdministration;
 use App\Domain\Authorization\PersonnelAdministration;
 use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Authorization\SecurityMutation;
+use App\Domain\Authorization\SuperAdminProfileAdministration;
 use App\Domain\Identity\AccountLinks;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Http\Controllers\Controller;
@@ -54,6 +55,22 @@ class SecurityController extends Controller
     {
         $service->changeEmail($request->user(), $request->attributes->get('operating_location'), $user, $request->validated('email'));
         $this->requestLink($request, $user->refresh(), 'activation');
+
+        return $this->accepted();
+    }
+
+    public function updateMyProfile(SecurityRequest $request, SuperAdminProfileAdministration $service): JsonResponse
+    {
+        $actor = $request->user();
+        $emailChanged = $service->update(
+            $actor,
+            $request->attributes->get('operating_location'),
+            $request->safe()->only(['first_name', 'last_name', 'email']),
+            $request->validated('current_password'),
+        );
+        if ($emailChanged) {
+            $this->requestLink($request, $actor->refresh(), 'activation', true);
+        }
 
         return $this->accepted();
     }
@@ -168,10 +185,17 @@ class SecurityController extends Controller
         return $this->accepted();
     }
 
-    private function requestLink(Request $request, User $target, string $kind): void
+    private function requestLink(Request $request, User $target, string $kind, bool $selfProfileVerification = false): void
     {
         try {
-            app(AccountLinks::class)->issue($target, $kind, $request->ip(), $request->user(), $request->attributes->get('operating_location'));
+            app(AccountLinks::class)->issue(
+                $target,
+                $kind,
+                $request->ip(),
+                $request->user(),
+                $request->attributes->get('operating_location'),
+                selfProfileVerification: $selfProfileVerification,
+            );
         } catch (AuthorizationException|BusinessRuleViolation) {
             app(SecurityMutation::class)->record($request->user(), $target, $request->attributes->get('operating_location'), 'email.request_unavailable', 'rejected');
         }

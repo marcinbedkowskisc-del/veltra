@@ -35,6 +35,12 @@ class InstallationService
         return $this->contexts->run(AuthorizationMutationScope::installationLocationCreate(), null, fn (): Location => DB::transaction(function () use ($attributes): Location {
             $organization = $this->lockOrganization();
             $attributes['is_active'] ??= $attributes['type'] === LocationType::CentralKitchen->value;
+            $willBePrimary = $attributes['type'] === LocationType::CentralKitchen->value
+                && ! $organization->primary_central_kitchen_unresolved
+                && ! $organization->primaryCentralKitchen()->exists();
+            if ($willBePrimary && ! $attributes['is_active']) {
+                throw new BusinessRuleViolation(__('messages.primary_central_kitchen_must_remain_active'));
+            }
             if ($attributes['type'] === LocationType::Restaurant->value && $attributes['is_active']) {
                 throw new BusinessRuleViolation(__('messages.create_restaurant_inactive'));
             }
@@ -50,6 +56,11 @@ class InstallationService
             $organization = $this->lockOrganization();
             $location = Location::findOrFail($location->id);
             $this->ensureOwned($organization, $location);
+            if ($location->is_primary_central_kitchen
+                && array_key_exists('is_active', $attributes)
+                && filter_var($attributes['is_active'], FILTER_VALIDATE_BOOLEAN) === false) {
+                throw new BusinessRuleViolation(__('messages.primary_central_kitchen_must_remain_active'));
+            }
             if (isset($attributes['code'])) {
                 $this->ensureCodeAvailable($organization, $attributes['code'], $location);
             }

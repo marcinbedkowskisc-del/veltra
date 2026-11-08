@@ -42,6 +42,9 @@ class PersonnelAdministration
                 if ($target->organization_id !== $actor->organization_id) {
                     throw new AuthorizationException;
                 }
+                if (! $this->authorization->canManageAccount($actor, $target)) {
+                    throw new AuthorizationException;
+                }
                 if (! app(MembershipService::class)->available($target)->where('location_id', $location->id)->exists()) {
                     $request = MembershipRequest::firstOrCreate(
                         ['user_id' => $target->id, 'location_id' => $location->id, 'decision' => null],
@@ -57,7 +60,7 @@ class PersonnelAdministration
                 'first_name' => trim($profile['first_name']), 'last_name' => trim($profile['last_name']),
                 'email' => $profile['email'], 'password' => Str::password(48), 'is_active' => true,
             ]);
-            app(MembershipService::class)->assign($target, $location);
+            app(MembershipService::class)->assign($target, $location, $actor->id);
             if ($location->type === LocationType::Restaurant) {
                 $this->roles->grant($actor, $context, $target, BusinessRole::Employee, $location);
             }
@@ -77,6 +80,9 @@ class PersonnelAdministration
                     || ($location->type === LocationType::Restaurant && $this->authorization->manages($actor, $context, $location)))) {
                 throw new AuthorizationException;
             }
+            if (! $this->authorization->canManageAccount($actor, $target)) {
+                throw new AuthorizationException;
+            }
             $request = $request->fresh();
             if ($request->decision !== null) {
                 throw new BusinessRuleViolation(__('messages.membership_already_decided'));
@@ -86,7 +92,7 @@ class PersonnelAdministration
                     throw new AuthorizationException;
                 }
                 if (! app(MembershipService::class)->available($target)->where('location_id', $location->id)->exists()) {
-                    app(MembershipService::class)->assign($target, $location);
+                    app(MembershipService::class)->assign($target, $location, $actor->id);
                 }
                 if ($location->type === LocationType::Restaurant) {
                     $this->roles->grant($actor, $context, $target, BusinessRole::Employee, $location);
@@ -102,11 +108,12 @@ class PersonnelAdministration
         return $this->mutations->run($actor, $target, $location, 'membership.assign', function () use ($actor, $context, $target, $location): LocationMembership {
             if (! $this->authorization->eligible($actor, $context, $location)
                 || ! $this->authorization->hasRole($actor, BusinessRole::Administrator)
-                || $actor->organization_id !== $target->organization_id) {
+                || $actor->organization_id !== $target->organization_id
+                || ! $this->authorization->canManageAccount($actor, $target)) {
                 throw new AuthorizationException;
             }
 
-            return app(MembershipService::class)->assign($target, $location);
+            return app(MembershipService::class)->assign($target, $location, $actor->id);
         });
     }
 
@@ -116,6 +123,10 @@ class PersonnelAdministration
         $location = Location::findOrFail($membership->location_id);
         $this->mutations->run($actor, $target, $location, 'membership.remove', function () use ($actor, $context, $target, $location, $membership): void {
             if (! $this->authorization->eligible($actor, $context, $location)) {
+                throw new AuthorizationException;
+            }
+            if (! $this->authorization->canManageAccount($actor, $target)
+                || ($target->is_initial_identity && $location->is_primary_central_kitchen)) {
                 throw new AuthorizationException;
             }
             $administrator = $this->authorization->hasRole($actor, BusinessRole::Administrator);
@@ -131,7 +142,7 @@ class PersonnelAdministration
             $this->roles->requireUsableAdministrator($membership->id);
             $at = DB::scalar('SELECT clock_timestamp()');
             RoleAssignment::where('membership_id', $membership->id)->whereNull('revoked_at')->update(['revoked_at' => $at, 'revoked_by' => $actor->id]);
-            app(MembershipService::class)->deactivate($membership, 'Dostęp cofnięty przez uprawnionego przełożonego.');
+            app(MembershipService::class)->deactivate($membership, 'Dostęp cofnięty przez uprawnionego przełożonego.', $actor->id);
         });
     }
 

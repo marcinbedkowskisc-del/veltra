@@ -27,6 +27,7 @@ final class RawMaterialCatalogCsvImportWorkflow
         private readonly RawMaterialCatalogCsvParser $parser,
         private readonly RawMaterialService $rawMaterials,
         private readonly RawMaterialAuthorization $authorization,
+        private readonly RawMaterialLocationSharePolicy $sharePolicy,
         private readonly AuthorizationMutationContext $contexts,
     ) {}
 
@@ -237,6 +238,15 @@ final class RawMaterialCatalogCsvImportWorkflow
                 'Nie znaleziono wyniku importu katalogu w organizacji bieżącego użytkownika.',
                 404,
             );
+        }
+
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            DB::table('raw_material_catalog_import_rows')
+                ->where('organization_id', $actor->organization_id)
+                ->where('batch_id', $batchId)
+                ->orderBy('row_number')
+                ->pluck('raw_material_id')
+                ->each(fn (string $materialId) => $this->sharePolicy->assertCanConsume($actor, $context, $materialId));
         }
 
         return $this->presentBatch($actor, $batchId);

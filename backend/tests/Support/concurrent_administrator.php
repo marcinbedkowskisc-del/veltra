@@ -1,10 +1,9 @@
 <?php
 
 use App\Domain\Authorization\RoleAdministration;
-use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Location;
-use App\Models\RoleAssignment;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Support\Facades\DB;
 
@@ -18,12 +17,8 @@ DB::select("SELECT set_config('application_name', ?, false)", [$argv[3]]);
 $user = User::findOrFail($argv[1]);
 $context = Location::findOrFail($argv[2]);
 try {
-    if ($argv[4] === 'deactivate') {
-        app(RoleAdministration::class)->setAccountActive($user, $context, $user, false);
-    } else {
-        app(RoleAdministration::class)->revoke($user, $context, RoleAssignment::where('user_id', $user->id)->firstOrFail(), 'Test-Only-Password!42');
-    }
+    app(RoleAdministration::class)->setAccountActive($user, $context, $user, false);
     echo json_encode(['outcome' => 'accepted']);
-} catch (BusinessRuleViolation) {
+} catch (AuthorizationException) {
     echo json_encode(['outcome' => 'rejected']);
 }

@@ -34,7 +34,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
         $this->administrator = $this->user('administrator@example.test');
         $this->role($this->administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($this->administrator, $this->kitchen);
+        app(MembershipService::class)->assign($this->administrator, $this->kitchen, $this->administrator->id);
         $this->selectContext($this->administrator, $this->kitchen);
     }
 
@@ -296,7 +296,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
     {
         $replacement = $this->user('replacement-admin@example.test');
         $this->role($replacement, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($replacement, $this->kitchen);
+        app(MembershipService::class)->assign($replacement, $this->kitchen, $replacement->id);
         $this->administrator = $this->updateFixture($this->administrator, ['is_active' => false]);
 
         $this->getJson('/api/v1/security/modules/catalog')->assertUnauthorized();

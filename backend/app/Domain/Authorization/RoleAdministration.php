@@ -22,11 +22,12 @@ class RoleAdministration
     public function canAdminister(User $actor, Location $context, User $target, BusinessRole $role, ?Location $location): bool
     {
         if (! $this->authorization->eligible($actor, $context, $location)
-            || $target->organization_id !== $actor->organization_id) {
+            || $target->organization_id !== $actor->organization_id
+            || ! $this->authorization->canManageAccount($actor, $target)) {
             return false;
         }
         if ($this->authorization->hasRole($actor, BusinessRole::Administrator)) {
-            return true;
+            return $role !== BusinessRole::Administrator || $this->authorization->isSuperAdmin($actor);
         }
         if ($role->organizationWide() || $role === BusinessRole::CentralKitchenChef
             || ! $location || $location->type !== LocationType::Restaurant) {
@@ -79,6 +80,9 @@ class RoleAdministration
             if ($assignment->revoked_at !== null) {
                 throw new BusinessRuleViolation(__('messages.already_revoked'));
             }
+            if ($target->is_initial_identity && $assignment->role === BusinessRole::Administrator) {
+                throw new AuthorizationException;
+            }
             if ($assignment->role === BusinessRole::Administrator) {
                 $this->requireOtherAdministrator($target);
             }
@@ -90,7 +94,9 @@ class RoleAdministration
     {
         $this->mutations->run($actor, $target, null, $active ? 'account.reactivate' : 'account.deactivate', function () use ($actor, $context, $target, $active): void {
             if (! $this->authorization->eligible($actor, $context) || ! $this->authorization->hasRole($actor, BusinessRole::Administrator)
-                || $actor->organization_id !== $target->organization_id) {
+                || $actor->organization_id !== $target->organization_id
+                || ! $this->authorization->canManageAccount($actor, $target)
+                || ($target->is_initial_identity && ! $active)) {
                 throw new AuthorizationException;
             }
             if (! $active) {
@@ -106,7 +112,8 @@ class RoleAdministration
         validator(['email' => $email], ['email' => ['required', 'email:rfc', 'max:254']])->validate();
         $this->mutations->run($actor, $target, null, 'account.email_change', function () use ($actor, $context, $target, $email): void {
             if (! $this->authorization->eligible($actor, $context) || ! $this->authorization->hasRole($actor, BusinessRole::Administrator)
-                || $actor->organization_id !== $target->organization_id || $actor->is($target)) {
+                || $actor->organization_id !== $target->organization_id || $actor->is($target)
+                || ! $this->authorization->canManageAccount($actor, $target)) {
                 throw new AuthorizationException(__('messages.account_email_change_approval'));
             }
             if ($target->fresh()->email !== $email) {

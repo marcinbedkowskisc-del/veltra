@@ -18,6 +18,7 @@ final class RawMaterialService
 {
     public function __construct(
         private RawMaterialAuthorization $authorization,
+        private RawMaterialLocationSharePolicy $sharePolicy,
         private AuthorizationMutationContext $contexts,
         private SkuAllocationService $skuAllocation,
     ) {}
@@ -106,6 +107,7 @@ final class RawMaterialService
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
+        $this->sharePolicy->constrainVisibleMaterials($query, $actor, $context);
 
         if (isset($filters['search'])) {
             $search = self::normalizeTerm($filters['search']);
@@ -159,6 +161,9 @@ final class RawMaterialService
     public function show(User $actor, Location $context, string $materialId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
         $material = $this->material($actor, $materialId);
         $revisionId = $material->approved_revision_id;
         if ($revisionId === null) {
@@ -177,6 +182,9 @@ final class RawMaterialService
     public function revisions(User $actor, Location $context, string $materialId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AuditView);
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
         $this->material($actor, $materialId);
 
         return DB::table('raw_material_revisions')->where('organization_id', $actor->organization_id)
@@ -388,6 +396,9 @@ final class RawMaterialService
     public function revisionStage2d(User $actor, Location $context, string $materialId, string $revisionId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AuditView);
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
         $material = DB::table('raw_materials')
             ->where('organization_id', $actor->organization_id)
             ->where('id', $materialId)

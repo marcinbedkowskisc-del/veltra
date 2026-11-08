@@ -29,6 +29,7 @@ final class RawMaterialCsvImportWorkflow
         private readonly RawMaterialCsvParser $parser,
         private readonly RawMaterialCsvImportPersistenceService $persistence,
         private readonly RawMaterialAuthorization $authorization,
+        private readonly RawMaterialLocationSharePolicy $sharePolicy,
     ) {}
 
     public function upload(User $actor, Location $context, UploadedFile $file): array
@@ -46,7 +47,7 @@ final class RawMaterialCsvImportWorkflow
         }
 
         $rows = $this->parser->parse($contents);
-        $preview = $this->buildPreview($actor, $rows);
+        $preview = $this->buildPreview($actor, $context, $rows);
         $previewId = Str::uuid()->toString();
         $storageKey = $actor->organization_id.'/'.$actor->id.'/'.$previewId.'.csv';
         $disk = Storage::disk('raw_material_csv_imports');
@@ -160,7 +161,7 @@ final class RawMaterialCsvImportWorkflow
                     Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
                     $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::ReferencePriceManage);
 
-                    $fresh = $this->buildPreview($actor, $data['parsed_rows']);
+                    $fresh = $this->buildPreview($actor, $context, $data['parsed_rows']);
                     if (! $fresh['can_commit'] || ! hash_equals($data['snapshot_hash'], $fresh['snapshot_hash'])) {
                         throw new RawMaterialException(
                             'RAW_MATERIAL_CSV_PREVIEW_STALE',
@@ -213,6 +214,11 @@ final class RawMaterialCsvImportWorkflow
             ->where('batch_id', $batchId)
             ->orderBy('row_number')
             ->get();
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            foreach ($rows->pluck('raw_material_id')->filter() as $materialId) {
+                $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+            }
+        }
 
         return [
             'batch_id' => $batch->id,
@@ -240,7 +246,7 @@ final class RawMaterialCsvImportWorkflow
         ];
     }
 
-    private function buildPreview(User $actor, array $rows): array
+    private function buildPreview(User $actor, Location $context, array $rows): array
     {
         $prepared = [];
         $snapshots = [];
@@ -264,6 +270,10 @@ final class RawMaterialCsvImportWorkflow
                     'revisions.base_unit_dimension',
                 ])
                 ->first();
+
+            if ($material && ! $this->sharePolicy->isPrimaryContext($context)) {
+                $this->sharePolicy->assertCanConsume($actor, $context, $material->id);
+            }
 
             $normalPrice = '0';
             $revisionId = $material?->approved_revision_id;

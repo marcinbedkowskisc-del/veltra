@@ -47,4 +47,9 @@ abstract class IdentityTestCase extends InstallationTestCase
 
         return $this->service->updateLocation($restaurant, ['is_active' => true]);
     }
+
+    protected function primaryCentralKitchen(): Location
+    {
+        return Location::where('is_primary_central_kitchen', true)->first() ?? $this->kitchen();
+    }
 }

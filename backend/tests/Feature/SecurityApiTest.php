@@ -86,7 +86,7 @@ class SecurityApiTest extends AuthorizationTestCase
         $location = $this->kitchen();
         $admin = $this->user('admin@example.test');
         $this->role($admin, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($admin, $location);
+        app(MembershipService::class)->assign($admin, $location, $admin->id);
         $this->updateFixture($admin->organization, ['authorization_initialized' => true]);
         $this->selectContext($admin, $location);
         $this->postJson("/api/v1/security/locations/{$location->id}/personnel", ['first_name' => 'New', 'last_name' => 'Chef', 'email' => 'newchef@example.test'])->assertAccepted();
@@ -110,7 +110,7 @@ class SecurityApiTest extends AuthorizationTestCase
         $actor = $this->user('admin@example.test');
         $location = $this->activeRestaurant();
         $this->role($actor, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($actor, $location);
+        app(MembershipService::class)->assign($actor, $location, $actor->id);
         $target = $this->user();
         $this->selectContext($actor, $location);
         $this->app->detectEnvironment(fn () => 'local');

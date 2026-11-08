@@ -2,6 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\LocationType;
@@ -13,9 +16,12 @@ use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialCatalogCsvImportWorkflow;
 use App\Domain\RawMaterials\RawMaterialCatalogCsvParser;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
+use App\Domain\RawMaterials\RawMaterialCsvCatalogExportWorkflow;
 use App\Domain\RawMaterials\RawMaterialCsvImportPersistenceService;
 use App\Domain\RawMaterials\RawMaterialCsvParser;
 use App\Domain\RawMaterials\RawMaterialException;
+use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
+use App\Domain\RawMaterials\RawMaterialLocationSharePolicy;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Domain\Sku\SkuAllocationService;
@@ -23,6 +29,7 @@ use App\Domain\Sku\SkuPrefix;
 use App\Models\Location;
 use App\Models\LocationModuleState;
 use App\Models\Organization;
+use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -37,6 +44,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\Process\Process;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
 
@@ -53,10 +61,11 @@ class RawMaterialsTest extends AuthorizationTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->location = $this->activeRestaurant();
+        $this->activeRestaurant();
+        $this->location = $this->primaryCentralKitchen();
         $this->bootstrapAdministrator = $this->user('raw-material-bootstrap@example.test');
         $this->role($this->bootstrapAdministrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($this->bootstrapAdministrator, $this->location);
+        app(MembershipService::class)->assign($this->bootstrapAdministrator, $this->location, $this->bootstrapAdministrator->id);
         $this->steward = $this->user('raw-material-steward@example.test');
         app(MembershipService::class)->assign($this->steward, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
@@ -1073,6 +1082,24 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(1, DB::table('raw_materials_commercial_audit_events')
             ->where('subject_id', $batchId)
             ->where('event_code', 'CATALOG_CSV_IMPORT_COMMITTED')->count());
+
+        $consumerLocation = $this->activeRestaurant('RCSVRESULT');
+        app(MembershipService::class)->assign($this->steward, $consumerLocation);
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id,
+            'location_id' => $consumerLocation->id,
+            'module_key' => 'RAW_MATERIALS',
+            'enabled' => true,
+            'created_by' => $this->bootstrapAdministrator->id,
+            'updated_by' => $this->bootstrapAdministrator->id,
+        ]);
+        Auth::forgetGuards();
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $consumerLocation->id,
+        ])->assertOk();
+        $this->actingAs($this->steward, 'web')
+            ->getJson('/api/v1/raw-materials/catalog-imports/results/'.$batchId)
+            ->assertNotFound();
     }
 
     public function test_catalog_csv_import_requires_create_permission_and_readiness_returns_503(): void
@@ -2313,7 +2340,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $manager = $this->user('raw-material-manager@example.test');
         $this->role($manager, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($manager, $this->location);
+        app(MembershipService::class)->assign($manager, $this->location, $manager->id);
         $this->selectContext($manager);
         $this->getJson('/api/v1/raw-materials')->assertForbidden()
             ->assertJsonPath('message', __('messages.unauthorized'));
@@ -3331,6 +3358,352 @@ class RawMaterialsTest extends AuthorizationTestCase
             'organization_id' => $this->steward->organization_id,
             'idempotency_key' => 'supplier-audit-rollback-archive-0001',
         ]);
+    }
+
+    public function test_explicit_location_share_gates_raw_material_access_and_preserves_revocation_history(): void
+    {
+        $material = $this->activeCsvImportMaterial('Udostępniany surowiec');
+        $restaurant = $this->activeRestaurant('RSHARE');
+        $otherLocation = $this->activeRestaurant('RSHARE2');
+        app(MembershipService::class)->assign($this->steward, $restaurant);
+        app(MembershipService::class)->assign($this->steward, $otherLocation);
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id,
+            'location_id' => $restaurant->id,
+            'module_key' => 'RAW_MATERIALS',
+            'enabled' => true,
+            'created_by' => $this->bootstrapAdministrator->id,
+            'updated_by' => $this->bootstrapAdministrator->id,
+        ]);
+        $policy = app(RawMaterialLocationSharePolicy::class);
+        $administration = app(RawMaterialLocationShareAdministration::class);
+        RoleAssignment::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id,
+            'user_id' => $this->steward->id,
+            'role' => BusinessRole::Administrator,
+        ]);
+
+        $this->assertFalse(app(BusinessAuthorization::class)->isSuperAdmin($this->bootstrapAdministrator));
+        $this->assertFalse($policy->canConsume($this->steward, $restaurant, $material['id']));
+        $financialGrantCount = DB::table('organization_permission_grants')
+            ->where('user_id', $this->steward->id)
+            ->whereIn('permission', [
+                RawMaterialPermission::PurchasingCostsView->value,
+                RawMaterialPermission::ReferencePriceView->value,
+            ])->count();
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $restaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials')->assertOk()->assertJsonPath('meta.total', 0);
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $shareResponse = $this->actingAs($this->steward, 'web')->postJson('/api/v1/raw-materials/'.$material['id'].'/shares', [
+            'location_id' => $restaurant->id,
+        ])->assertCreated();
+        $shareId = $shareResponse->json('data.id');
+        $this->assertTrue($policy->canConsume($this->steward, $restaurant, $material['id']));
+
+        Auth::forgetGuards();
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $restaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials')->assertOk()->assertJsonPath('meta.total', 1);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])->assertOk()
+            ->assertJsonPath('data.id', $material['id']);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions')->assertOk();
+        Storage::fake('raw_material_csv_exports');
+        $export = app(RawMaterialCsvCatalogExportWorkflow::class)
+            ->create($this->steward, $restaurant);
+        $this->assertSame(1, $export['row_count']);
+        app(RawMaterialCsvCatalogExportWorkflow::class)
+            ->authorizeDownload($this->steward, $restaurant, $export['export_id']);
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $this->actingAs($this->steward, 'web')->postJson('/api/v1/raw-materials/'.$material['id'].'/shares', [
+            'location_id' => $restaurant->id,
+        ])->assertConflict();
+
+        try {
+            DB::table('raw_material_location_shares')->where('id', $shareId)->update([
+                'revoked_by' => $this->bootstrapAdministrator->id,
+                'revoked_context_location_id' => $this->location->id,
+                'revoked_operation_id' => Str::uuid()->toString(),
+                'revoked_at' => now(),
+            ]);
+            $this->fail('A direct runtime SQL share revocation bypassed the signed mutation boundary.');
+        } catch (QueryException $exception) {
+            $this->assertSame('42501', $exception->errorInfo[0] ?? null);
+        }
+        $this->assertDatabaseHas('raw_material_location_shares', ['id' => $shareId, 'revoked_at' => null]);
+
+        $this->actingAs($this->steward, 'web')->deleteJson('/api/v1/raw-materials/'.$material['id'].'/shares/'.$restaurant->id, [
+            'reason' => 'Dostęp nie jest już potrzebny',
+        ])->assertOk()->assertJsonPath('data.active', false);
+        $this->assertFalse($policy->canConsume($this->steward, $restaurant, $material['id']));
+        try {
+            app(RawMaterialCsvCatalogExportWorkflow::class)
+                ->authorizeDownload($this->steward, $restaurant, $export['export_id']);
+            $this->fail('A revoked share still allowed downloading an earlier catalog export.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame(404, $exception->status);
+        }
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $restaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials')->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])->assertNotFound();
+
+        $this->assertDatabaseHas('raw_material_location_shares', ['id' => $shareId]);
+        $this->assertSame(1, DB::table('raw_material_location_shares')->where('id', $shareId)
+            ->whereNotNull('revoked_at')->count());
+        $this->assertSame(1, DB::table('raw_materials')->where('id', $material['id'])->count());
+        $this->assertSame(1, DB::table('raw_material_revisions')
+            ->where('raw_material_id', $material['id'])->where('revision_no', 1)->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->where('subject_id', $shareId)->where('event_code', 'LOCATION_SHARE_CREATED')
+            ->where('outcome', 'ACCEPTED')->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->where('subject_id', $shareId)->where('event_code', 'LOCATION_SHARE_REVOKED')
+            ->where('outcome', 'ACCEPTED')->count());
+        $this->assertSame($financialGrantCount, DB::table('organization_permission_grants')
+            ->where('user_id', $this->steward->id)
+            ->whereIn('permission', [
+                RawMaterialPermission::PurchasingCostsView->value,
+                RawMaterialPermission::ReferencePriceView->value,
+            ])->count());
+
+        $this->assertFalse($policy->canConsume($this->steward, $otherLocation, $material['id']));
+        $this->withForeignOrganizationFixture(fn (Location $foreignLocation) => $this->assertFalse(
+            $policy->canConsume($this->steward, $foreignLocation, $material['id']),
+        ));
+
+        $draft = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => $this->rawMaterialService->createCategory($this->steward, $this->location, [
+                'code' => 'OTHER_GOODS',
+                'name' => 'Pozostałe produkty',
+            ])['id'],
+            'name' => 'Surowiec bez zatwierdzonej rewizji',
+            'base_unit_code' => 'kg',
+            'conversions' => [['unit_code' => 'g']],
+        ]);
+        $this->assertFalse($policy->canConsume($this->steward, $restaurant, $draft['id']));
+        $signedOperationId = Str::uuid()->toString();
+        try {
+            app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::rawMaterialShare(),
+                $this->bootstrapAdministrator->id,
+                function () use ($draft, $restaurant, $signedOperationId): void {
+                    DB::table('raw_material_location_shares')->insert([
+                        'id' => Str::uuid()->toString(),
+                        'organization_id' => $this->steward->organization_id,
+                        'raw_material_id' => $draft['id'],
+                        'location_id' => $restaurant->id,
+                        'created_by' => $this->bootstrapAdministrator->id,
+                        'created_context_location_id' => $this->location->id,
+                        'created_operation_id' => $signedOperationId,
+                    ]);
+                },
+            );
+            $this->fail('A signed mutation made an unapproved draft shareable.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', $exception->errorInfo[0] ?? null);
+        }
+        $this->assertSame(0, DB::table('raw_material_location_shares')->where('raw_material_id', $draft['id'])->count());
+        $this->expectException(RawMaterialException::class);
+        $administration->share($this->bootstrapAdministrator, $this->location, $draft['id'], $restaurant->id);
+    }
+
+    public function test_raw_material_sharing_requires_an_authorized_administrator(): void
+    {
+        $material = $this->activeCsvImportMaterial('Surowiec do próby nieuprawnionego');
+        $restaurant = $this->activeRestaurant('RSHARE3');
+        $notAdministrator = $this->user('raw-share-unauthorized@example.test');
+        app(MembershipService::class)->assign($notAdministrator, $this->location);
+
+        try {
+            app(RawMaterialLocationShareAdministration::class)->share(
+                $notAdministrator,
+                $this->location,
+                $material['id'],
+                $restaurant->id,
+            );
+            $this->fail('A non-administrator created a material share.');
+        } catch (AuthorizationException) {
+            $this->assertSame(0, DB::table('raw_material_location_shares')
+                ->where('raw_material_id', $material['id'])->count());
+        }
+    }
+
+    public function test_pending_material_cannot_be_shared_and_archived_material_can_still_be_unshared(): void
+    {
+        $category = $this->category();
+        $pendingId = $this->declaredMaterial($category['id'], 'Surowiec oczekujący zatwierdzenia');
+        $this->rawMaterialService->submit($this->steward, $this->location, $pendingId);
+        $restaurant = $this->activeRestaurant('RSHARE_PENDING');
+
+        try {
+            app(RawMaterialLocationShareAdministration::class)->share(
+                $this->bootstrapAdministrator,
+                $this->location,
+                $pendingId,
+                $restaurant->id,
+            );
+            $this->fail('A pending material was shared before its first revision was approved.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_SHARE_REQUIRES_APPROVED_ACTIVE_MATERIAL', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+        }
+
+        $material = $this->activeCsvImportMaterial('Zarchiwizowany udostępniony surowiec', $category['id']);
+        $administration = app(RawMaterialLocationShareAdministration::class);
+        $administration->share($this->bootstrapAdministrator, $this->location, $material['id'], $restaurant->id);
+        $this->rawMaterialService->archive(
+            $this->steward,
+            $this->location,
+            $material['id'],
+            'Archiwizacja testowa przed cofnięciem share',
+        );
+        $this->assertFalse(app(RawMaterialLocationSharePolicy::class)
+            ->canConsume($this->steward, $restaurant, $material['id']));
+        $administration->revoke($this->bootstrapAdministrator, $this->location, $material['id'], $restaurant->id);
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->whereNotNull('revoked_at')->count());
+    }
+
+    public function test_share_creation_rolls_back_when_its_audit_write_fails(): void
+    {
+        $material = $this->activeCsvImportMaterial('Surowiec dla testu wycofania transakcji');
+        $restaurant = $this->activeRestaurant('RSHARE_ROLLBACK');
+        $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+            CREATE FUNCTION public.test_fail_raw_material_share_audit()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.subject_type = 'RAW_MATERIAL_SHARE' THEN
+                    RAISE EXCEPTION 'synthetic share audit failure' USING ERRCODE = 'P0001';
+                END IF;
+                RETURN NEW;
+            END
+            $$;
+            CREATE TRIGGER test_fail_raw_material_share_audit
+                BEFORE INSERT ON public.raw_material_audit_events
+                FOR EACH ROW EXECUTE FUNCTION public.test_fail_raw_material_share_audit();
+            SQL));
+
+        try {
+            app(RawMaterialLocationShareAdministration::class)->share(
+                $this->bootstrapAdministrator,
+                $this->location,
+                $material['id'],
+                $restaurant->id,
+            );
+            $this->fail('A share committed despite its audit insert failing.');
+        } catch (QueryException $exception) {
+            $this->assertSame('P0001', $exception->errorInfo[0] ?? null);
+        } finally {
+            $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+                DROP TRIGGER test_fail_raw_material_share_audit ON public.raw_material_audit_events;
+                DROP FUNCTION public.test_fail_raw_material_share_audit();
+                SQL));
+        }
+
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(0, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->whereRaw("metadata->>'raw_material_id' = ?", [$material['id']])->count());
+    }
+
+    public function test_concurrent_share_creation_and_revocation_are_serialized(): void
+    {
+        $material = $this->activeCsvImportMaterial('Surowiec dla operacji równoległych');
+        $restaurant = $this->activeRestaurant('RSHARE_CONC');
+        $operation = function (string $mode) use ($material, $restaurant): array {
+            $processes = [];
+            $applicationNames = [];
+
+            DB::beginTransaction();
+            try {
+                DB::table('organizations')->where('id', $this->steward->organization_id)
+                    ->lockForUpdate()->firstOrFail();
+                for ($index = 0; $index < 2; $index++) {
+                    $applicationName = 'raw-share-'.$mode.'-'.strtolower(Str::random(8));
+                    $process = new Process([
+                        PHP_BINARY,
+                        base_path('tests/Support/concurrent_raw_material_share.php'),
+                        $this->bootstrapAdministrator->id,
+                        $this->location->id,
+                        $material['id'],
+                        $restaurant->id,
+                        $mode,
+                        $applicationName,
+                    ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+                    $process->setTimeout(30);
+                    $process->start();
+                    $processes[] = $process;
+                    $applicationNames[] = $applicationName;
+                }
+
+                foreach ($processes as $index => $process) {
+                    $deadline = microtime(true) + 10;
+                    $waiting = false;
+                    do {
+                        DB::select('SELECT pg_stat_clear_snapshot()');
+                        $waiting = (bool) DB::scalar(
+                            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = ? AND wait_event_type = 'Lock')",
+                            [$applicationNames[$index]],
+                        );
+                        if ($waiting || ! $process->isRunning()) {
+                            break;
+                        }
+                        usleep(20_000);
+                    } while (microtime(true) < $deadline);
+                    $this->assertTrue($waiting, $process->getErrorOutput().$process->getOutput());
+                }
+                DB::commit();
+
+                $results = [];
+                foreach ($processes as $process) {
+                    $process->wait();
+                    $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+                    $results[] = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR)['result'];
+                }
+                sort($results);
+
+                return $results;
+            } finally {
+                foreach ($processes as $process) {
+                    if ($process->isRunning()) {
+                        $process->stop();
+                    }
+                }
+                while (DB::transactionLevel() > 0) {
+                    DB::rollBack();
+                }
+            }
+        };
+
+        $this->assertSame(['conflict', 'created'], $operation('share'));
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->where('location_id', $restaurant->id)
+            ->whereNull('revoked_at')->count());
+        $this->assertSame(['conflict', 'revoked'], $operation('revoke'));
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->where('location_id', $restaurant->id)
+            ->whereNotNull('revoked_at')->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->where('event_code', 'LOCATION_SHARE_CREATED')->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->where('event_code', 'LOCATION_SHARE_REVOKED')->count());
     }
 
     private function selectContext(User $actor): void

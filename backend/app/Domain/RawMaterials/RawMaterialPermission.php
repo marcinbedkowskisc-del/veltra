@@ -33,4 +33,22 @@ enum RawMaterialPermission: string
     {
         return $this !== self::PermissionDelegate;
     }
+
+    public function requiresPrimaryCatalogContext(): bool
+    {
+        return in_array($this, [
+            self::Create,
+            self::Edit,
+            self::Submit,
+            self::Review,
+            self::Approve,
+            self::Block,
+            self::Unblock,
+            self::Archive,
+            self::Restore,
+            self::CategoryManage,
+            self::AllergenManage,
+            self::StorageManage,
+        ], true);
+    }
 }

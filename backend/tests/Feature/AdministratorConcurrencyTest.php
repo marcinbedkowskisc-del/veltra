@@ -17,7 +17,7 @@ use Tests\TestCase;
 class AdministratorConcurrencyTest extends TestCase
 {
     #[DataProvider('outcomes')]
-    public function test_last_admin_is_preserved_between_independent_postgresql_transactions(bool $commit, string $operation): void
+    public function test_administrator_deactivation_serializes_with_independent_postgresql_transactions(bool $commit): void
     {
         $this->assertSame('veltra_testing', DB::connection()->getDatabaseName());
         $this->resetTestDatabase();
@@ -31,16 +31,16 @@ class AdministratorConcurrencyTest extends TestCase
             $memberships = app(MembershipService::class);
             $memberships->assign($first, $kitchen);
             $roles = app(RoleAdministration::class);
-            $firstRole = $roles->bootstrapInitial($first);
+            $roles->bootstrapInitial($first);
             $second = User::on('pgsql_setup')->create(['organization_id' => $first->organization_id, 'first_name' => 'Second', 'last_name' => 'Admin', 'email' => 'second@example.test', 'password' => 'Test-Only-Password!42']);
             $second->forceFill(['email_verified_at' => now()])->save();
             $second = User::on('pgsql')->findOrFail($second->getKey());
             $memberships->assign($second, $kitchen);
             $roles->grant($first, $kitchen, $second, BusinessRole::Administrator, null, 'Test-Only-Password!42');
             DB::beginTransaction();
-            $roles->revoke($first, $kitchen, $firstRole, 'Test-Only-Password!42');
+            $roles->setAccountActive($first, $kitchen, $second, false);
             $name = 'veltra-admin-'.bin2hex(random_bytes(6));
-            $process = new Process([PHP_BINARY, base_path('tests/Support/concurrent_administrator.php'), $second->id, $kitchen->id, $name, $operation], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+            $process = new Process([PHP_BINARY, base_path('tests/Support/concurrent_administrator.php'), $second->id, $kitchen->id, $name], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
             $process->setTimeout(20);
             $process->start();
             $deadline = microtime(true) + 10;
@@ -74,10 +74,8 @@ class AdministratorConcurrencyTest extends TestCase
     public static function outcomes(): array
     {
         return [
-            'revoke commits' => [true, 'revoke'],
-            'revoke rolls back' => [false, 'revoke'],
-            'deactivate commits' => [true, 'deactivate'],
-            'deactivate rolls back' => [false, 'deactivate'],
+            'super admin deactivation commits' => [true],
+            'super admin deactivation rolls back' => [false],
         ];
     }
 }

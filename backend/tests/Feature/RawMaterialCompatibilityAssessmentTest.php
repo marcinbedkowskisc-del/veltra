@@ -67,10 +67,11 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
         config(['filesystems.disks.raw_material_documents.root' => $this->storageRoot]);
         app('filesystem')->forgetDisk('raw_material_documents');
 
-        $this->location = $this->activeRestaurant();
+        $this->activeRestaurant();
+        $this->location = $this->primaryCentralKitchen();
         $this->administrator = $this->user('compatibility-admin@example.test');
         $this->role($this->administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($this->administrator, $this->location);
+        app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
         $this->steward = $this->user('compatibility-steward@example.test');
         app(MembershipService::class)->assign($this->steward, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);

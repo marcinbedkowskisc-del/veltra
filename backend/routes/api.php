@@ -40,6 +40,7 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/modules/configuration', [ModuleConfigurationController::class, 'configure']);
     Route::get('/locations/{location}/modules/history', [ModuleConfigurationController::class, 'history'])->whereUuid('location');
     Route::post('/users/{user}/roles', [SecurityController::class, 'grantRole'])->whereUuid('user');
+    Route::patch('/me/profile', [SecurityController::class, 'updateMyProfile']);
     Route::delete('/roles/{assignment}', [SecurityController::class, 'revokeRole'])->whereUuid('assignment');
     Route::patch('/users/{user}/status', [SecurityController::class, 'accountStatus'])->whereUuid('user');
     Route::patch('/users/{user}/email', [SecurityController::class, 'changeEmail'])->whereUuid('user');
@@ -128,6 +129,10 @@ Route::prefix('v1/raw-materials')->middleware([
         ->whereUuid('material')->whereUuid('event');
     Route::post('/{material}/reference-prices/{event}/restatements', [RawMaterialController::class, 'storeReferencePriceRestatement'])
         ->whereUuid('material')->whereUuid('event');
+    Route::get('/{material}/shares', [RawMaterialController::class, 'shares'])->whereUuid('material');
+    Route::post('/{material}/shares', [RawMaterialController::class, 'createShare'])->whereUuid('material');
+    Route::delete('/{material}/shares/{location}', [RawMaterialController::class, 'revokeShare'])
+        ->whereUuid('material')->whereUuid('location');
     Route::get('/', [RawMaterialController::class, 'index']);
     Route::post('/', [RawMaterialController::class, 'store']);
     Route::get('/categories', [RawMaterialController::class, 'categories']);

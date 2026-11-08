@@ -15,6 +15,7 @@ final class RawMaterialCompatibilityAssessmentService
 {
     public function __construct(
         private readonly RawMaterialAuthorization $authorization,
+        private readonly RawMaterialLocationSharePolicy $sharePolicy,
         private readonly AuthorizationMutationContext $contexts,
     ) {}
 
@@ -22,6 +23,7 @@ final class RawMaterialCompatibilityAssessmentService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $product = $this->product($actor, $productId);
+        $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
         $status = DB::table('raw_material_supplier_compatibility_status')
             ->where('organization_id', $actor->organization_id)
             ->where('supplier_product_id', $product->id)
@@ -108,6 +110,7 @@ final class RawMaterialCompatibilityAssessmentService
                     RawMaterialPermission::SupplierCompatibilityApprove,
                 );
                 $product = $this->product($actor, $productId, true);
+                $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
 
                 $prior = DB::table('raw_materials_commercial_idempotency')
                     ->where('organization_id', $actor->organization_id)
@@ -398,6 +401,13 @@ final class RawMaterialCompatibilityAssessmentService
         }
 
         return $product;
+    }
+
+    private function assertMaterialSharedForConsumer(User $actor, Location $context, string $materialId): void
+    {
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
     }
 
     private function validateDecision(array $input, string $idempotencyKey): void

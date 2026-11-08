@@ -18,6 +18,12 @@ class SecurityRequest extends InstallationRequest
             'revokeRole' => ['current_password' => ['nullable', 'string', 'max:256']],
             'accountStatus' => ['is_active' => ['required', 'boolean']],
             'changeEmail' => ['email' => ['required', 'email:rfc', 'max:254']],
+            'updateMyProfile' => [
+                'first_name' => ['sometimes', 'required', 'string', 'max:100'],
+                'last_name' => ['sometimes', 'required', 'string', 'max:100'],
+                'email' => ['sometimes', 'required', 'email:rfc', 'max:254', Rule::unique('users', 'email')->ignore($this->user()?->getAuthIdentifier())],
+                'current_password' => ['required', 'string', 'max:256'],
+            ],
             'personnel' => [
                 'first_name' => ['required', 'string', 'max:100'], 'last_name' => ['required', 'string', 'max:100'],
                 'email' => ['required', 'email:rfc', 'max:254'],

@@ -36,10 +36,11 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->location = $this->activeRestaurant();
+        $this->activeRestaurant();
+        $this->location = $this->primaryCentralKitchen();
         $this->administrator = $this->user('revision-data-admin@example.test');
         $this->role($this->administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($this->administrator, $this->location);
+        app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
         $this->steward = $this->user('revision-data-steward@example.test');
         app(MembershipService::class)->assign($this->steward, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);

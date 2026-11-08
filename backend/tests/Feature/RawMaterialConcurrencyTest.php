@@ -50,14 +50,14 @@ class RawMaterialConcurrencyTest extends TestCase
                 'user_id' => $administrator->id,
                 'role' => BusinessRole::Administrator,
             ]);
-            app(MembershipService::class)->assign($administrator, $location);
+            app(MembershipService::class)->assign($administrator, $kitchen, $administrator->id);
             $steward = $this->user($organization, 'concurrency-steward@example.test');
-            app(MembershipService::class)->assign($steward, $location);
+            app(MembershipService::class)->assign($steward, $kitchen);
             $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
             LocationModuleState::on('pgsql_setup')->create([
                 'organization_id' => $organization->id,
-                'location_id' => $location->id,
+                'location_id' => $kitchen->id,
                 'module_key' => 'RAW_MATERIALS',
                 'enabled' => true,
                 'created_by' => $administrator->id,
@@ -76,10 +76,10 @@ class RawMaterialConcurrencyTest extends TestCase
 
             DB::beginTransaction();
             Organization::whereKey($organization->id)->lockForUpdate()->firstOrFail();
-            [$first, $firstName] = $this->startCreateProcess($steward, $location, $categoryId, 'Ryż', 'rawmat-first-');
+            [$first, $firstName] = $this->startCreateProcess($steward, $kitchen, $categoryId, 'Ryż', 'rawmat-first-');
             $processes[] = $first;
             $this->assertWaitingOnOrganizationLock($first, $firstName);
-            [$second, $secondName] = $this->startCreateProcess($steward, $location, $categoryId, 'Soczewica', 'rawmat-second-');
+            [$second, $secondName] = $this->startCreateProcess($steward, $kitchen, $categoryId, 'Soczewica', 'rawmat-second-');
             $processes[] = $second;
             $this->assertWaitingOnOrganizationLock($second, $secondName);
 
@@ -123,7 +123,7 @@ class RawMaterialConcurrencyTest extends TestCase
                 'user_id' => $administrator->id,
                 'role' => BusinessRole::Administrator,
             ]);
-            app(MembershipService::class)->assign($administrator, $location);
+            app(MembershipService::class)->assign($administrator, $location, $administrator->id);
             $steward = $this->user($organization, 'catalog-concurrency-steward@example.test');
             app(MembershipService::class)->assign($steward, $location);
             $this->updateFixture($organization, ['authorization_initialized' => true]);
@@ -233,7 +233,7 @@ class RawMaterialConcurrencyTest extends TestCase
                 'user_id' => $administrator->id,
                 'role' => BusinessRole::Administrator,
             ]);
-            app(MembershipService::class)->assign($administrator, $location);
+            app(MembershipService::class)->assign($administrator, $location, $administrator->id);
             $steward = $this->user($organization, 'suspension-steward@example.test');
             app(MembershipService::class)->assign($steward, $location);
             $recipient = $this->user($organization, 'suspension-recipient@example.test');

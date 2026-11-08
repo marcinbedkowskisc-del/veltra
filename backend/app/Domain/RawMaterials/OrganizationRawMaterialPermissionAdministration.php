@@ -4,6 +4,7 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\Organization;
@@ -35,6 +36,7 @@ final class OrganizationRawMaterialPermissionAdministration
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
         if ($actor->is($recipient) || $recipient->organization_id !== $actor->organization_id
             || ! $recipient->is_active || $recipient->email_verified_at === null
+            || ! app(BusinessAuthorization::class)->canManageAccount($actor, $recipient)
             || ! app(MembershipService::class)->available($recipient)->exists()
             || ! $permission->delegable()
             || ! $this->authorization->hasEffectiveGrant($actor, $permission)) {
@@ -46,6 +48,7 @@ final class OrganizationRawMaterialPermissionAdministration
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);
             if ($actor->is($recipient) || $recipient->organization_id !== $actor->organization_id
                 || ! $recipient->fresh()?->is_active || $recipient->fresh()?->email_verified_at === null
+                || ! app(BusinessAuthorization::class)->canManageAccount($actor, $recipient->fresh())
                 || ! app(MembershipService::class)->available($recipient->fresh())->exists()
                 || ! $permission->delegable() || ! $this->authorization->hasEffectiveGrant($actor, $permission)) {
                 throw new AuthorizationException(__('messages.unauthorized'));
@@ -141,6 +144,10 @@ final class OrganizationRawMaterialPermissionAdministration
                     ->first();
 
                 if (! $grant) {
+                    throw new AuthorizationException(__('messages.unauthorized'));
+                }
+                $recipient = User::whereKey($grant->user_id)->first();
+                if (! $recipient || ! app(BusinessAuthorization::class)->canManageAccount($actor, $recipient)) {
                     throw new AuthorizationException(__('messages.unauthorized'));
                 }
 

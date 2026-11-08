@@ -19,6 +19,7 @@ final class RawMaterialCommercialService
 {
     public function __construct(
         private RawMaterialAuthorization $authorization,
+        private RawMaterialLocationSharePolicy $sharePolicy,
         private AuthorizationMutationContext $contexts,
     ) {}
 
@@ -50,6 +51,7 @@ final class RawMaterialCommercialService
         if (! $product) {
             $this->notFound();
         }
+        $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
 
         return ['data' => DB::table('supplier_product_revisions')->where('organization_id', $actor->organization_id)
             ->where('supplier_product_id', $productId)->orderByDesc('revision_no')
@@ -261,6 +263,7 @@ final class RawMaterialCommercialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $this->material($actor, $materialId);
+        $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
         $query = DB::table('supplier_products as products')
             ->join('organization_suppliers as suppliers', function ($join): void {
                 $join->on('suppliers.id', '=', 'products.supplier_id')
@@ -334,6 +337,7 @@ final class RawMaterialCommercialService
             ['material_id' => $materialId] + $input,
             function (string $operationId) use ($actor, $context, $materialId, $input): array {
                 $material = $this->material($actor, $materialId, activeOnly: true);
+                $this->assertMaterialSharedForConsumer($actor, $context, $material->id);
                 $supplier = DB::table('organization_suppliers')->where('organization_id', $actor->organization_id)
                     ->where('id', $input['supplier_id'])->where('lifecycle_state', 'ACTIVE')->lockForUpdate()->first();
                 if (! $supplier) {
@@ -376,6 +380,7 @@ final class RawMaterialCommercialService
                 if (! $product || $product->lifecycle_state !== 'ACTIVE') {
                     $this->notFound();
                 }
+                $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
                 $latest = DB::table('supplier_product_revisions')->where('organization_id', $actor->organization_id)
                     ->where('supplier_product_id', $productId)->orderByDesc('revision_no')->first();
                 if (! $latest || $latest->id !== $input['expected_revision_id']) {
@@ -421,6 +426,7 @@ final class RawMaterialCommercialService
                 if (! $product) {
                     $this->notFound();
                 }
+                $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
                 if ($product->lifecycle_state !== 'ACTIVE') {
                     $this->conflict('RAW_MATERIAL_SUPPLIER_PRODUCT_STATE_INVALID', 'Produkt dostawcy nie jest aktywny.');
                 }
@@ -445,6 +451,7 @@ final class RawMaterialCommercialService
         if (! $product) {
             $this->notFound();
         }
+        $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
 
         return ['data' => DB::table('supplier_offers')->where('organization_id', $actor->organization_id)
             ->where('supplier_product_id', $productId)
@@ -481,7 +488,11 @@ final class RawMaterialCommercialService
                     ->where('products.id', $productId)->lockForUpdate()->first([
                         'products.id', 'products.lifecycle_state', 'suppliers.lifecycle_state as supplier_state',
                         'materials.lifecycle_state as material_state', 'materials.approved_revision_id',
+                        'materials.id as raw_material_id',
                     ]);
+                if ($product) {
+                    $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
+                }
                 $latestRevision = $product
                     ? DB::table('supplier_product_revisions')->where('organization_id', $actor->organization_id)
                         ->where('supplier_product_id', $productId)->orderByDesc('revision_no')->first()
@@ -515,6 +526,12 @@ final class RawMaterialCommercialService
         if (! $offer) {
             $this->notFound();
         }
+        $product = DB::table('supplier_products')->where('organization_id', $actor->organization_id)
+            ->where('id', $offer->supplier_product_id)->first();
+        if (! $product) {
+            $this->notFound();
+        }
+        $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
 
         $events = DB::table('supplier_offer_events')->where('organization_id', $actor->organization_id)
             ->where('offer_id', $offerId)->orderBy('event_no')->get();
@@ -579,11 +596,13 @@ final class RawMaterialCommercialService
                     ->where('products.organization_id', $actor->organization_id)
                     ->where('products.id', $offer->supplier_product_id)->first([
                         'products.id', 'products.lifecycle_state', 'materials.lifecycle_state as material_state',
-                        'materials.approved_revision_id', 'suppliers.lifecycle_state as supplier_state',
+                        'materials.approved_revision_id', 'materials.id as raw_material_id',
+                        'suppliers.lifecycle_state as supplier_state',
                     ]);
                 if (! $product || $product->lifecycle_state !== 'ACTIVE') {
                     $this->notFound();
                 }
+                $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
                 $latestRevision = DB::table('supplier_product_revisions')
                     ->where('organization_id', $actor->organization_id)
                     ->where('supplier_product_id', $product->id)->orderByDesc('revision_no')->first();
@@ -848,6 +867,7 @@ final class RawMaterialCommercialService
     ): array {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::ReferencePriceView);
         $this->material($actor, $materialId);
+        $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
         $query = DB::table('raw_material_reference_price_events')
             ->where('organization_id', $actor->organization_id)->where('raw_material_id', $materialId);
         if ($asOf !== null) {
@@ -886,6 +906,7 @@ final class RawMaterialCommercialService
             ['material_id' => $materialId] + $input,
             function (string $operationId) use ($actor, $context, $materialId, $input): array {
                 $material = $this->material($actor, $materialId, activeOnly: true);
+                $this->assertMaterialSharedForConsumer($actor, $context, $material->id);
                 $latestNo = (int) DB::table('raw_material_reference_price_events')
                     ->where('organization_id', $actor->organization_id)->where('raw_material_id', $materialId)->max('event_no');
                 if (($input['expected_event_no'] ?? -1) !== $latestNo) {
@@ -951,6 +972,7 @@ final class RawMaterialCommercialService
             ['material_id' => $materialId, 'event_id' => $eventId] + $input,
             function (string $operationId) use ($actor, $context, $materialId, $eventId, $input): array {
                 $this->material($actor, $materialId);
+                $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
                 $original = DB::table('raw_material_reference_price_events')->where('organization_id', $actor->organization_id)
                     ->where('raw_material_id', $materialId)->where('id', $eventId)->first();
                 if (! $original || $original->event_type !== 'PRICE_SET'
@@ -996,6 +1018,7 @@ final class RawMaterialCommercialService
     ): array {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::ReferencePriceView);
         $this->material($actor, $materialId);
+        $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
         if (! DB::table('raw_material_reference_price_events')->where('organization_id', $actor->organization_id)
             ->where('raw_material_id', $materialId)->where('id', $eventId)->exists()) {
             $this->notFound();
@@ -1546,6 +1569,13 @@ final class RawMaterialCommercialService
         }
 
         return $material;
+    }
+
+    private function assertMaterialSharedForConsumer(User $actor, Location $context, string $materialId): void
+    {
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
     }
 
     private function assertCurrencyDate(string $currencyCode, string $operationDate): void

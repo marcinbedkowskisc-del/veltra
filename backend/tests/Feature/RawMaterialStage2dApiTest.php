@@ -43,10 +43,11 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
     {
         parent::setUp();
 
-        $this->location = $this->activeRestaurant();
+        $this->activeRestaurant();
+        $this->location = $this->primaryCentralKitchen();
         $this->administrator = $this->user('stage2d3-admin@example.test');
         $this->role($this->administrator, BusinessRole::Administrator);
-        app(MembershipService::class)->assign($this->administrator, $this->location);
+        app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
         $this->steward = $this->user('stage2d3-steward@example.test');
         app(MembershipService::class)->assign($this->steward, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);

@@ -19,7 +19,7 @@ if (DB::connection()->getDatabaseName() !== 'veltra_testing') {
 }
 
 [$script, $actorId, $contextId, $materialId, $targetLocationId, $operation, $applicationName] = $argv;
-if (! in_array($operation, ['share', 'revoke'], true)
+if (! in_array($operation, ['share', 'revoke', 'bulk-share'], true)
     || ! preg_match('/^[a-z0-9_-]{1,63}$/D', $applicationName)) {
     throw new InvalidArgumentException('Invalid concurrent share operation.');
 }
@@ -28,21 +28,34 @@ $app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterial
 DB::select('SELECT set_config(?, ?, false)', ['application_name', $applicationName]);
 
 try {
-    $result = $operation === 'share'
-        ? app(RawMaterialLocationShareAdministration::class)->share(
+    $administration = app(RawMaterialLocationShareAdministration::class);
+    $result = match ($operation) {
+        'share' => $administration->share(
             User::findOrFail($actorId),
             Location::findOrFail($contextId),
             $materialId,
             $targetLocationId,
-        )
-        : app(RawMaterialLocationShareAdministration::class)->revoke(
+        ),
+        'revoke' => $administration->revoke(
             User::findOrFail($actorId),
             Location::findOrFail($contextId),
             $materialId,
             $targetLocationId,
             'Concurrent test revocation',
-        );
-    fwrite(STDOUT, json_encode(['result' => $operation === 'share' ? 'created' : 'revoked', 'data' => $result], JSON_THROW_ON_ERROR));
+        ),
+        'bulk-share' => $administration->bulkShareToLocations(
+            User::findOrFail($actorId),
+            Location::findOrFail($contextId),
+            $materialId,
+            [$targetLocationId],
+        ),
+    };
+    $resultCode = match ($operation) {
+        'share' => 'created',
+        'revoke' => 'revoked',
+        'bulk-share' => strtolower($result['outcome']),
+    };
+    fwrite(STDOUT, json_encode(['result' => $resultCode, 'data' => $result], JSON_THROW_ON_ERROR));
 } catch (RawMaterialException $exception) {
     if (! in_array($exception->errorCode, ['RAW_MATERIAL_SHARE_ALREADY_ACTIVE', 'RAW_MATERIAL_SHARE_NOT_FOUND'], true)) {
         throw $exception;

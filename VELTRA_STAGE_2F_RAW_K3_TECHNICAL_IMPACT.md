@@ -176,6 +176,14 @@ Decyzje K3 zamykają reguły biznesowe, ale następujące szczegóły nadal wyma
 
 To są ograniczenia projektu, nie powody do samodzielnego uzupełniania wymagań ani do rozpoczęcia implementacji.
 
+## 12. Późniejsze, jawne zmiany decyzji (2026-11-09)
+
+Właściciel zatwierdził późniejsze zmiany dla K3.9–K3.10 i K3.18–K3.20. Szczegóły zapisano w [rejestrze zmian decyzji RAW_MATERIALS](./VELTRA_STAGE_2F_RAW_DECISION_AMENDMENTS_2026-11-09.md). Ten dodatek zastępuje wyłącznie sprzeczne wcześniejsze wiersze i rekomendacje; historycznej treści dokumentu nie usunięto.
+
+- **K3.9–K3.10:** bulk sharing jest atomowe; częściowy sukces jest zabroniony. Każdy nieprawidłowy cel oznacza zero zmian, z raportem dozwolonych powodów i audytem odrzucenia zachowanym poza rollbackiem.
+- **K3.18–K3.20:** wycofanie dostępne wyłącznie pierwotnej tożsamości SUPER ADMIN; zwykły ADMINISTRATOR nie inicjuje, nie zatwierdza ani nie wykonuje wycofania. Wymóg drugiego administratora wycofano. Wymagane są świeża ponowna autentykacja hasłem, pełny audyt i zachowanie danych historycznych.
+- **Granica implementacji:** nadal brakuje zatwierdzonych stanów, warunków zakończenia, katalogu zależności, skutków i semantyki recovery formalnego wycofania. Nie implementować endpointu retirement ani nie utożsamiać go z wyłączeniem modułu. Szczegóły wskazano w rejestrze.
+
 ## 11. Wynik i zalecenie
 
 - **K3 — decyzje biznesowe CLOSED.**

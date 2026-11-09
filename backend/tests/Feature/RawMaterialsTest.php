@@ -4068,6 +4068,360 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('event_code', 'LOCATION_SHARE_REVOKED')->count());
     }
 
+    public function test_bulk_share_supports_both_views_and_is_idempotent(): void
+    {
+        $categoryId = $this->category()['id'];
+        $materialOne = $this->activeCsvImportMaterial('Bulk share — pierwszy surowiec', $categoryId);
+        $materialTwo = $this->activeCsvImportMaterial('Bulk share — drugi surowiec', $categoryId);
+        $restaurantOne = $this->activeRestaurant('RBULK1');
+        $restaurantTwo = $this->activeRestaurant('RBULK2');
+        $restaurantThree = $this->activeRestaurant('RBULK3');
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $materialPerspective = $this->actingAs($this->steward, 'web')->postJson(
+            '/api/v1/raw-materials/'.$materialOne['id'].'/shares/bulk',
+            ['location_ids' => [$restaurantOne->id, $restaurantTwo->id, $restaurantOne->id]],
+        )->assertOk()->assertJsonPath('outcome', 'ACCEPTED')
+            ->assertJsonCount(2, 'data.created')
+            ->assertJsonCount(1, 'data.duplicates');
+
+        $this->actingAs($this->steward, 'web')->postJson(
+            '/api/v1/raw-materials/'.$materialOne['id'].'/shares/bulk',
+            ['location_ids' => [$restaurantTwo->id, $restaurantOne->id]],
+        )->assertOk()->assertJsonPath('outcome', 'ACCEPTED')
+            ->assertJsonCount(0, 'data.created')
+            ->assertJsonCount(2, 'data.already_active');
+
+        $this->actingAs($this->steward, 'web')->postJson('/api/v1/raw-materials/bulk-shares/by-location', [
+            'location_id' => $restaurantThree->id,
+            'material_ids' => [$materialOne['id'], $materialTwo['id']],
+        ])->assertOk()->assertJsonPath('outcome', 'ACCEPTED')
+            ->assertJsonCount(2, 'data.created');
+
+        $this->assertSame(4, DB::table('raw_material_location_shares')->whereNull('revoked_at')->count());
+        $this->assertSame(3, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_COMPLETED')
+            ->where('outcome', 'ACCEPTED')->count());
+        $this->assertSame(0, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
+            ->where('reason_code', 'TARGET_VALIDATION_FAILED')->count());
+        $this->assertNotNull($materialPerspective->json('data.operation_id'));
+    }
+
+    public function test_bulk_share_rejects_all_invalid_authorized_targets_atomically(): void
+    {
+        $approvedMaterial = $this->activeCsvImportMaterial('Bulk share — zatwierdzony');
+        $approvedRevisionId = DB::table('raw_materials')->where('id', $approvedMaterial['id'])->value('approved_revision_id');
+        $categoryId = DB::table('raw_material_revisions')->where('id', $approvedRevisionId)->value('category_id');
+        $draftSequence = (int) DB::table('organization_sku_assignments')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('prefix', 'SUR')
+            ->max('sequence_number') + 1;
+        $draftMaterialId = $this->declaredMaterial(
+            $categoryId,
+            'Bulk share — szkic',
+            materialCode: 'SUR-'.sprintf('%06d', $draftSequence),
+        );
+        $inactiveLocation = $this->activeRestaurant('RBULK_INACTIVE');
+        $this->updateFixture($inactiveLocation, ['is_active' => false]);
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $response = $this->actingAs($this->steward, 'web')->postJson('/api/v1/raw-materials/bulk-shares/by-location', [
+            'location_id' => $inactiveLocation->id,
+            'material_ids' => [$approvedMaterial['id'], $draftMaterialId],
+        ])->assertUnprocessable()->assertJsonPath('outcome', 'REJECTED')
+            ->assertJsonCount(2, 'data.invalid_targets');
+
+        $invalidTargets = $response->json('data.invalid_targets');
+        $this->assertSame(
+            ['LOCATION_INACTIVE'],
+            $invalidTargets[0]['reasons'],
+        );
+        $this->assertContains('LOCATION_INACTIVE', $invalidTargets[1]['reasons']);
+        $this->assertContains('MATERIAL_NOT_ACTIVE', $invalidTargets[1]['reasons']);
+        $this->assertContains('APPROVED_REVISION_MISSING', $invalidTargets[1]['reasons']);
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->whereIn('raw_material_id', [$approvedMaterial['id'], $draftMaterialId])->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
+            ->where('outcome', 'REJECTED')
+            ->where('reason_code', 'TARGET_VALIDATION_FAILED')->count());
+    }
+
+    public function test_bulk_share_denies_unauthorized_and_cross_organization_targets_without_disclosure(): void
+    {
+        $material = $this->activeCsvImportMaterial('Bulk share — granica autoryzacji');
+        $target = $this->activeRestaurant('RBULK_AUTH');
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->actingAs($this->steward, 'web')->postJson(
+            '/api/v1/raw-materials/'.$material['id'].'/shares/bulk',
+            ['location_ids' => [$target->id]],
+        )->assertForbidden()->assertDontSee($target->id);
+
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($material): void {
+            $response = $this->actingAs($this->steward, 'web')->postJson(
+                '/api/v1/raw-materials/'.$material['id'].'/shares/bulk',
+                ['location_ids' => [$foreignLocation->id]],
+            )->assertForbidden()->assertDontSee($foreignLocation->id);
+            $this->assertSame(0, DB::table('raw_material_location_shares')
+                ->where('raw_material_id', $material['id'])->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')
+                ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+                ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
+                ->where('reason_code', 'UNAUTHORIZED_TARGET')->count());
+            $this->assertNotSame('', $response->getContent());
+        });
+    }
+
+    public function test_bulk_share_audit_failure_rolls_back_every_target_and_audits_rejection(): void
+    {
+        $material = $this->activeCsvImportMaterial('Bulk share — rollback audytu');
+        $targetOne = $this->activeRestaurant('RBULK_ROLLBACK1');
+        $targetTwo = $this->activeRestaurant('RBULK_ROLLBACK2');
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+            CREATE FUNCTION public.test_fail_bulk_raw_material_share_audit()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF NEW.subject_type = 'RAW_MATERIAL_SHARE' THEN
+                    RAISE EXCEPTION 'synthetic bulk share audit failure' USING ERRCODE = 'P0001';
+                END IF;
+                RETURN NEW;
+            END
+            $$;
+            CREATE TRIGGER test_fail_bulk_raw_material_share_audit
+                BEFORE INSERT ON public.raw_material_audit_events
+                FOR EACH ROW EXECUTE FUNCTION public.test_fail_bulk_raw_material_share_audit();
+            SQL));
+
+        try {
+            try {
+                app(RawMaterialLocationShareAdministration::class)->bulkShareToLocations(
+                    $this->bootstrapAdministrator,
+                    $this->location,
+                    $material['id'],
+                    [$targetOne->id, $targetTwo->id],
+                );
+                $this->fail('A bulk share committed despite a failed target audit write.');
+            } catch (QueryException $exception) {
+                $this->assertSame('P0001', $exception->errorInfo[0] ?? null);
+            }
+        } finally {
+            $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
+                DROP TRIGGER test_fail_bulk_raw_material_share_audit ON public.raw_material_audit_events;
+                DROP FUNCTION public.test_fail_bulk_raw_material_share_audit();
+                SQL));
+        }
+
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
+            ->where('outcome', 'REJECTED')
+            ->where('reason_code', 'DATABASE_WRITE_FAILED')->count());
+    }
+
+    public function test_concurrent_bulk_share_requests_serialize_on_postgresql(): void
+    {
+        $material = $this->activeCsvImportMaterial('Bulk share — równoległy');
+        $target = $this->activeRestaurant('RBULK_CONCURRENT');
+        $operationNames = [];
+        $processes = [];
+        $committed = false;
+
+        DB::beginTransaction();
+        try {
+            DB::table('organizations')->where('id', $this->steward->organization_id)
+                ->lockForUpdate()->firstOrFail();
+            for ($index = 0; $index < 2; $index++) {
+                $applicationName = 'raw-bulk-'.strtolower(Str::random(8));
+                $process = new Process([
+                    PHP_BINARY,
+                    base_path('tests/Support/concurrent_raw_material_share.php'),
+                    $this->bootstrapAdministrator->id,
+                    $this->location->id,
+                    $material['id'],
+                    $target->id,
+                    'bulk-share',
+                    $applicationName,
+                ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+                $process->setTimeout(30);
+                $process->start();
+                $processes[] = $process;
+                $operationNames[] = $applicationName;
+            }
+
+            foreach ($processes as $index => $process) {
+                $deadline = microtime(true) + 10;
+                $waiting = false;
+                do {
+                    DB::select('SELECT pg_stat_clear_snapshot()');
+                    $waiting = (bool) DB::scalar(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = ? AND wait_event_type = 'Lock')",
+                        [$operationNames[$index]],
+                    );
+                    if ($waiting || ! $process->isRunning()) {
+                        break;
+                    }
+                    usleep(20_000);
+                } while (microtime(true) < $deadline);
+                $this->assertTrue($waiting, $process->getErrorOutput().$process->getOutput());
+            }
+            DB::commit();
+            $committed = true;
+        } finally {
+            if (! $committed) {
+                foreach ($processes as $process) {
+                    if ($process->isRunning()) {
+                        $process->stop();
+                    }
+                }
+                while (DB::transactionLevel() > 0) {
+                    DB::rollBack();
+                }
+            }
+        }
+
+        $outcomes = [];
+        foreach ($processes as $process) {
+            $process->wait();
+            $this->assertTrue($process->isSuccessful(), $process->getErrorOutput().$process->getOutput());
+            $outcomes[] = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR)['result'];
+        }
+        $this->assertSame(['accepted', 'accepted'], $outcomes);
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->where('location_id', $target->id)
+            ->whereNull('revoked_at')->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE')
+            ->where('event_code', 'LOCATION_SHARE_CREATED')
+            ->whereRaw("metadata->>'raw_material_id' = ?", [$material['id']])->count());
+        $this->assertSame(2, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_COMPLETED')->count());
+    }
+
+    public function test_bulk_share_waits_for_revocation_archive_and_location_deactivation(): void
+    {
+        $administration = app(RawMaterialLocationShareAdministration::class);
+        $this->role($this->steward, BusinessRole::Administrator);
+
+        $categoryId = $this->category()['id'];
+        $revokedMaterial = $this->activeCsvImportMaterial('Bulk share — po cofnięciu', $categoryId);
+        $revokedTarget = $this->activeRestaurant('RBULK_REVOKE_RACE');
+        $administration->share($this->bootstrapAdministrator, $this->location, $revokedMaterial['id'], $revokedTarget->id);
+        $revocationResult = $this->runBulkShareAfterOrganizationMutation(
+            $revokedMaterial['id'],
+            $revokedTarget->id,
+            fn () => $administration->revoke(
+                $this->bootstrapAdministrator,
+                $this->location,
+                $revokedMaterial['id'],
+                $revokedTarget->id,
+            ),
+        );
+        $this->assertSame('ACCEPTED', $revocationResult['data']['outcome']);
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $revokedMaterial['id'])->whereNotNull('revoked_at')->count());
+        $this->assertSame(1, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $revokedMaterial['id'])->whereNull('revoked_at')->count());
+
+        $archivedMaterial = $this->activeCsvImportMaterial('Bulk share — archiwizacja wyścig', $categoryId);
+        $archiveTarget = $this->activeRestaurant('RBULK_ARCHIVE_RACE');
+        $archiveResult = $this->runBulkShareAfterOrganizationMutation(
+            $archivedMaterial['id'],
+            $archiveTarget->id,
+            fn () => $this->rawMaterialService->archive(
+                $this->steward,
+                $this->location,
+                $archivedMaterial['id'],
+                'Test współbieżności bulk share',
+            ),
+        );
+        $this->assertSame('REJECTED', $archiveResult['data']['outcome']);
+        $this->assertContains('MATERIAL_NOT_ACTIVE', $archiveResult['data']['data']['invalid_targets'][0]['reasons']);
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $archivedMaterial['id'])->count());
+
+        $deactivatedMaterial = $this->activeCsvImportMaterial('Bulk share — dezaktywacja wyścig', $categoryId);
+        $deactivatedTarget = $this->activeRestaurant('RBULK_DEACTIVATE_RACE');
+        $deactivateResult = $this->runBulkShareAfterOrganizationMutation(
+            $deactivatedMaterial['id'],
+            $deactivatedTarget->id,
+            fn () => $this->service->updateLocation($deactivatedTarget, ['is_active' => false]),
+        );
+        $this->assertSame('REJECTED', $deactivateResult['data']['outcome']);
+        $this->assertContains('LOCATION_INACTIVE', $deactivateResult['data']['data']['invalid_targets'][0]['reasons']);
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $deactivatedMaterial['id'])->count());
+    }
+
+    private function runBulkShareAfterOrganizationMutation(
+        string $materialId,
+        string $targetLocationId,
+        callable $mutation,
+    ): array {
+        $applicationName = 'raw-bulk-race-'.strtolower(Str::random(8));
+        $process = null;
+        $committed = false;
+        DB::beginTransaction();
+        try {
+            DB::table('organizations')->where('id', $this->steward->organization_id)
+                ->lockForUpdate()->firstOrFail();
+            $process = new Process([
+                PHP_BINARY,
+                base_path('tests/Support/concurrent_raw_material_share.php'),
+                $this->bootstrapAdministrator->id,
+                $this->location->id,
+                $materialId,
+                $targetLocationId,
+                'bulk-share',
+                $applicationName,
+            ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+            $process->setTimeout(30);
+            $process->start();
+
+            $deadline = microtime(true) + 10;
+            $waiting = false;
+            do {
+                DB::select('SELECT pg_stat_clear_snapshot()');
+                $waiting = (bool) DB::scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = ? AND wait_event_type = 'Lock')",
+                    [$applicationName],
+                );
+                if ($waiting || ! $process->isRunning()) {
+                    break;
+                }
+                usleep(20_000);
+            } while (microtime(true) < $deadline);
+            $this->assertTrue($waiting, $process->getErrorOutput().$process->getOutput());
+            $mutation();
+            DB::commit();
+            $committed = true;
+        } finally {
+            if (! $committed) {
+                if ($process?->isRunning()) {
+                    $process->stop();
+                }
+                while (DB::transactionLevel() > 0) {
+                    DB::rollBack();
+                }
+            }
+        }
+
+        $process->wait();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput().$process->getOutput());
+
+        return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+    }
+
     private function selectContext(User $actor): void
     {
         Auth::forgetGuards();
@@ -4223,10 +4577,11 @@ class RawMaterialsTest extends AuthorizationTestCase
     private function activeCsvImportMaterial(string $name, ?string $categoryId = null): array
     {
         $categoryId ??= $this->category()['id'];
-        $materialCount = DB::table('raw_materials')
+        $lastSequence = (int) DB::table('organization_sku_assignments')
             ->where('organization_id', $this->steward->organization_id)
-            ->count();
-        $code = 'SUR-'.sprintf('%06d', $materialCount + 99);
+            ->where('prefix', 'SUR')
+            ->max('sequence_number');
+        $code = 'SUR-'.sprintf('%06d', max(99, $lastSequence + 1));
         $materialId = $this->declaredMaterial($categoryId, $name, materialCode: $code);
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
         $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa CSV');

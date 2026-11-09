@@ -131,6 +131,9 @@ Route::prefix('v1/raw-materials')->middleware([
         ->whereUuid('material')->whereUuid('event');
     Route::get('/{material}/shares', [RawMaterialController::class, 'shares'])->whereUuid('material');
     Route::post('/{material}/shares', [RawMaterialController::class, 'createShare'])->whereUuid('material');
+    Route::post('/{material}/shares/bulk', [RawMaterialController::class, 'bulkShareLocations'])
+        ->whereUuid('material');
+    Route::post('/bulk-shares/by-location', [RawMaterialController::class, 'bulkShareMaterials']);
     Route::delete('/{material}/shares/{location}', [RawMaterialController::class, 'revokeShare'])
         ->whereUuid('material')->whereUuid('location');
     Route::get('/', [RawMaterialController::class, 'index']);

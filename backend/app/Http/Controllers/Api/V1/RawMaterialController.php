@@ -12,6 +12,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ListRawMaterialsRequest;
 use App\Http\Requests\RawMaterialAllergenDeclarationRequest;
 use App\Http\Requests\RawMaterialApprovalRequest;
+use App\Http\Requests\RawMaterialBulkShareLocationsRequest;
+use App\Http\Requests\RawMaterialBulkShareMaterialsRequest;
 use App\Http\Requests\RawMaterialCategoryRenameRequest;
 use App\Http\Requests\RawMaterialCategoryRequest;
 use App\Http\Requests\RawMaterialCompatibilityAssessmentRequest;
@@ -368,6 +370,35 @@ class RawMaterialController extends Controller
             $material,
             $request->validated('location_id'),
         ), 201);
+    }
+
+    public function bulkShareLocations(
+        RawMaterialBulkShareLocationsRequest $request,
+        string $material,
+        RawMaterialLocationShareAdministration $administration,
+    ): JsonResponse {
+        $result = $administration->bulkShareToLocations(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $request->validated('location_ids'),
+        );
+
+        return response()->json($result, $result['outcome'] === 'REJECTED' ? 422 : 200);
+    }
+
+    public function bulkShareMaterials(
+        RawMaterialBulkShareMaterialsRequest $request,
+        RawMaterialLocationShareAdministration $administration,
+    ): JsonResponse {
+        $result = $administration->bulkShareMaterialsToLocation(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $request->validated('location_id'),
+            $request->validated('material_ids'),
+        );
+
+        return response()->json($result, $result['outcome'] === 'REJECTED' ? 422 : 200);
     }
 
     public function revokeShare(

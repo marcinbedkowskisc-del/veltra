@@ -53,17 +53,26 @@ final class RawMaterialCommercialService
         }
         $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
 
-        return ['data' => DB::table('supplier_product_revisions')->where('organization_id', $actor->organization_id)
-            ->where('supplier_product_id', $productId)->orderByDesc('revision_no')
+        $query = DB::table('supplier_product_revisions')
+            ->where('supplier_product_revisions.organization_id', $actor->organization_id)
+            ->where('supplier_product_revisions.supplier_product_id', $productId)
             ->leftJoin('raw_material_supplier_compatibility_status as compatibility', function ($join): void {
                 $join->on('compatibility.supplier_product_id', '=', 'supplier_product_revisions.supplier_product_id')
                     ->on('compatibility.organization_id', '=', 'supplier_product_revisions.organization_id')
                     ->on('compatibility.supplier_product_revision_id', '=', 'supplier_product_revisions.id');
-            })
-            ->get([
-                'supplier_product_revisions.*',
-                'compatibility.status as current_compatibility_status',
-            ])
+            });
+        if (! $this->sharePolicy->isPrimaryContext($context)) {
+            $query->join('raw_materials as materials', function ($join): void {
+                $join->on('materials.id', '=', 'supplier_product_revisions.raw_material_id')
+                    ->on('materials.organization_id', '=', 'supplier_product_revisions.organization_id');
+            })->where('materials.lifecycle_state', 'ACTIVE')
+                ->whereColumn('materials.approved_revision_id', 'supplier_product_revisions.raw_material_revision_id');
+        }
+
+        return ['data' => $query->orderByDesc('supplier_product_revisions.revision_no')->get([
+            'supplier_product_revisions.*',
+            'compatibility.status as current_compatibility_status',
+        ])
             ->map(fn (object $revision): array => [
                 'id' => $revision->id,
                 'revision_no' => $revision->revision_no,
@@ -264,6 +273,7 @@ final class RawMaterialCommercialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $this->material($actor, $materialId);
         $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
+        $isPrimary = $this->sharePolicy->isPrimaryContext($context);
         $query = DB::table('supplier_products as products')
             ->join('organization_suppliers as suppliers', function ($join): void {
                 $join->on('suppliers.id', '=', 'products.supplier_id')
@@ -276,6 +286,10 @@ final class RawMaterialCommercialService
             ->leftJoin('raw_material_supplier_compatibility_status as compatibility', function ($join): void {
                 $join->on('compatibility.supplier_product_id', '=', 'products.id')
                     ->on('compatibility.organization_id', '=', 'products.organization_id');
+            })
+            ->join('raw_materials as materials', function ($join): void {
+                $join->on('materials.id', '=', 'products.raw_material_id')
+                    ->on('materials.organization_id', '=', 'products.organization_id');
             })
             ->where('products.organization_id', $actor->organization_id)
             ->where('products.raw_material_id', $materialId)
@@ -291,6 +305,10 @@ final class RawMaterialCommercialService
                 'revisions.content_quantity', 'revisions.content_unit_code', 'revisions.base_quantity_snapshot',
                 'compatibility.status as compatibility_status',
             ]);
+        if (! $isPrimary) {
+            $query->where('materials.lifecycle_state', 'ACTIVE')
+                ->whereColumn('materials.approved_revision_id', 'revisions.raw_material_revision_id');
+        }
         if (isset($filters['supplier_id'])) {
             $query->where('products.supplier_id', $filters['supplier_id']);
         }
@@ -452,6 +470,7 @@ final class RawMaterialCommercialService
             $this->notFound();
         }
         $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
+        $this->assertCurrentProductRevision($actor, $context, $productId);
 
         return ['data' => DB::table('supplier_offers')->where('organization_id', $actor->organization_id)
             ->where('supplier_product_id', $productId)
@@ -532,6 +551,7 @@ final class RawMaterialCommercialService
             $this->notFound();
         }
         $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
+        $this->assertCurrentProductRevision($actor, $context, $product->id);
 
         $events = DB::table('supplier_offer_events')->where('organization_id', $actor->organization_id)
             ->where('offer_id', $offerId)->orderBy('event_no')->get();
@@ -1575,6 +1595,35 @@ final class RawMaterialCommercialService
     {
         if (! $this->sharePolicy->isPrimaryContext($context)) {
             $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        }
+    }
+
+    private function assertCurrentProductRevision(User $actor, Location $context, string $productId): void
+    {
+        if ($this->sharePolicy->isPrimaryContext($context)) {
+            return;
+        }
+
+        $isCurrent = DB::table('supplier_products as products')
+            ->join('supplier_product_revisions as revisions', function ($join): void {
+                $join->on('revisions.supplier_product_id', '=', 'products.id')
+                    ->on('revisions.organization_id', '=', 'products.organization_id');
+            })
+            ->join('raw_materials as materials', function ($join): void {
+                $join->on('materials.id', '=', 'products.raw_material_id')
+                    ->on('materials.organization_id', '=', 'products.organization_id');
+            })
+            ->where('products.organization_id', $actor->organization_id)
+            ->where('products.id', $productId)
+            ->where('materials.lifecycle_state', 'ACTIVE')
+            ->whereColumn('materials.approved_revision_id', 'revisions.raw_material_revision_id')
+            ->whereRaw('revisions.revision_no = (SELECT max(latest.revision_no)
+                FROM supplier_product_revisions latest
+                WHERE latest.supplier_product_id = products.id
+                    AND latest.organization_id = products.organization_id)')
+            ->exists();
+        if (! $isCurrent) {
+            $this->notFound();
         }
     }
 

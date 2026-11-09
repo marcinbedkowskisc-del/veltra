@@ -182,13 +182,24 @@ final class RawMaterialService
     public function revisions(User $actor, Location $context, string $materialId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AuditView);
-        if (! $this->sharePolicy->isPrimaryContext($context)) {
+        $isPrimary = $this->sharePolicy->isPrimaryContext($context);
+        if (! $isPrimary) {
             $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
         }
         $this->material($actor, $materialId);
 
-        return DB::table('raw_material_revisions')->where('organization_id', $actor->organization_id)
-            ->where('raw_material_id', $materialId)->orderByDesc('revision_no')->get()
+        $query = DB::table('raw_material_revisions')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $materialId);
+        if (! $isPrimary) {
+            $query->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.organization_id', 'raw_material_revisions.organization_id')
+                ->whereColumn('raw_materials.id', 'raw_material_revisions.raw_material_id')
+                ->whereColumn('raw_materials.approved_revision_id', 'raw_material_revisions.id'));
+        }
+
+        return $query->orderByDesc('revision_no')->get()
             ->map(function (object $revision): array {
                 return [
                     'id' => $revision->id,
@@ -396,17 +407,23 @@ final class RawMaterialService
     public function revisionStage2d(User $actor, Location $context, string $materialId, string $revisionId): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AuditView);
-        if (! $this->sharePolicy->isPrimaryContext($context)) {
+        $isPrimary = $this->sharePolicy->isPrimaryContext($context);
+        if (! $isPrimary) {
             $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
         }
-        $material = DB::table('raw_materials')
-            ->where('organization_id', $actor->organization_id)
-            ->where('id', $materialId)
-            ->first(['id']);
-        $revision = DB::table('raw_material_revisions')
+
+        $revisionQuery = DB::table('raw_material_revisions')
             ->where('organization_id', $actor->organization_id)
             ->where('raw_material_id', $materialId)
-            ->where('id', $revisionId)
+            ->where('id', $revisionId);
+        if (! $isPrimary) {
+            $revisionQuery->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.organization_id', 'raw_material_revisions.organization_id')
+                ->whereColumn('raw_materials.id', 'raw_material_revisions.raw_material_id')
+                ->whereColumn('raw_materials.approved_revision_id', 'raw_material_revisions.id'));
+        }
+        $revision = $revisionQuery
             ->first([
                 'id',
                 'revision_no',
@@ -414,7 +431,7 @@ final class RawMaterialService
                 'content_hash_version',
                 'content_hash',
             ]);
-        if (! $material || ! $revision) {
+        if (! $revision) {
             throw new RawMaterialException('RAW_MATERIAL_REVISION_NOT_FOUND', __('messages.resource_not_found'), 404);
         }
 

@@ -24,20 +24,34 @@ final class RawMaterialCompatibilityAssessmentService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $product = $this->product($actor, $productId);
         $this->assertMaterialSharedForConsumer($actor, $context, $product->raw_material_id);
+        $isPrimary = $this->sharePolicy->isPrimaryContext($context);
         $status = DB::table('raw_material_supplier_compatibility_status')
             ->where('organization_id', $actor->organization_id)
             ->where('supplier_product_id', $product->id)
             ->first();
+        $assessmentContext = $this->assessmentContext($actor, $product, $status);
+        $history = DB::table('raw_material_supplier_compatibility_assessments')
+            ->where('organization_id', $actor->organization_id)
+            ->where('supplier_product_id', $product->id);
+        if (! $isPrimary) {
+            $approvedRevisionId = DB::table('raw_materials')
+                ->where('organization_id', $actor->organization_id)
+                ->where('id', $product->raw_material_id)
+                ->value('approved_revision_id');
+            $history->where('raw_material_revision_id', $approvedRevisionId);
+            if (($assessmentContext['raw_material_revision_current'] ?? false) !== true) {
+                $assessmentContext = null;
+                $status = null;
+            }
+        }
 
         return [
             'supplier_product_id' => $product->id,
             'status' => $status?->status ?? 'PENDING',
             'current_supplier_product_revision_id' => $status?->supplier_product_revision_id,
             'current_assessment_id' => $status?->current_assessment_id,
-            'assessment_context' => $this->assessmentContext($actor, $product, $status),
-            'history' => DB::table('raw_material_supplier_compatibility_assessments')
-                ->where('organization_id', $actor->organization_id)
-                ->where('supplier_product_id', $product->id)
+            'assessment_context' => $assessmentContext,
+            'history' => $history
                 ->orderByDesc('assessment_number')
                 ->get([
                     'id',

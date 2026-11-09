@@ -201,7 +201,8 @@ final class RawMaterialDocumentService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
 
-        $version = DB::table('raw_material_document_versions as versions')
+        $isPrimary = $this->sharePolicy->isPrimaryContext($context);
+        $versionQuery = DB::table('raw_material_document_versions as versions')
             ->join('raw_material_document_version_links as links', function ($join): void {
                 $join->on('links.document_version_id', '=', 'versions.id')
                     ->on('links.organization_id', '=', 'versions.organization_id');
@@ -209,6 +210,10 @@ final class RawMaterialDocumentService
             ->join('raw_material_revisions as revisions', function ($join): void {
                 $join->on('revisions.id', '=', 'links.raw_material_revision_id')
                     ->on('revisions.organization_id', '=', 'links.organization_id');
+            })
+            ->join('raw_materials as materials', function ($join): void {
+                $join->on('materials.id', '=', 'revisions.raw_material_id')
+                    ->on('materials.organization_id', '=', 'revisions.organization_id');
             })
             ->where('versions.id', $versionId)
             ->where('versions.organization_id', $actor->organization_id)
@@ -225,7 +230,13 @@ final class RawMaterialDocumentService
                 'versions.stored_at',
                 'links.raw_material_revision_id',
                 'revisions.raw_material_id',
-            ])->first();
+            ]);
+        if (! $isPrimary) {
+            $versionQuery
+                ->whereColumn('materials.approved_revision_id', 'links.raw_material_revision_id')
+                ->where('materials.lifecycle_state', 'ACTIVE');
+        }
+        $version = $versionQuery->first();
         if (! $version) {
             throw new RawMaterialDocumentException(
                 'RAW_MATERIAL_DOCUMENT_VERSION_NOT_FOUND',
@@ -233,7 +244,7 @@ final class RawMaterialDocumentService
                 404,
             );
         }
-        if (! $this->sharePolicy->isPrimaryContext($context)) {
+        if (! $isPrimary) {
             $this->sharePolicy->assertCanConsume($actor, $context, $version->raw_material_id);
         }
 

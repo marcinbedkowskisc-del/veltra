@@ -11,6 +11,8 @@ use App\Domain\Installation\LocationType;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\Modules\ModuleDefinition;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialCatalogCsvImportWorkflow;
@@ -2289,6 +2291,366 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('outcome', 'APPROVED')->count());
     }
 
+    public function test_recipient_reads_only_the_current_approved_revision_and_its_documents(): void
+    {
+        Storage::fake('raw_material_documents');
+        $category = $this->category();
+        $material = $this->activeCsvImportMaterial('Zatwierdzona wersja V1', $category['id']);
+        $v1Id = DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id');
+        $restaurant = $this->activeRestaurant('RREVISION');
+        $secondRestaurant = $this->activeRestaurant('RREVISION2');
+        app(MembershipService::class)->assign($this->steward, $restaurant);
+        app(MembershipService::class)->assign($this->steward, $secondRestaurant);
+        foreach ([$restaurant, $secondRestaurant] as $recipientLocation) {
+            LocationModuleState::on('pgsql_setup')->create([
+                'organization_id' => $this->steward->organization_id,
+                'location_id' => $recipientLocation->id,
+                'module_key' => 'RAW_MATERIALS',
+                'enabled' => true,
+                'created_by' => $this->bootstrapAdministrator->id,
+                'updated_by' => $this->bootstrapAdministrator->id,
+            ]);
+            app(RawMaterialLocationShareAdministration::class)->share(
+                $this->bootstrapAdministrator,
+                $this->location,
+                $material['id'],
+                $recipientLocation->id,
+            );
+        }
+        $documents = app(RawMaterialDocumentService::class);
+        $v1Document = $documents->create(
+            $this->steward,
+            $this->location,
+            $v1Id,
+            'OTHER',
+            'zatwierdzona-v1.txt',
+            'synthetic approved v1',
+        );
+        $commercial = app(RawMaterialCommercialService::class);
+        $supplierId = $commercial->createSupplier($this->steward, $this->location, [
+            'supplier_code' => 'REVISION_TEST',
+            'display_name' => 'Dostawca testu rewizji',
+        ], 'revision-test-supplier-001')['data']['id'];
+        $productId = $commercial->createProduct($this->steward, $this->location, $material['id'], [
+            'supplier_id' => $supplierId,
+            'raw_material_revision_id' => $v1Id,
+            'product_name' => 'Produkt powiązany z V1',
+            'supplier_sku' => 'REV-V1',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '1',
+            'content_unit_code' => 'g',
+        ], 'revision-test-product-001')['data']['id'];
+
+        $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $category['id'],
+            'name' => 'Poufna wersja V2',
+            'description' => 'Treść oczekująca na zatwierdzenie',
+            'base_unit_code' => 'g',
+        ]);
+        $unattestedV2Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
+        $this->assertSame($v1Id, $this->rawMaterialService
+            ->show($this->steward, $restaurant, $material['id'])['revision']['id']);
+        $this->assertSame([$v1Id], array_column(
+            $this->rawMaterialService->revisions($this->steward, $restaurant, $material['id']),
+            'id',
+        ));
+        try {
+            $this->rawMaterialService->revisionStage2d(
+                $this->steward,
+                $restaurant,
+                $material['id'],
+                $unattestedV2Id,
+            );
+            $this->fail('A recipient read Stage 2D data for a draft revision.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_REVISION_NOT_FOUND', $exception->errorCode);
+        }
+        $this->attestWorkingRevision($material['id']);
+        $v2Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
+        $v2Document = $documents->create(
+            $this->steward,
+            $this->location,
+            $v2Id,
+            'OTHER',
+            'niezatwierdzona-v2.txt',
+            'synthetic pending v2',
+        );
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+
+        $this->assertSame([$v2Id, $unattestedV2Id, $v1Id], array_column(
+            $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']),
+            'id',
+        ));
+        $this->assertSame('Zatwierdzona wersja V1', $this->rawMaterialService
+            ->show($this->steward, $this->location, $material['id'])['revision']['name']);
+        $this->assertSame([$v2Id, $unattestedV2Id, $v1Id], array_column(
+            $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']),
+            'id',
+        ));
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $restaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])
+            ->assertOk()->assertJsonPath('data.revision.id', $v1Id)
+            ->assertJsonPath('data.revision.name', 'Zatwierdzona wersja V1')
+            ->assertJsonMissing(['name' => 'Poufna wersja V2']);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions')
+            ->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $v1Id)
+            ->assertJsonMissing(['name' => 'Poufna wersja V2']);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions/'.$v1Id.'/stage2d')->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions/'.$v2Id.'/stage2d')
+            ->assertNotFound()->assertJsonPath('error.code', 'RAW_MATERIAL_REVISION_NOT_FOUND');
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/supplier-products')
+            ->assertOk()->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.current_revision.product_name', 'Produkt powiązany z V1');
+        $this->assertSame($v1Id, $documents->verifyVersion(
+            $this->steward,
+            $restaurant,
+            $v1Document['version']['id'],
+        )['raw_material_revision_id']);
+        try {
+            $documents->verifyVersion($this->steward, $restaurant, $v2Document['version']['id']);
+            $this->fail('A recipient read a document linked to an unapproved revision.');
+        } catch (RawMaterialDocumentException $exception) {
+            $this->assertSame('RAW_MATERIAL_DOCUMENT_VERSION_NOT_FOUND', $exception->errorCode);
+        }
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $secondRestaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])
+            ->assertOk()->assertJsonPath('data.revision.id', $v1Id);
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $this->assertSame([$v2Id, $unattestedV2Id, $v1Id], array_column(
+            $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']),
+            'id',
+        ));
+        $this->rawMaterialService->returnForChanges(
+            $this->steward,
+            $this->location,
+            $material['id'],
+            'Regresja rewizji oczekującej',
+        );
+        $this->assertSame($v1Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
+        try {
+            $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Nieprawidłowa próba');
+            $this->fail('A returned revision was approved without resubmission.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_APPROVAL_INVALID', $exception->errorCode);
+        }
+        $this->assertSame($v1Id, $this->rawMaterialService
+            ->show($this->steward, $restaurant, $material['id'])['revision']['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie wersji V2');
+        $this->assertSame($v2Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
+        $this->assertSame([$v1Id], array_column(
+            $commercial->productRevisions($this->steward, $this->location, $productId)['data'],
+            'raw_material_revision_id',
+        ));
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $restaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])
+            ->assertOk()->assertJsonPath('data.revision.id', $v2Id)
+            ->assertJsonPath('data.revision.name', 'Poufna wersja V2');
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions')
+            ->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $v2Id);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions/'.$v2Id.'/stage2d')->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/revisions/'.$v1Id.'/stage2d')
+            ->assertNotFound()->assertJsonPath('error.code', 'RAW_MATERIAL_REVISION_NOT_FOUND');
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/supplier-products')
+            ->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/raw-materials/supplier-products/'.$productId.'/revisions')
+            ->assertOk()->assertJsonCount(0, 'data');
+        $this->assertSame($v2Id, $documents->verifyVersion(
+            $this->steward,
+            $restaurant,
+            $v2Document['version']['id'],
+        )['raw_material_revision_id']);
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $secondRestaurant->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])
+            ->assertOk()->assertJsonPath('data.revision.id', $v2Id);
+    }
+
+    public function test_revision_approval_and_recipient_reads_are_serialized_consistently(): void
+    {
+        $category = $this->category();
+        $material = $this->activeCsvImportMaterial('Materiał do wyścigu akceptacji', $category['id']);
+        $v1Id = DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id');
+        $restaurant = $this->activeRestaurant('RREVISION_CONC');
+        app(MembershipService::class)->assign($this->steward, $restaurant);
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id,
+            'location_id' => $restaurant->id,
+            'module_key' => 'RAW_MATERIALS',
+            'enabled' => true,
+            'created_by' => $this->bootstrapAdministrator->id,
+            'updated_by' => $this->bootstrapAdministrator->id,
+        ]);
+        app(RawMaterialLocationShareAdministration::class)->share(
+            $this->bootstrapAdministrator,
+            $this->location,
+            $material['id'],
+            $restaurant->id,
+        );
+        $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $category['id'],
+            'name' => 'Materiał V2',
+            'base_unit_code' => 'g',
+        ]);
+        $this->attestWorkingRevision($material['id']);
+        $v2Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+
+        $processes = [];
+        try {
+            DB::beginTransaction();
+            DB::table('organizations')->where('id', $this->steward->organization_id)
+                ->lockForUpdate()->firstOrFail();
+            foreach ([1, 2] as $index) {
+                [$process, $applicationName] = $this->startRevisionProcess(
+                    'approve',
+                    $this->steward,
+                    $this->location,
+                    $material['id'],
+                    null,
+                    'raw-approve-'.$index.'-',
+                );
+                $processes[] = [$process, $applicationName];
+                $this->assertRevisionProcessWaitingOnOrganizationLock($process, $applicationName);
+            }
+            DB::commit();
+            $approvalResults = array_map(fn (array $pair): array => $this->finishRevisionProcess($pair[0]), $processes);
+        } finally {
+            while (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            foreach ($processes as [$process]) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+        $statuses = array_column($approvalResults, 'status');
+        sort($statuses);
+        $this->assertSame(['approved', 'denied'], $statuses);
+        $this->assertSame(1, count(array_filter(
+            $approvalResults,
+            fn (array $result): bool => ($result['code'] ?? null) === 'RAW_MATERIAL_APPROVAL_INVALID',
+        )));
+        $this->assertSame($v2Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
+        $this->assertSame(2, DB::table('raw_material_revision_approval_events')
+            ->whereIn('revision_id', [$v1Id, $v2Id])->where('outcome', 'APPROVED')->count());
+
+        $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $category['id'],
+            'name' => 'Materiał V3',
+            'base_unit_code' => 'g',
+        ]);
+        $this->attestWorkingRevision($material['id']);
+        $v3Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+
+        $processes = [];
+        DB::beginTransaction();
+        try {
+            DB::table('organizations')->where('id', $this->steward->organization_id)
+                ->lockForUpdate()->firstOrFail();
+            [$approval, $approvalName] = $this->startRevisionProcess(
+                'approve',
+                $this->steward,
+                $this->location,
+                $material['id'],
+                null,
+                'raw-read-approve-',
+            );
+            $processes[] = [$approval, $approvalName];
+            $this->assertRevisionProcessWaitingOnOrganizationLock($approval, $approvalName);
+            [$read, $readName] = $this->startRevisionProcess(
+                'read',
+                $this->steward,
+                $restaurant,
+                $material['id'],
+                null,
+                'raw-read-before-approve-',
+            );
+            $processes[] = [$read, $readName];
+            $readResult = $this->finishRevisionProcess($read);
+            $this->assertSame('read', $readResult['status']);
+            $this->assertSame($v2Id, $readResult['data']['revision']['id']);
+            $this->assertSame('Materiał V2', $readResult['data']['revision']['name']);
+            DB::commit();
+            $this->assertSame('approved', $this->finishRevisionProcess($approval)['status']);
+        } finally {
+            while (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            foreach ($processes as [$process]) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+        $this->assertSame($v3Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
+
+        $processes = [];
+        DB::beginTransaction();
+        try {
+            DB::table('organizations')->where('id', $this->steward->organization_id)
+                ->lockForUpdate()->firstOrFail();
+            [$revoke, $revokeName] = $this->startRevisionProcess(
+                'revoke',
+                $this->bootstrapAdministrator,
+                $this->location,
+                $material['id'],
+                $restaurant->id,
+                'raw-revoke-race-',
+            );
+            $processes[] = [$revoke, $revokeName];
+            $this->assertRevisionProcessWaitingOnOrganizationLock($revoke, $revokeName);
+            [$read, $readName] = $this->startRevisionProcess(
+                'read',
+                $this->steward,
+                $restaurant,
+                $material['id'],
+                null,
+                'raw-read-before-revoke-',
+            );
+            $processes[] = [$read, $readName];
+            $readResult = $this->finishRevisionProcess($read);
+            $this->assertSame('read', $readResult['status']);
+            $this->assertSame($v3Id, $readResult['data']['revision']['id']);
+            DB::commit();
+            $this->assertSame('revoked', $this->finishRevisionProcess($revoke)['status']);
+        } finally {
+            while (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            foreach ($processes as [$process]) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+        [$readAfterRevoke] = $this->startRevisionProcess(
+            'read',
+            $this->steward,
+            $restaurant,
+            $material['id'],
+            null,
+            'raw-read-after-revoke-',
+        );
+        $this->assertSame('denied', $this->finishRevisionProcess($readAfterRevoke)['status']);
+    }
+
     public function test_duplicate_terms_and_client_supplied_metric_factors_are_rejected_atomically(): void
     {
         $category = $this->category();
@@ -4147,5 +4509,58 @@ class RawMaterialsTest extends AuthorizationTestCase
             'catalog_version_id' => $catalogVersionId,
             'items' => [],
         ]);
+    }
+
+    private function startRevisionProcess(
+        string $operation,
+        User $actor,
+        Location $context,
+        string $materialId,
+        ?string $targetLocationId,
+        string $namePrefix,
+    ): array {
+        $applicationName = $namePrefix.Str::lower(Str::random(8));
+        $process = new Process([
+            PHP_BINARY,
+            base_path('tests/Support/concurrent_raw_material_revision.php'),
+            $operation,
+            $actor->id,
+            $context->id,
+            $materialId,
+            $targetLocationId ?? '',
+            $applicationName,
+        ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
+        $process->setTimeout(30);
+        $process->start();
+
+        return [$process, $applicationName];
+    }
+
+    private function assertRevisionProcessWaitingOnOrganizationLock(
+        Process $process,
+        string $applicationName,
+    ): void {
+        $deadline = microtime(true) + 10;
+        do {
+            DB::select('SELECT pg_stat_clear_snapshot()');
+            $waiting = (bool) DB::scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = ? AND wait_event_type = 'Lock')",
+                [$applicationName],
+            );
+            if ($waiting || ! $process->isRunning()) {
+                break;
+            }
+            usleep(20_000);
+        } while (microtime(true) < $deadline);
+
+        $this->assertTrue($waiting, $process->getErrorOutput().$process->getOutput());
+    }
+
+    private function finishRevisionProcess(Process $process): array
+    {
+        $process->wait();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+
+        return json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
     }
 }

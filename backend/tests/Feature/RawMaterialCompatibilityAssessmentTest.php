@@ -13,6 +13,7 @@ use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialCompatibilityAssessmentService;
 use App\Domain\RawMaterials\RawMaterialException;
+use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
@@ -407,6 +408,91 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
         $this->getJson('/api/v1/raw-materials/supplier-products/'.$this->productId.'/compatibility-assessments')
             ->assertServiceUnavailable()
             ->assertJsonPath('error.code', 'RAW_MATERIALS_MODULE_UNAVAILABLE');
+    }
+
+    public function test_recipient_compatibility_history_excludes_assessments_for_superseded_raw_revisions(): void
+    {
+        $categoryId = DB::table('raw_material_revisions')->where('id', $this->rawMaterialRevisionId)->value('category_id');
+        $catalogVersionId = $this->publishedCatalog();
+        $material = $this->rawMaterials->create($this->steward, $this->location, [
+            'category_id' => $categoryId,
+            'name' => 'Surowiec historii zgodności',
+            'base_unit_code' => 'g',
+            'allergen_state' => 'DECLARED',
+            'allergen_declaration' => [
+                'status' => 'DECLARED',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
+            ],
+        ]);
+        $this->materialId = $material['id'];
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
+        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Pierwsze zatwierdzenie');
+        $this->rawMaterialRevisionId = DB::table('raw_materials')
+            ->where('id', $this->materialId)
+            ->value('approved_revision_id');
+        $product = $this->commercial->createProduct($this->steward, $this->location, $this->materialId, [
+            'supplier_id' => $this->supplierId,
+            'raw_material_revision_id' => $this->rawMaterialRevisionId,
+            'product_name' => 'Produkt historii zgodności',
+            'supplier_sku' => 'COMPAT-HISTORY',
+            'purchase_unit_code' => 'PACK',
+            'content_quantity' => '1',
+            'content_unit_code' => 'g',
+        ], 'compat-history-product-001');
+        $this->productId = $product['data']['id'];
+        $this->supplierProductRevisionId = $product['data']['current_revision']['id'];
+
+        $evidence = $this->createEvidence("synthetic historical compatibility evidence\n");
+        app(RawMaterialDocumentScanService::class)->scanVersion($evidence['version']['id']);
+        $this->assessments->assess(
+            $this->steward,
+            $this->location,
+            $this->productId,
+            $this->decision($evidence['version']['id'], 'COMPATIBLE'),
+            'compat-history-v1-0001',
+        );
+
+        $recipient = $this->activeRestaurant('RCURRENT');
+        app(MembershipService::class)->assign($this->steward, $recipient);
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id,
+            'location_id' => $recipient->id,
+            'module_key' => 'RAW_MATERIALS',
+            'enabled' => true,
+            'created_by' => $this->administrator->id,
+            'updated_by' => $this->administrator->id,
+        ]);
+        app(RawMaterialLocationShareAdministration::class)->share(
+            $this->administrator,
+            $this->location,
+            $this->materialId,
+            $recipient->id,
+        );
+
+        $approved = DB::table('raw_material_revisions')->where('id', $this->rawMaterialRevisionId)->first();
+        $this->rawMaterials->revise($this->steward, $this->location, $this->materialId, [
+            'category_id' => $approved->category_id,
+            'name' => 'Nowa zatwierdzona rewizja surowca',
+            'description' => $approved->description,
+            'base_unit_code' => $approved->base_unit_code,
+        ]);
+        $catalogVersionId = $this->publishedCatalog();
+        $this->rawMaterials->reviseAllergenDeclaration($this->steward, $this->location, $this->materialId, [
+            'status' => 'DECLARED',
+            'catalog_version_id' => $catalogVersionId,
+            'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
+        ]);
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
+        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Aktualizacja syntetyczna');
+
+        $this->assertSame($this->rawMaterialRevisionId, $this->assessments
+            ->history($this->steward, $this->location, $this->productId)['history'][0]['raw_material_revision_id']);
+
+        $recipientHistory = $this->assessments->history($this->steward, $recipient, $this->productId);
+        $this->assertSame('PENDING', $recipientHistory['status']);
+        $this->assertNull($recipientHistory['assessment_context']);
+        $this->assertSame([], $recipientHistory['history']);
     }
 
     public function test_assessment_and_audit_roll_back_together_when_audit_insert_fails(): void

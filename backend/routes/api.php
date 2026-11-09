@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\RawMaterialCatalogCsvImportController;
 use App\Http\Controllers\Api\V1\RawMaterialController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvCatalogExportController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvImportController;
+use App\Http\Controllers\Api\V1\RawMaterialDocumentController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
@@ -65,6 +66,12 @@ Route::prefix('v1/raw-materials')->middleware([
     'throttle:security',
     RequireRawMaterialsAvailability::class,
 ])->group(function (): void {
+    Route::post('/document-uploads', [RawMaterialDocumentController::class, 'upload']);
+    Route::post('/bulk-archive/validation', [RawMaterialController::class, 'validateBulkArchive']);
+    Route::post('/document-uploads/{upload}/retry', [RawMaterialDocumentController::class, 'retry'])->whereUuid('upload');
+    Route::get('/{material}/documents', [RawMaterialDocumentController::class, 'index'])->whereUuid('material');
+    Route::get('/{material}/documents/{version}/download', [RawMaterialDocumentController::class, 'download'])->whereUuid('material')->whereUuid('version');
+    Route::get('/{material}/documents/{version}/preview', [RawMaterialDocumentController::class, 'preview'])->whereUuid('material')->whereUuid('version');
     Route::post('/catalog-imports', [RawMaterialCatalogCsvImportController::class, 'upload']);
     Route::post('/catalog-imports/{preview}/commit', [RawMaterialCatalogCsvImportController::class, 'commit'])
         ->whereUuid('preview');
@@ -74,6 +81,8 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::post('/imports/{preview}/commit', [RawMaterialCsvImportController::class, 'commit'])->whereUuid('preview');
     Route::get('/imports/results/{batch}', [RawMaterialCsvImportController::class, 'result'])->whereUuid('batch');
     Route::post('/catalog-exports/extended', [RawMaterialCsvCatalogExportController::class, 'createExtended']);
+    Route::post('/catalog-exports/selection', [RawMaterialCsvCatalogExportController::class, 'createSelection']);
+    Route::get('/catalog-exports/selection/{export}/download', [RawMaterialCsvCatalogExportController::class, 'downloadSelection'])->whereUuid('export');
     Route::get('/catalog-exports/extended/{export}/download', [RawMaterialCsvCatalogExportController::class, 'downloadExtended'])
         ->whereUuid('export');
     Route::post('/reference-price-exports', [RawMaterialCsvCatalogExportController::class, 'createReferencePrices']);

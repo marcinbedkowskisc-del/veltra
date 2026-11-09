@@ -1,6 +1,8 @@
 <?php
 
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\RawMaterials\Documents\DocumentStorageException;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Http\Middleware\LocalManagementAccess;
 use App\Http\Middleware\PolishApiResponses;
@@ -72,6 +74,12 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return null;
+        });
+        $exceptions->render(function (RawMaterialDocumentException|DocumentStorageException $exception, Request $request) {
+            if ($request->is('api/v1/raw-materials/*')) {
+                return response()->json(['error' => ['code' => $exception->errorCode, 'message' => $exception->getMessage()]],
+                    $exception instanceof RawMaterialDocumentException ? $exception->status : 503);
+            }
         });
         $exceptions->render(function (AuthenticationException $exception, Request $request) {
             if ($request->is('api/*')) {

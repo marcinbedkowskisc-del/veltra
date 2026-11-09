@@ -4,6 +4,7 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentSetService;
 use App\Domain\Sku\SkuAllocationService;
 use App\Domain\Sku\SkuPrefix;
 use App\Http\Requests\InstallationRequest;
@@ -14,6 +15,7 @@ use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -29,6 +31,7 @@ final class RawMaterialService
         private SkuAllocationService $skuAllocation,
         private RawMaterialCatalogValues $catalogValues,
         private RawMaterialSkuReservationService $reservations,
+        private RawMaterialDocumentSetService $documentSets,
     ) {}
 
     public function categories(User $actor, Location $context): array
@@ -100,6 +103,40 @@ final class RawMaterialService
 
     public function list(User $actor, Location $context, array $filters): array
     {
+        $query = $this->catalogQuery($actor, $context, $filters);
+        $paginator = $query->paginate($filters['per_page'] ?? 50, ['*'], 'page', $filters['page'] ?? 1);
+        $data = $paginator->getCollection()->map(fn (object $row, int $index): array => [
+            'id' => $row->id,
+            'code' => $row->code,
+            'sku' => $row->code,
+            'ordinal' => ($paginator->currentPage() - 1) * $paginator->perPage() + $index + 1,
+            ...RawMaterialCatalogValues::present($row),
+            'lifecycle_state' => $row->lifecycle_state,
+            'revision' => $row->revision_id === null ? null : [
+                'id' => $row->revision_id,
+                'revision_no' => $row->revision_no,
+                'name' => $row->name,
+                'base_unit_code' => $row->base_unit_code,
+                'allergen_state' => $row->allergen_state,
+                'category' => $row->category_id === null ? null : ['id' => $row->category_id, 'name' => $row->category_name],
+            ],
+        ])->all();
+
+        return [
+            'data' => $data,
+            'meta' => [
+                'current_page' => $paginator->currentPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'last_page' => $paginator->lastPage(),
+                'from' => $paginator->firstItem(),
+                'to' => $paginator->lastItem(),
+            ],
+        ];
+    }
+
+    public function catalogQuery(User $actor, Location $context, array $filters, bool $withOrdinal = false): Builder
+    {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $query = DB::table('raw_materials as materials')
             ->leftJoin('raw_material_revisions as revisions', function ($join): void {
@@ -112,7 +149,7 @@ final class RawMaterialService
             ->where('materials.lifecycle_state', '<>', 'ARCHIVED')
             ->select([
                 'materials.id', 'materials.code', 'materials.lifecycle_state',
-                'revisions.id as revision_id', 'revisions.revision_no', 'revisions.name',
+                'revisions.id as revision_id', 'revisions.revision_no', 'revisions.name', 'revisions.description',
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
@@ -180,36 +217,12 @@ final class RawMaterialService
         if (! in_array($direction, ['asc', 'desc'], true)) {
             throw ValidationException::withMessages(['direction' => ['Nieprawidłowy kierunek sortowania.']]);
         }
-        $paginator = $query->orderByRaw($sort.' '.$direction.' NULLS LAST')->orderBy('materials.id')
-            ->paginate($filters['per_page'] ?? 50, ['*'], 'page', $filters['page'] ?? 1);
-        $data = $paginator->getCollection()->map(fn (object $row, int $index): array => [
-            'id' => $row->id,
-            'code' => $row->code,
-            'sku' => $row->code,
-            'ordinal' => ($paginator->currentPage() - 1) * $paginator->perPage() + $index + 1,
-            ...RawMaterialCatalogValues::present($row),
-            'lifecycle_state' => $row->lifecycle_state,
-            'revision' => $row->revision_id === null ? null : [
-                'id' => $row->revision_id,
-                'revision_no' => $row->revision_no,
-                'name' => $row->name,
-                'base_unit_code' => $row->base_unit_code,
-                'allergen_state' => $row->allergen_state,
-                'category' => $row->category_id === null ? null : ['id' => $row->category_id, 'name' => $row->category_name],
-            ],
-        ])->all();
 
-        return [
-            'data' => $data,
-            'meta' => [
-                'current_page' => $paginator->currentPage(),
-                'per_page' => $paginator->perPage(),
-                'total' => $paginator->total(),
-                'last_page' => $paginator->lastPage(),
-                'from' => $paginator->firstItem(),
-                'to' => $paginator->lastItem(),
-            ],
-        ];
+        if ($withOrdinal) {
+            $query->selectRaw('row_number() over (ORDER BY '.$sort.' '.$direction.' NULLS LAST, materials.id) AS export_ordinal');
+        }
+
+        return $query->orderByRaw($sort.' '.$direction.' NULLS LAST')->orderBy('materials.id');
     }
 
     public function show(User $actor, Location $context, string $materialId): array
@@ -565,6 +578,7 @@ final class RawMaterialService
                 'code' => $code,
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
+                'document_version_ids' => $this->documentSets->ids($actor->organization_id, $revisionId),
             ]);
             $response = $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
             if ($reservation !== null) {
@@ -880,12 +894,14 @@ final class RawMaterialService
                 $criticalChange,
                 $input['change_reason'] ?? null,
                 $input['allergen_state'] ?? $baseRevision->allergen_state,
+                baseRevisionId: $baseRevisionId,
             );
             $metadata = [
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
                 'previous_revision_id' => $baseRevisionId,
                 'critical_change' => $criticalChange,
+                'document_version_ids' => $this->documentSets->ids($actor->organization_id, $revisionId),
             ];
             if ($changeType !== null) {
                 $metadata['change_type'] = $changeType;
@@ -1174,10 +1190,7 @@ final class RawMaterialService
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
             $material = $this->material($actor, $materialId, true);
             RawMaterialVersion::assertCurrent($material, $expectedVersion);
-            if (! in_array($material->lifecycle_state, ['ACTIVE', 'BLOCKED'], true)
-                || $material->pending_revision_id !== null || $material->working_revision_id !== null) {
-                throw new RawMaterialException('RAW_MATERIAL_ARCHIVE_INVALID', __('messages.raw_material_archive_invalid'));
-            }
+            $this->assertArchivable($material);
             $previous = $this->stateHash($material);
             DB::table('raw_materials')->where('id', $materialId)->update([
                 'lifecycle_state' => 'ARCHIVED',
@@ -1192,6 +1205,48 @@ final class RawMaterialService
 
             return $this->presentCurrent($actor, $materialId);
         }));
+    }
+
+    public function validateBulkArchive(User $actor, Location $context, array $items): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
+        Validator::make(['items' => $items], [
+            'items' => ['required', 'array', 'min:1', 'max:'.config('raw_material_csv.export_max_rows')],
+            'items.*.id' => ['required', 'uuid', 'distinct'],
+            'items.*.version' => ['sometimes', 'nullable', 'string'],
+        ])->validate();
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, function () use ($actor, $context, $items): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
+            usort($items, fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+            foreach ($items as $item) {
+                $material = $this->material($actor, $item['id'], true);
+                RawMaterialVersion::assertCurrent($material, $item['version'] ?? null);
+                $this->assertArchivable($material);
+            }
+            $operationId = Str::uuid()->toString();
+            foreach ($items as $item) {
+                $this->audit($actor, $context, 'RAW_MATERIAL', $item['id'], 'BULK_ARCHIVE_VALIDATED', null, [
+                    'mutation_performed' => false, 'policy_status' => 'BLOCKED_BY_OWNER_DECISION',
+                ], operationId: $operationId);
+            }
+
+            return [
+                'validated_count' => count($items),
+                'mutation_available' => false,
+                'policy_status' => 'BLOCKED_BY_OWNER_DECISION',
+                'message' => 'Walidacja nie archiwizuje rekordów. Wymagana jest decyzja właściciela o atomowości operacji zbiorczej.',
+            ];
+        });
+    }
+
+    private function assertArchivable(object $material): void
+    {
+        if (! in_array($material->lifecycle_state, ['ACTIVE', 'BLOCKED'], true)
+            || $material->pending_revision_id !== null || $material->working_revision_id !== null) {
+            throw new RawMaterialException('RAW_MATERIAL_ARCHIVE_INVALID', __('messages.raw_material_archive_invalid'));
+        }
     }
 
     public function restore(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
@@ -1254,6 +1309,7 @@ final class RawMaterialService
                 true,
                 $reason,
                 $approved->allergen_state,
+                baseRevisionId: $approved->id,
             );
             $previous = $this->stateHash($material);
             DB::table('raw_materials')->where('id', $materialId)->update([
@@ -1286,6 +1342,7 @@ final class RawMaterialService
         ?string $reason,
         string $allergenState = 'UNKNOWN',
         bool $preserveExactName = false,
+        ?string $baseRevisionId = null,
     ): array {
         $createdAt = now();
         $stage2d = $this->prepareStage2dSnapshot(
@@ -1393,6 +1450,8 @@ final class RawMaterialService
                 },
             );
         }
+
+        $this->documentSets->save($actor, $context, $revisionId, $baseRevisionId, $input);
 
         return $revision;
     }

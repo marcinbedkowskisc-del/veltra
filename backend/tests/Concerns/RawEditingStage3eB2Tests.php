@@ -388,7 +388,7 @@ trait RawEditingStage3eB2Tests
         return [$this->rawMaterialService->create($this->steward, $this->location, $input), $input];
     }
 
-    private function b2Race(string $materialId, string $version, string $first, string $second, array $input): void
+    private function b2Race(string $materialId, string $version, string $first, string $second, array $input, ?string $documentRoot = null): void
     {
         $processes = [];
         try {
@@ -400,6 +400,9 @@ trait RawEditingStage3eB2Tests
                     PHP_BINARY, base_path('tests/Support/concurrent_raw_edit.php'), $this->steward->id,
                     $this->location->id, $materialId, $version, $operation, json_encode($input, JSON_THROW_ON_ERROR), $application,
                 ], base_path(), timeout: 30);
+                if ($documentRoot !== null) {
+                    $process->setEnv(['TEST_RAW_DOCUMENT_ROOT' => $documentRoot]);
+                }
                 $process->start();
                 $processes[] = $process;
                 $this->assertRevisionProcessWaitingOnOrganizationLock($process, $application);

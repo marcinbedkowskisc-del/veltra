@@ -11,6 +11,7 @@ COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
 FROM tooling AS app
 WORKDIR /var/www/html
+COPY docker/uploads.ini /usr/local/etc/php/conf.d/veltra-uploads.ini
 COPY --chown=www-data:www-data . .
 
 RUN touch .env \

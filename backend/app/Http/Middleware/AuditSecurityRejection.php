@@ -4,6 +4,9 @@ namespace App\Http\Middleware;
 
 use App\Domain\Authorization\SecurityMutation;
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\RawMaterials\Documents\DocumentStorageException;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
+use App\Domain\RawMaterials\RawMaterialException;
 use Closure;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
@@ -18,7 +21,7 @@ class AuditSecurityRejection
     {
         try {
             $response = $next($request);
-        } catch (AuthorizationException|ValidationException|BusinessRuleViolation|QueryException|HttpExceptionInterface $exception) {
+        } catch (AuthorizationException|ValidationException|BusinessRuleViolation|QueryException|HttpExceptionInterface|RawMaterialException|RawMaterialDocumentException|DocumentStorageException $exception) {
             $this->record($request);
             throw $exception;
         }

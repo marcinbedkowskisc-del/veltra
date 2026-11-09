@@ -4,23 +4,78 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Http\Requests\RawMaterialCatalogExportRequest;
 use App\Models\Location;
 use App\Models\User;
 use DateTimeImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use LogicException;
 use Throwable;
 
 final class RawMaterialCsvCatalogExportWorkflow
 {
+    public const SELECTABLE_COLUMNS = [
+        'ordinal', 'sku', 'name', 'unit', 'nominal_quantity', 'usable_quantity',
+        'reference_net_price', 'usable_unit_cost', 'description', 'category',
+        'lifecycle_state', 'yield_percent', 'supplier_names',
+    ];
+
     public function __construct(
         private readonly RawMaterialAuthorization $authorization,
         private readonly RawMaterialLocationSharePolicy $sharePolicy,
         private readonly AuthorizationMutationContext $mutationContexts,
     ) {}
+
+    public function createSelection(User $actor, Location $context, array $input, string $key): array
+    {
+        $input = Validator::make($input, (new RawMaterialCatalogExportRequest)->rules())->validate();
+        if (! preg_match('/\A[A-Za-z0-9._:-]{1,120}\z/D', $key)) {
+            throw new RawMaterialException('RAW_MATERIAL_CSV_EXPORT_KEY_INVALID', 'Eksport wymaga prawidłowego klucza Idempotency-Key.', 422);
+        }
+        $values = app(RawMaterialCatalogValues::class);
+        $input['columns'] ??= array_values(array_filter(array_slice(self::SELECTABLE_COLUMNS, 0, 8),
+            fn (string $column): bool => ($column !== 'reference_net_price' || $values->canReadPrice($actor))
+                && ($column !== 'usable_unit_cost' || $values->canReadCost($actor, $context))));
+        $this->authorizeColumns($actor, $context, $input['columns'], $input);
+        $cacheKey = 'raw-material-selected-export:'.$actor->organization_id.':'.$actor->id.':'.$context->id.':'.hash('sha256', $key);
+        $fingerprint = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR));
+
+        return Cache::lock($cacheKey.':lock', 120)->block(5, function () use ($actor, $context, $input, $cacheKey, $fingerprint): array {
+            $previous = Cache::get($cacheKey);
+            if (is_array($previous)) {
+                if ($previous['fingerprint'] !== $fingerprint) {
+                    throw new RawMaterialException('RAW_MATERIAL_CSV_EXPORT_KEY_CONFLICT', 'Klucz eksportu został użyty dla innego żądania.', 409);
+                }
+                $this->authorizeSelectionDownload($actor, $context, $previous['result']['export_id']);
+
+                return $previous['result'];
+            }
+            $result = $this->createExport($actor, $context, 'selected_raw_catalog', selection: $input);
+            if (! Cache::put($cacheKey, ['fingerprint' => $fingerprint, 'result' => $result], now()->addMinutes(max(1, (int) config('raw_material_csv.export_ttl_minutes'))))) {
+                throw new RawMaterialException('RAW_MATERIAL_CSV_EXPORT_METADATA_FAILED', 'Nie udało się zachować klucza ponowienia eksportu.', 500);
+            }
+
+            return $result;
+        });
+    }
+
+    private function authorizeColumns(User $actor, Location $context, array $columns, array $filters): void
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        $values = app(RawMaterialCatalogValues::class);
+        if ((in_array('reference_net_price', $columns, true) && ! $values->canReadPrice($actor))
+            || (in_array('usable_unit_cost', $columns, true) && ! $values->canReadCost($actor, $context))) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        if (in_array('supplier_names', $columns, true) || isset($filters['supplier_id'])) {
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
+        }
+    }
 
     public function create(User $actor, Location $context): array
     {
@@ -51,6 +106,7 @@ final class RawMaterialCsvCatalogExportWorkflow
         Location $context,
         string $profile,
         ?string $asOfDate = null,
+        ?array $selection = null,
     ): array {
         $extended = $profile === 'extended_raw_catalog';
         $referencePrices = $profile === 'reference_prices';
@@ -145,7 +201,33 @@ final class RawMaterialCsvCatalogExportWorkflow
                     ) AS metadata_snapshot
                     SQL, [$asOfDate]);
         }
+        if ($selection !== null) {
+            $query = app(RawMaterialService::class)->catalogQuery($actor, $context, $selection, withOrdinal: true);
+            if (in_array('supplier_names', $selection['columns'], true)) {
+                $query->selectRaw("(SELECT string_agg(DISTINCT suppliers.display_name, ', ' ORDER BY suppliers.display_name)
+                    FROM supplier_products products
+                    JOIN organization_suppliers suppliers ON suppliers.id = products.supplier_id AND suppliers.organization_id = products.organization_id
+                    JOIN supplier_product_revisions product_revisions ON product_revisions.supplier_product_id = products.id AND product_revisions.organization_id = products.organization_id
+                    WHERE products.organization_id = materials.organization_id AND products.raw_material_id = materials.id
+                        AND products.lifecycle_state = 'ACTIVE' AND suppliers.lifecycle_state = 'ACTIVE'
+                        AND product_revisions.raw_material_revision_id = materials.approved_revision_id
+                        AND product_revisions.revision_no = (SELECT max(latest.revision_no) FROM supplier_product_revisions latest
+                            WHERE latest.supplier_product_id = products.id AND latest.organization_id = products.organization_id)) AS supplier_names");
+            }
+            $query->addSelect('materials.id as raw_material_id', 'materials.code as sku');
+            $query = DB::query()->fromSub($query, 'catalog')->select('catalog.*')->orderBy('catalog.export_ordinal');
+            if (isset($selection['material_ids'])) {
+                $query->whereIn('catalog.raw_material_id', $selection['material_ids']);
+            }
+            $query->limit($maxRows + 1);
+        }
         $materials = $query->get();
+        if ($selection !== null && isset($selection['material_ids']) && $materials->count() !== count($selection['material_ids'])) {
+            $this->recordAudit($actor, $context, $exportId, $this->eventCode($profile, 'REJECTED'), 'REJECTED', [
+                'export_profile' => $profile, 'reason_code' => 'SELECTION_UNAVAILABLE',
+            ]);
+            throw new RawMaterialException('RAW_MATERIAL_CSV_EXPORT_SELECTION_UNAVAILABLE', 'Nie wszystkie wybrane rekordy są dostępne w bieżącym zakresie i filtrach.', 404);
+        }
 
         if ($materials->count() > $maxRows) {
             $this->recordAudit($actor, $context, $exportId, $this->eventCode($profile, 'REJECTED'), 'REJECTED', [
@@ -163,8 +245,9 @@ final class RawMaterialCsvCatalogExportWorkflow
             );
         }
 
-        $rejectedRecords = $materials->map(function (object $material) use ($profile, $extended, $referencePrices): ?array {
+        $rejectedRecords = $materials->map(function (object $material) use ($profile, $extended, $referencePrices, $selection): ?array {
             $fields = match ($profile) {
+                'selected_raw_catalog' => $this->selectionFields($material, $selection['columns']),
                 'extended_raw_catalog' => [
                     'sku' => $material->sku,
                     'name' => $material->name,
@@ -188,28 +271,28 @@ final class RawMaterialCsvCatalogExportWorkflow
             }
 
             return [
-                'identifier' => $extended || $referencePrices ? $material->sku : $material->ingredient_id,
+                'identifier' => $extended || $referencePrices || $selection !== null ? $material->sku : $material->ingredient_id,
                 'fields' => $unsafeFields,
             ];
         })->filter()->values()->all();
         if ($rejectedRecords !== []) {
-            $identifierKey = $extended || $referencePrices ? 'skus' : 'ingredient_ids';
+            $identifierKey = $extended || $referencePrices || $selection !== null ? 'skus' : 'ingredient_ids';
             $identifiers = array_column($rejectedRecords, 'identifier');
             $this->recordAudit($actor, $context, $exportId, $this->eventCode($profile, 'REJECTED'), 'REJECTED', [
                 'export_profile' => $profile,
-                'reason_code' => $extended || $referencePrices ? 'FORMULA_RISK_FIELD' : 'FORMULA_RISK_NAME',
+                'reason_code' => $extended || $referencePrices || $selection !== null ? 'FORMULA_RISK_FIELD' : 'FORMULA_RISK_NAME',
                 'rejected_records' => $rejectedRecords,
             ]);
             $message = $referencePrices
                 ? 'Eksport odrzucono: zapisane dane katalogowe lub metadane mogą zostać wykonane jako formuły arkusza.'
-                : ($extended
+                : ($extended || $selection !== null
                     ? 'Eksport odrzucono: zatwierdzone dane katalogowe zawierają wartości grożące wykonaniem jako formuły arkusza.'
                     : 'Eksport odrzucono: zatwierdzone nazwy mogą zostać wykonane jako formuły arkusza. Wymagają obsługi następujące składniki.');
             throw new RawMaterialException(
                 $referencePrices ? 'RAW_MATERIAL_REFERENCE_PRICE_EXPORT_FORMULA_RISK' : 'RAW_MATERIAL_CSV_EXPORT_FORMULA_RISK',
                 $message,
                 422,
-                $extended || $referencePrices
+                $extended || $referencePrices || $selection !== null
                     ? ['rejected_records' => $rejectedRecords, $identifierKey => $identifiers]
                     : ['ingredient_ids' => $identifiers],
             );
@@ -227,6 +310,7 @@ final class RawMaterialCsvCatalogExportWorkflow
 
         try {
             $headers = match ($profile) {
+                'selected_raw_catalog' => $selection['columns'],
                 'extended_raw_catalog' => [
                     'sku',
                     'entity_type',
@@ -273,6 +357,7 @@ final class RawMaterialCsvCatalogExportWorkflow
             }
             foreach ($materials as $material) {
                 $fields = match ($profile) {
+                    'selected_raw_catalog' => $this->selectionFields($material, $selection['columns']),
                     'extended_raw_catalog' => [
                         $material->sku,
                         $material->entity_type,
@@ -356,6 +441,10 @@ final class RawMaterialCsvCatalogExportWorkflow
             if ($asOfDate !== null) {
                 $manifest['as_of_date'] = $asOfDate;
             }
+            if ($selection !== null) {
+                $manifest['selection'] = $selection;
+                $manifest['revision_ids'] = $materials->pluck('revision_id', 'raw_material_id')->all();
+            }
             $manifestKey = $this->manifestKey($actor, $exportId);
             if (! Cache::put(
                 $manifestKey,
@@ -391,6 +480,7 @@ final class RawMaterialCsvCatalogExportWorkflow
             'sha256' => $hash,
             'expires_at' => now()->addMinutes($ttlMinutes)->toIso8601String(),
             'download_url' => match ($profile) {
+                'selected_raw_catalog' => '/api/v1/raw-materials/catalog-exports/selection/'.$exportId.'/download',
                 'extended_raw_catalog' => '/api/v1/raw-materials/catalog-exports/extended/'.$exportId.'/download',
                 'reference_prices' => '/api/v1/raw-materials/reference-price-exports/'.$exportId.'/download',
                 default => '/api/v1/raw-materials/catalog-exports/'.$exportId.'/download',
@@ -398,6 +488,21 @@ final class RawMaterialCsvCatalogExportWorkflow
         ];
         if ($asOfDate !== null) {
             $result['as_of_date'] = $asOfDate;
+        }
+
+        return $result;
+    }
+
+    private function selectionFields(object $material, array $columns): array
+    {
+        $result = [];
+        foreach ($columns as $column) {
+            $result[$column] = match ($column) {
+                'ordinal' => (string) $material->export_ordinal,
+                'unit' => $material->base_unit_code,
+                'category' => $material->category_name,
+                default => $material->{$column} ?? '',
+            };
         }
 
         return $result;
@@ -471,6 +576,11 @@ final class RawMaterialCsvCatalogExportWorkflow
         return $this->authorizeDownloadProfile($actor, $context, $exportId, 'reference_prices');
     }
 
+    public function authorizeSelectionDownload(User $actor, Location $context, string $exportId): array
+    {
+        return $this->authorizeDownloadProfile($actor, $context, $exportId, 'selected_raw_catalog');
+    }
+
     private function authorizeDownloadProfile(
         User $actor,
         Location $context,
@@ -495,15 +605,29 @@ final class RawMaterialCsvCatalogExportWorkflow
                 404,
             );
         }
-        foreach ($manifest['raw_material_ids'] as $materialId) {
-            if (! is_string($materialId)) {
-                throw new RawMaterialException(
-                    $referencePrices ? 'RAW_MATERIAL_REFERENCE_PRICE_EXPORT_NOT_FOUND' : 'RAW_MATERIAL_CSV_EXPORT_NOT_FOUND',
-                    __('messages.resource_not_found'),
-                    404,
-                );
+        if ($profile === 'selected_raw_catalog') {
+            $selection = $manifest['selection'];
+            $this->authorizeColumns($actor, $context, $selection['columns'], $selection);
+            $visible = app(RawMaterialService::class)->catalogQuery($actor, $context, $selection)
+                ->whereIn('materials.id', $manifest['raw_material_ids'])->get();
+            $revisions = $visible->pluck('revision_id', 'id')->all();
+            ksort($revisions);
+            $expected = $manifest['revision_ids'];
+            ksort($expected);
+            if ($revisions !== $expected) {
+                throw new RawMaterialException('RAW_MATERIAL_CSV_EXPORT_UNAVAILABLE', 'Eksport nie jest już dostępny w bieżącym zakresie. Wygeneruj go ponownie.', 404);
             }
-            $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+        } else {
+            foreach ($manifest['raw_material_ids'] as $materialId) {
+                if (! is_string($materialId)) {
+                    throw new RawMaterialException(
+                        $referencePrices ? 'RAW_MATERIAL_REFERENCE_PRICE_EXPORT_NOT_FOUND' : 'RAW_MATERIAL_CSV_EXPORT_NOT_FOUND',
+                        __('messages.resource_not_found'),
+                        404,
+                    );
+                }
+                $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
+            }
         }
 
         $disk = Storage::disk('raw_material_csv_exports');
@@ -536,6 +660,7 @@ final class RawMaterialCsvCatalogExportWorkflow
         return [
             'storage_key' => $manifest['storage_key'],
             'filename' => match ($profile) {
+                'selected_raw_catalog' => 'wybrane-surowce-veltra.csv',
                 'extended_raw_catalog' => 'katalog-surowcow-rozszerzony-veltra.csv',
                 'reference_prices' => 'ceny-referencyjne-vat-veltra.csv',
                 default => 'katalog-surowcow-veltra.csv',
@@ -546,6 +671,7 @@ final class RawMaterialCsvCatalogExportWorkflow
     private function eventCode(string $profile, string $event): string
     {
         $prefix = match ($profile) {
+            'selected_raw_catalog' => 'CSV_CATALOG_SELECTED_EXPORT_',
             'extended_raw_catalog' => 'CSV_CATALOG_EXTENDED_EXPORT_',
             'reference_prices' => 'CSV_REFERENCE_PRICE_EXPORT_',
             default => 'CSV_CATALOG_EXPORT_',

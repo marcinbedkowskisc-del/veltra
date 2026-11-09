@@ -280,6 +280,44 @@ final class RawMaterialDocumentService
         ];
     }
 
+    public function inspectUpload(string $filename, string $contents): array
+    {
+        $this->validateMetadata('OTHER', $filename, $contents, 'RAW_MATERIAL_SUPPORTING_DOCUMENT', null);
+        $payload = $this->preparePayload($filename, $contents);
+        $allowed = [
+            'pdf' => ['application/pdf'],
+            'png' => ['image/png'],
+            'jpg' => ['image/jpeg'],
+            'jpeg' => ['image/jpeg'],
+            'txt' => ['text/plain'],
+            'csv' => ['text/plain', 'text/csv'],
+        ];
+        $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (! in_array($payload['media_type'], $allowed[$extension] ?? [], true)) {
+            throw new RawMaterialDocumentException('RAW_MATERIAL_DOCUMENT_FORMAT_UNSUPPORTED', 'Zawartość pliku nie odpowiada dozwolonemu formatowi PDF, PNG, JPEG, TXT lub CSV.', 422);
+        }
+
+        return $payload;
+    }
+
+    public function promoteUpload(User $actor, string $revisionId, object $upload): string
+    {
+        $documentId = Str::uuid()->toString();
+        DB::table('raw_material_documents')->insert([
+            'id' => $documentId, 'organization_id' => $actor->organization_id,
+            'document_type' => 'OTHER', 'created_by' => $actor->id,
+        ]);
+        $version = $this->insertVersion(
+            $actor, $documentId, 1, $revisionId, (array) $upload, $upload->storage_key,
+            'RAW_MATERIAL_SUPPORTING_DOCUMENT', null,
+        );
+        $this->recordEvent($actor, $documentId, null, 'DOCUMENT_CREATED', ['document_type' => 'OTHER']);
+        $this->recordVersionEvents($actor, $documentId, $version, $revisionId);
+        ScanRawMaterialDocumentVersion::dispatch($version->id)->afterCommit();
+
+        return $version->id;
+    }
+
     private function insertVersion(
         User $actor,
         string $documentId,

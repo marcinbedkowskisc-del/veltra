@@ -47,6 +47,15 @@ use Illuminate\Http\Request;
 
 class RawMaterialController extends Controller
 {
+    public function validateBulkArchive(Request $request, RawMaterialService $service): JsonResponse
+    {
+        $input = $request->validate(['items' => ['required', 'array']]);
+
+        return response()->json(['data' => $service->validateBulkArchive(
+            $request->user(), $request->attributes->get('operating_location'), $input['items'],
+        )]);
+    }
+
     public function editor(Request $request, string $material, RawMaterialService $service): JsonResponse
     {
         return response()->json(['data' => $service->editor($request->user(), $request->attributes->get('operating_location'), $material)]);

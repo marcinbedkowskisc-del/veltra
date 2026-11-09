@@ -1,0 +1,589 @@
+<?php
+
+namespace Tests\Concerns;
+
+use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\Permission;
+use App\Domain\Authorization\PermissionAdministration;
+use App\Domain\Identity\MembershipService;
+use App\Domain\Modules\ModuleCatalog;
+use App\Domain\RawMaterials\Documents\DocumentScanner;
+use App\Domain\RawMaterials\Documents\DocumentScannerException;
+use App\Domain\RawMaterials\Documents\DocumentScanOutcome;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentScanService;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
+use App\Domain\RawMaterials\Documents\RawMaterialDocumentSetService;
+use App\Domain\RawMaterials\Documents\RawMaterialUploadService;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
+use App\Domain\RawMaterials\RawMaterialCsvCatalogExportWorkflow;
+use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
+use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Domain\RawMaterials\RawMaterialSkuReservationService;
+use App\Models\Location;
+use App\Models\LocationModuleState;
+use App\Models\User;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Mockery;
+use Symfony\Component\Process\Process;
+use Tests\Support\ModuleCatalogFixtures;
+
+trait RawDocumentsStage3eB3Tests
+{
+    public function test_stage3e_b3_multifile_upload_retains_success_and_reports_each_failure(): void
+    {
+        $this->b3Storage();
+        $this->selectRawMaterialApiContext($this->steward);
+        $result = $this->post('/api/v1/raw-materials/document-uploads', [
+            'files' => [
+                UploadedFile::fake()->createWithContent('poprawny.txt', 'Treść dokumentu'),
+                UploadedFile::fake()->createWithContent('podszycie.pdf', '<html>nie PDF</html>'),
+                UploadedFile::fake()->createWithContent('drugi.csv', "nazwa;ilość\nMąka;1"),
+            ],
+            'keys' => ['b3-file-1', 'b3-file-2', 'b3-file-3'],
+        ], ['Accept' => 'application/json'])->assertOk()->json('data');
+        $this->assertSame(['STAGED', 'FAILED', 'STAGED'], array_column($result, 'status'));
+        $this->assertSame(2, DB::table('raw_material_document_uploads')->count());
+        $this->assertSame(0, DB::table('raw_material_document_versions')->count());
+        $this->assertCount(2, Storage::disk('raw_material_documents')->allFiles());
+        $retry = app(RawMaterialUploadService::class)->stage($this->steward, $this->location, 'b3-file-1', 'poprawny.txt', 'Treść dokumentu');
+        $this->assertSame($result[0]['upload_id'], $retry['upload_id']);
+        $this->assertArrayNotHasKey('storage_key', $retry);
+        $this->assertArrayNotHasKey('sha256', $retry);
+    }
+
+    public function test_stage3e_b3_content_filename_and_size_validation_fail_closed(): void
+    {
+        $this->b3Storage();
+        $service = app(RawMaterialUploadService::class);
+        foreach ([
+            ['../plik.txt', 'tekst'], ['a\\b.txt', 'tekst'], ["plik\n.txt", 'tekst'],
+            ['plik.svg', '<svg></svg>'], ['plik.exe', 'tekst'], ['plik.png', 'tekst'],
+            ['plik.txt', ''], ['plik.txt', str_repeat('a', RawMaterialUploadService::MAX_BYTES + 1)],
+        ] as $index => [$filename, $contents]) {
+            try {
+                $service->stage($this->steward, $this->location, 'invalid-'.$index, $filename, $contents);
+                $this->fail('Przyjęto niedozwolony plik.');
+            } catch (RawMaterialDocumentException $exception) {
+                $this->assertSame(422, $exception->status);
+            }
+        }
+        $this->assertSame(0, DB::table('raw_material_document_uploads')->count());
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->post('/api/v1/raw-materials/document-uploads', [
+            'files' => [
+                UploadedFile::fake()->createWithContent('a.txt', str_repeat('a', 11 * 1024 * 1024)),
+                UploadedFile::fake()->createWithContent('b.txt', str_repeat('b', 11 * 1024 * 1024)),
+            ],
+            'keys' => ['size-a', 'size-b'],
+        ], ['Accept' => 'application/json'])->assertStatus(413);
+        $this->assertSame([], Storage::disk('raw_material_documents')->allFiles());
+    }
+
+    public function test_stage3e_b3_scan_failure_is_retryable_and_idempotency_is_payload_bound(): void
+    {
+        $this->b3Storage();
+        $scanner = Mockery::mock(DocumentScanner::class);
+        $scanner->shouldReceive('scan')->once()->andThrow(new DocumentScannerException('CLAMAV_UNAVAILABLE', 'Skaner niedostępny.'));
+        $scanner->shouldReceive('scan')->once()->andReturn(DocumentScanOutcome::clean('test', 'test'));
+        $this->app->instance(DocumentScanner::class, $scanner);
+        $uploads = app(RawMaterialUploadService::class);
+        $first = $uploads->stage($this->steward, $this->location, 'retry-scan', 'plik.txt', 'Dokument');
+        $this->assertSame('FAILED', $first['status']);
+        $retry = $uploads->retry($this->steward, $this->location, $first['upload_id']);
+        $this->assertSame('STAGED', $retry['status']);
+        $this->assertSame($first['upload_id'], $retry['upload_id']);
+        $this->assertSame($retry, $uploads->stage($this->steward, $this->location, 'retry-scan', 'plik.txt', 'Dokument'));
+        try {
+            $uploads->stage($this->steward, $this->location, 'retry-scan', 'plik.txt', 'Inna treść');
+            $this->fail('Klucz zaakceptował inną zawartość.');
+        } catch (RawMaterialDocumentException $exception) {
+            $this->assertSame(409, $exception->status);
+        }
+        $this->assertCount(1, Storage::disk('raw_material_documents')->allFiles());
+    }
+
+    public function test_stage3e_b3_uploads_are_actor_location_and_organization_scoped(): void
+    {
+        $this->b3Storage();
+        [$material, $input] = $this->b2Draft();
+        $upload = $this->b3Upload();
+        $other = $this->user('b3-other@example.test');
+        app(MembershipService::class)->assign($other, $this->location);
+        foreach ([RawMaterialPermission::View, RawMaterialPermission::Edit] as $permission) {
+            app(OrganizationRawMaterialPermissionAdministration::class)->grant($this->steward, $this->location, $other, $permission, 'Test B3');
+        }
+        $this->selectRawMaterialApiContext($other);
+        $this->postJson('/api/v1/raw-materials/document-uploads/'.$upload['upload_id'].'/retry')->assertNotFound();
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', $input + ['document_upload_ids' => [$upload['upload_id']]], ['If-Match' => $material['version']])->assertNotFound();
+        $this->assertSame($material['version'], $this->rawVersion($material['id']));
+        $this->assertSame('STAGED', DB::table('raw_material_document_uploads')->value('state'));
+        $foreign = clone $this->steward;
+        $foreign->organization_id = Str::uuid()->toString();
+        try {
+            app(RawMaterialUploadService::class)->retry($foreign, $this->location, $upload['upload_id']);
+            $this->fail('Ujawniono upload innej organizacji.');
+        } catch (RawMaterialDocumentException $exception) {
+            $this->assertSame(404, $exception->status);
+        }
+        $restaurant = $this->b3Recipient();
+        $this->b3Context($this->steward, $restaurant);
+        $this->postJson('/api/v1/raw-materials/document-uploads/'.$upload['upload_id'].'/retry')->assertForbidden();
+    }
+
+    public function test_stage3e_b3_expiry_cleanup_removes_only_unclaimed_files(): void
+    {
+        $this->b3Storage();
+        $expired = $this->b3ShortUpload('expiry');
+        $claimed = $this->b3DraftWithDocument();
+        usleep(2100000);
+        $this->assertSame(1, app(RawMaterialUploadService::class)->cleanupExpired());
+        $this->assertSame('EXPIRED', DB::table('raw_material_document_uploads')->where('id', $expired['upload_id'])->value('state'));
+        $this->assertCount(1, Storage::disk('raw_material_documents')->allFiles());
+        $this->assertSame('CLAIMED', DB::table('raw_material_document_uploads')->where('claimed_version_id', $claimed[2])->value('state'));
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->postJson('/api/v1/raw-materials/document-uploads/'.$expired['upload_id'].'/retry')->assertNotFound();
+    }
+
+    public function test_stage3e_b3_create_reservation_replay_never_duplicates_document_links(): void
+    {
+        $this->b3Storage();
+        $upload = $this->b3Upload();
+        $reservation = app(RawMaterialSkuReservationService::class)->reserve($this->steward, $this->location, 'b3-create-reservation');
+        $input = ['category_id' => $this->category()['id'], 'name' => 'Utworzenie z dokumentem', 'base_unit_code' => 'g', 'sku_reservation_id' => $reservation['reservation_id'], 'document_upload_ids' => [$upload['upload_id']]];
+        $created = $this->rawMaterialService->create($this->steward, $this->location, $input);
+        $this->assertEquals($created, $this->rawMaterialService->create($this->steward, $this->location, $input));
+        $this->assertSame(1, DB::table('raw_material_document_versions')->count());
+        $this->assertSame(1, DB::table('raw_material_document_version_links')->count());
+        $this->assertSame('CLAIMED', DB::table('raw_material_document_uploads')->value('state'));
+    }
+
+    public function test_stage3e_b3_failed_save_rolls_back_all_claims_links_and_revision(): void
+    {
+        $this->b3Storage();
+        [$material, $input] = $this->b2Draft();
+        $upload = $this->b3Upload();
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', $input + [
+            'document_upload_ids' => [$upload['upload_id'], 'ffffffff-ffff-4fff-bfff-ffffffffffff'],
+        ], ['If-Match' => $material['version']])->assertNotFound();
+        $this->assertSame(0, DB::table('raw_material_document_versions')->count());
+        $this->assertSame(0, DB::table('raw_material_document_version_links')->count());
+        $this->assertSame(1, DB::table('raw_material_revisions')->count());
+        $this->assertSame('STAGED', DB::table('raw_material_document_uploads')->value('state'));
+        $this->assertSame($material['version'], $this->rawVersion($material['id']));
+        $saved = $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], $input + ['document_upload_ids' => [$upload['upload_id']]], $material['version']);
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', $input, ['If-Match' => $material['version']])->assertConflict();
+        $this->assertSame($saved['version'], $this->rawVersion($material['id']));
+        $this->assertSame(1, DB::table('raw_material_document_versions')->count());
+    }
+
+    public function test_stage3e_b3_detachment_is_save_scoped_cancelable_and_historically_immutable(): void
+    {
+        $this->b3Storage();
+        [$material, $input, $versionId] = $this->b3DraftWithDocument(true);
+        $this->b3Approve($material['id']);
+        $approved = $this->rawMaterialService->show($this->steward, $this->location, $material['id']);
+        $revision = DB::table('raw_material_revisions')->where('id', $approved['revision']['id'])->first();
+        $documents = app(RawMaterialDocumentSetService::class);
+        $this->assertSame([$versionId], array_column($documents->listing($this->steward, $this->location, $material['id'])['documents'], 'id'));
+        $saved = $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], $input, $this->rawVersion($material['id']));
+        $this->assertSame([$versionId], $documents->ids($this->steward->organization_id, $saved['revision']['id']));
+        $detached = $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], $input + ['detach_document_version_ids' => [$versionId]], $saved['version']);
+        $this->assertSame([], $documents->ids($this->steward->organization_id, $detached['revision']['id']));
+        $this->assertCount(1, $documents->listing($this->steward, $this->location, $material['id'])['documents']);
+        $this->assertSame([], $documents->listing($this->steward, $this->location, $material['id'], true)['documents']);
+        $this->assertEquals($revision, DB::table('raw_material_revisions')->where('id', $revision->id)->first());
+        $this->assertSame(1, DB::table('raw_material_document_version_links')->count());
+        $this->assertCount(1, Storage::disk('raw_material_documents')->allFiles());
+        $this->assertDatabaseRejects('23514', fn ($connection) => $connection->table('raw_material_revision_document_sets')->where('revision_id', $revision->id)->update(['document_version_ids' => '[]']));
+    }
+
+    public function test_stage3e_b3_document_reads_enforce_scan_integrity_headers_and_preview_types(): void
+    {
+        $this->b3Storage();
+        [$material, , $versionId] = $this->b3DraftWithDocument();
+        $this->selectRawMaterialApiContext($this->steward);
+        $base = '/api/v1/raw-materials/'.$material['id'].'/documents';
+        $list = $this->getJson($base)->assertOk()->json('data.documents.0');
+        $this->assertArrayNotHasKey('storage_key', $list);
+        $this->assertArrayNotHasKey('upload_id', $list);
+        $this->assertNull($list['download_url']);
+        $this->get($base.'/'.$versionId.'/download')->assertConflict();
+        app(RawMaterialDocumentScanService::class)->scanVersion($versionId);
+        $this->get($base.'/'.$versionId.'/download')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff')
+            ->assertHeader('Content-Type', 'text/plain; charset=utf-8')->assertContent('Dokument testowy B3');
+        $this->get($base.'/'.$versionId.'/preview')->assertUnprocessable();
+        $stored = DB::table('raw_material_document_versions')->where('id', $versionId)->first();
+        Storage::disk('raw_material_documents')->put($stored->storage_key, 'zmieniona treść');
+        $this->get($base.'/'.$versionId.'/download')->assertConflict();
+    }
+
+    public function test_stage3e_b3_pdf_preview_uses_inline_safe_headers(): void
+    {
+        $this->b3Storage();
+        $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF";
+        $upload = $this->b3Upload('pdf', 'instrukcja.pdf', $pdf);
+        $input = ['category_id' => $this->category()['id'], 'name' => 'PDF', 'base_unit_code' => 'g', 'document_upload_ids' => [$upload['upload_id']]];
+        $material = $this->rawMaterialService->create($this->steward, $this->location, $input);
+        $versionId = DB::table('raw_material_document_versions')->value('id');
+        app(RawMaterialDocumentScanService::class)->scanVersion($versionId);
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->get('/api/v1/raw-materials/'.$material['id'].'/documents/'.$versionId.'/preview')
+            ->assertOk()->assertHeader('Content-Type', 'application/pdf')
+            ->assertHeader('Content-Security-Policy', "sandbox; default-src 'none'; frame-ancestors 'self'")
+            ->assertHeader('Content-Disposition', 'inline; filename=instrukcja.pdf')->assertContent($pdf);
+    }
+
+    public function test_stage3e_b3_recipient_cannot_read_drafts_pending_or_revoked_document_urls(): void
+    {
+        $this->b3Storage();
+        [$material, $input, $versionId] = $this->b3DraftWithDocument(true);
+        $this->b3Approve($material['id']);
+        app(RawMaterialDocumentScanService::class)->scanVersion($versionId);
+        $recipient = $this->b3Recipient();
+        app(RawMaterialLocationShareAdministration::class)->share($this->bootstrapAdministrator, $this->location, $material['id'], $recipient->id);
+        $upload = $this->b3Upload('hidden', 'ukryty.txt', 'Ukryty szkic');
+        $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], $input + ['document_upload_ids' => [$upload['upload_id']]], $this->rawVersion($material['id']));
+        $hiddenId = DB::table('raw_material_document_uploads')->where('id', $upload['upload_id'])->value('claimed_version_id');
+        app(RawMaterialDocumentScanService::class)->scanVersion($hiddenId);
+        $this->b3Context($this->steward, $recipient);
+        $base = '/api/v1/raw-materials/'.$material['id'].'/documents';
+        $this->getJson($base)->assertOk()->assertJsonCount(1, 'data.documents');
+        $this->get($base.'/'.$versionId.'/download')->assertOk();
+        $this->get($base.'/'.$hiddenId.'/download')->assertNotFound();
+        $this->getJson($base.'?view=editor')->assertForbidden();
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], $this->rawVersion($material['id']));
+        $this->get($base.'/'.$hiddenId.'/download')->assertNotFound();
+        app(RawMaterialLocationShareAdministration::class)->revoke($this->bootstrapAdministrator, $this->location, $material['id'], $recipient->id);
+        $this->get($base.'/'.$versionId.'/download')->assertNotFound();
+        $this->get($base.'/'.Str::uuid().'/download')->assertNotFound();
+    }
+
+    public function test_stage3e_b3_parallel_saves_claim_one_upload_once(): void
+    {
+        $this->b3Storage();
+        [$material, $input] = $this->b2Draft();
+        $upload = $this->b3Upload();
+        $this->b2Race($material['id'], $material['version'], 'revise', 'revise', $input + ['document_upload_ids' => [$upload['upload_id']]], Storage::disk('raw_material_documents')->path(''));
+        $this->assertSame(1, DB::table('raw_material_document_versions')->count());
+        $this->assertSame(1, DB::table('raw_material_document_version_links')->count());
+        $this->assertSame('CLAIMED', DB::table('raw_material_document_uploads')->value('state'));
+    }
+
+    public function test_stage3e_b3_cleanup_skips_a_file_claimed_by_an_uncommitted_save(): void
+    {
+        $this->b3Storage();
+        $upload = $this->b3ShortUpload('race-expiry');
+        [$material, $input] = $this->b2Draft();
+        DB::beginTransaction();
+        try {
+            $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], $input + ['document_upload_ids' => [$upload['upload_id']]], $material['version']);
+            usleep(2100000);
+            $process = new Process([PHP_BINARY, base_path('tests/Support/cleanup_raw_uploads.php')], base_path(), timeout: 15);
+            $process->mustRun();
+            $this->assertSame('0', trim($process->getOutput()));
+            DB::commit();
+        } finally {
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+        }
+        $this->assertSame(0, app(RawMaterialUploadService::class)->cleanupExpired());
+        $this->assertCount(1, Storage::disk('raw_material_documents')->allFiles());
+        $this->assertSame('CLAIMED', DB::table('raw_material_document_uploads')->value('state'));
+    }
+
+    public function test_stage3e_b3_selected_export_uses_filters_columns_and_idempotent_manifest(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $category = $this->category();
+        $a = $this->stage3eMaterial('Żurawina A', 'kg', '2', '1.5', $category['id']);
+        $b = $this->stage3eMaterial('Żurawina B', 'kg', '3', null, $category['id']);
+        $this->selectRawMaterialApiContext($this->steward);
+        $body = ['material_ids' => [$b['id'], $a['id']], 'columns' => ['ordinal', 'sku', 'name', 'nominal_quantity', 'yield_percent'], 'search' => 'żUrAwInA', 'unit' => 'kg', 'category_id' => $category['id'], 'sort' => 'name', 'direction' => 'desc'];
+        $headers = ['Idempotency-Key' => 'b3-selected-export'];
+        $created = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', $body, $headers)->assertCreated()->assertJsonPath('data.row_count', 2)->json('data');
+        $this->assertSame($created, $this->postJson('/api/v1/raw-materials/catalog-exports/selection', $body, $headers)->assertCreated()->json('data'));
+        $csv = $this->get($created['download_url'])->assertOk()->streamedContent();
+        $this->assertStringStartsWith("ordinal;sku;name;nominal_quantity;yield_percent\n", $csv);
+        $this->assertStringContainsString('3.000000;100.000000', $csv);
+        $this->assertLessThan(strpos($csv, 'Żurawina A'), strpos($csv, 'Żurawina B'));
+        $this->assertCount(1, Storage::disk('raw_material_csv_exports')->allFiles());
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', array_replace($body, ['columns' => ['name']]), $headers)->assertConflict();
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', $body + ['page' => 2], ['Idempotency-Key' => 'bad-page'])->assertUnprocessable();
+    }
+
+    public function test_stage3e_b3_export_default_and_explicit_columns_separate_financial_permissions(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $material = $this->stage3eMaterial('Ceny B3', 'g', '100');
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->stage3ePrice($material['id'], '0.12345678901234', 'b3-price');
+        $reader = $this->user('b3-reader@example.test');
+        app(MembershipService::class)->assign($reader, $this->location);
+        $grants = app(OrganizationRawMaterialPermissionAdministration::class);
+        $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::View, 'Odczyt B3');
+        $this->selectRawMaterialApiContext($reader);
+        $created = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', [], ['Idempotency-Key' => 'reader-default'])->assertCreated()->json('data');
+        $csv = $this->get($created['download_url'])->assertOk()->streamedContent();
+        $this->assertStringStartsWith("ordinal;sku;name;unit;nominal_quantity;usable_quantity\n", $csv);
+        $this->assertStringNotContainsString('12.345678901234', $csv);
+        foreach (['reference_net_price', 'usable_unit_cost', 'supplier_names'] as $column) {
+            $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => [$column]], ['Idempotency-Key' => 'denied-'.$column])->assertForbidden();
+        }
+        $grant = $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::ReferencePriceView, 'Cena B3');
+        $price = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['reference_net_price']], ['Idempotency-Key' => 'price-only'])->assertCreated()->json('data');
+        $this->assertStringContainsString('12.34567890123400', $this->get($price['download_url'])->assertOk()->streamedContent());
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['usable_unit_cost']], ['Idempotency-Key' => 'no-foodcost'])->assertForbidden();
+        $grants->revoke($this->steward, $this->location, $grant['id'], 'Odebranie B3');
+        $this->get($price['download_url'])->assertForbidden();
+    }
+
+    public function test_stage3e_b3_selected_export_denies_hidden_ids_and_revoked_downloads(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $a = $this->stage3eMaterial('Udostępniony B3', 'g', '1');
+        $b = $this->stage3eMaterial('Ukryty B3', 'g', '1', null, $a['revision']['category_id']);
+        $recipient = $this->b3Recipient();
+        $shares = app(RawMaterialLocationShareAdministration::class);
+        $shares->share($this->bootstrapAdministrator, $this->location, $a['id'], $recipient->id);
+        $this->b3Context($this->steward, $recipient);
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['material_ids' => [$a['id'], $b['id']]], ['Idempotency-Key' => 'hidden-selection'])->assertNotFound();
+        $this->assertSame([], Storage::disk('raw_material_csv_exports')->allFiles());
+        $created = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['material_ids' => [$a['id']]], ['Idempotency-Key' => 'visible-selection'])->assertCreated()->json('data');
+        $shares->revoke($this->bootstrapAdministrator, $this->location, $a['id'], $recipient->id);
+        $this->get($created['download_url'])->assertNotFound();
+    }
+
+    public function test_stage3e_b3_exported_usable_cost_requires_reference_price_and_foodcost_together(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $restaurant = $this->b3Recipient();
+        $this->role($this->steward, BusinessRole::Administrator);
+        $material = $this->stage3eMaterial('Koszt B3', 'g', '100', '80');
+        $this->stage3ePrice($material['id'], '0.1', 'b3-cost-price');
+        $reader = $this->user('b3-cost-reader@example.test');
+        app(MembershipService::class)->assign($reader, $restaurant);
+        $this->role($reader, BusinessRole::Employee, $restaurant);
+        app(RawMaterialLocationShareAdministration::class)->share($this->steward, $this->location, $material['id'], $restaurant->id);
+        $grants = app(OrganizationRawMaterialPermissionAdministration::class);
+        $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::View, 'Odczyt B3');
+        app(PermissionAdministration::class)->grant($this->steward, $this->location, $reader, $restaurant, Permission::FoodcostView);
+        $this->b3Context($reader, $restaurant);
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['usable_unit_cost']], ['Idempotency-Key' => 'foodcost-only'])->assertForbidden();
+        $grant = $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::ReferencePriceView, 'Referencja B3');
+        $cost = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['usable_unit_cost']], ['Idempotency-Key' => 'both-financial-grants'])->assertCreated()->json('data');
+        $this->assertStringContainsString('12.50000000000000', $this->get($cost['download_url'])->assertOk()->streamedContent());
+        $grants->revoke($this->steward, $this->location, $grant['id'], 'Odebranie ceny B3');
+        $this->get($cost['download_url'])->assertForbidden();
+    }
+
+    public function test_stage3e_b3_export_formula_risk_and_payload_tampering_are_rejected(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $material = $this->stage3eMaterial('=HYPERLINK("test")', 'g', '1');
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['name']], ['Idempotency-Key' => 'formula'])->assertUnprocessable();
+        $created = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['sku']], ['Idempotency-Key' => 'safe-sku'])->assertCreated()->json('data');
+        $download = app(RawMaterialCsvCatalogExportWorkflow::class)->authorizeSelectionDownload($this->steward, $this->location, $created['export_id']);
+        Storage::disk('raw_material_csv_exports')->put($download['storage_key'], 'podmieniony eksport');
+        $this->get($created['download_url'])->assertStatus(500)->assertJsonPath('error.code', 'RAW_MATERIAL_CSV_EXPORT_INTEGRITY_FAILED');
+        $this->assertSame(1, DB::table('raw_materials')->where('id', $material['id'])->count());
+    }
+
+    public function test_stage3e_b3_supplier_column_and_filter_use_current_approved_scope(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $fixture = $this->createCommercialOfferFixture('Dostawca B3', 'B3SUP', 'B3PROD', 'b3-supplier');
+        $this->selectRawMaterialApiContext($this->steward);
+        $created = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', [
+            'columns' => ['sku', 'supplier_names'], 'supplier_id' => $fixture['supplier_id'], 'unit' => 'g',
+        ], ['Idempotency-Key' => 'supplier-selection'])->assertCreated()->assertJsonPath('data.row_count', 1)->json('data');
+        $this->assertStringContainsString('B3SUP', $this->get($created['download_url'])->assertOk()->streamedContent());
+    }
+
+    public function test_stage3e_b3_bulk_archive_only_validates_and_never_mutates(): void
+    {
+        $material = $this->stage3eMaterial('Walidacja archiwizacji B3', 'g', '1');
+        $this->selectRawMaterialApiContext($this->steward);
+        $body = ['items' => [['id' => $material['id'], 'version' => $this->rawVersion($material['id'])]]];
+        $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertOk()
+            ->assertJsonPath('data.mutation_available', false)->assertJsonPath('data.policy_status', 'BLOCKED_BY_OWNER_DECISION')->assertJsonPath('data.validated_count', 1);
+        $this->assertSame($body['items'][0]['version'], $this->rawVersion($material['id']));
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        $this->postJson('/api/v1/raw-materials/bulk-archive', $body)->assertNotFound();
+        $this->postJson('/api/v1/raw-materials/bulk-archive/validation', ['items' => [['id' => $material['id']]]])->assertStatus(428);
+        $body['items'][0]['version'] = Str::uuid()->toString();
+        $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertConflict();
+        $body['items'][0]['id'] = Str::uuid()->toString();
+        $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertNotFound();
+        $this->assertSame(1, DB::table('raw_material_audit_events')->where('event_code', 'BULK_ARCHIVE_VALIDATED')->count());
+    }
+
+    public function test_stage3e_b3_export_all_is_not_paginated_and_selection_spans_pages(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $category = $this->category();
+        $catalog = $this->publishedAllergenCatalogFixture();
+        $ids = [];
+        foreach (range(1, 51) as $index) {
+            $material = $this->rawMaterialService->create($this->steward, $this->location, [
+                'category_id' => $category['id'], 'name' => sprintf('Eksport %02d', $index), 'base_unit_code' => 'g',
+                'allergen_declaration' => ['status' => 'NO_KNOWN_ALLERGENS', 'catalog_version_id' => $catalog, 'items' => []],
+            ]);
+            $this->b3Approve($material['id']);
+            $ids[] = $material['id'];
+        }
+        $page = $this->rawMaterialService->list($this->steward, $this->location, ['per_page' => 25, 'page' => 3]);
+        $this->assertSame([$ids[50]], array_column($page['data'], 'id'));
+        $this->selectRawMaterialApiContext($this->steward);
+        $all = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['columns' => ['sku', 'name']], ['Idempotency-Key' => 'all-pages'])->assertCreated()->assertJsonPath('data.row_count', 51)->json('data');
+        $this->assertSame(52, substr_count($this->get($all['download_url'])->assertOk()->streamedContent(), "\n"));
+        $selected = $this->postJson('/api/v1/raw-materials/catalog-exports/selection', ['material_ids' => [$ids[0], $ids[50]], 'columns' => ['name']], ['Idempotency-Key' => 'cross-page-selection'])->assertCreated()->assertJsonPath('data.row_count', 2)->json('data');
+        $csv = $this->get($selected['download_url'])->assertOk()->streamedContent();
+        $this->assertStringContainsString('Eksport 01', $csv);
+        $this->assertStringContainsString('Eksport 51', $csv);
+    }
+
+    public function test_stage3e_b3_supplier_evidence_and_unrelated_versions_are_not_material_attachments(): void
+    {
+        $this->b3Storage();
+        $fixture = $this->createCommercialOfferFixture('Dowody B3', 'B3EVID', 'B3EVIDP', 'b3-evidence');
+        $document = app(RawMaterialDocumentService::class)->create(
+            $this->steward, $this->location, DB::table('raw_materials')->where('id', $fixture['material_id'])->value('approved_revision_id'), 'OTHER',
+            'dowod.txt', 'Dowód produktu dostawcy', 'SUPPLIER_COMPATIBILITY_EVIDENCE', $fixture['product_revision_id'],
+        );
+        app(RawMaterialDocumentScanService::class)->scanVersion($document['version']['id']);
+        $this->selectRawMaterialApiContext($this->steward);
+        $base = '/api/v1/raw-materials/'.$fixture['material_id'].'/documents';
+        $this->getJson($base)->assertOk()->assertJsonCount(0, 'data.documents');
+        $this->get($base.'/'.$document['version']['id'].'/download')->assertNotFound();
+        $material = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => DB::table('raw_material_categories')->value('id'), 'name' => 'Niepowiązany szkic', 'base_unit_code' => 'g',
+        ]);
+        $this->get('/api/v1/raw-materials/'.$material['id'].'/documents/'.$document['version']['id'].'/download')->assertNotFound();
+    }
+
+    public function test_stage3e_b3_infected_upload_cannot_be_committed(): void
+    {
+        $this->b3Storage();
+        $scanner = Mockery::mock(DocumentScanner::class);
+        $scanner->shouldReceive('scan')->andReturn(DocumentScanOutcome::infected('test', 'test', 'Test.Malware'));
+        $this->app->instance(DocumentScanner::class, $scanner);
+        $upload = $this->b3Upload();
+        $this->assertSame('FAILED', $upload['status']);
+        [$material, $input] = $this->b2Draft();
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', $input + ['document_upload_ids' => [$upload['upload_id']]], ['If-Match' => $material['version']])
+            ->assertConflict()->assertJsonPath('error.code', 'RAW_MATERIAL_UPLOAD_NOT_CLEAN');
+        $this->assertSame(0, DB::table('raw_material_document_versions')->count());
+        $this->assertSame($material['version'], $this->rawVersion($material['id']));
+    }
+
+    public function test_stage3e_b3_restore_preserves_document_set_and_old_export_is_denied_after_new_approval(): void
+    {
+        $this->b3Storage();
+        Storage::fake('raw_material_csv_exports');
+        [$material, , $versionId] = $this->b3DraftWithDocument(true);
+        $this->b3Approve($material['id']);
+        $export = app(RawMaterialCsvCatalogExportWorkflow::class)->createSelection($this->steward, $this->location, ['columns' => ['name']], 'old-approval');
+        $this->rawMaterialService->archive($this->steward, $this->location, $material['id'], 'Test B3', $this->rawVersion($material['id']));
+        $this->rawMaterialService->restore($this->steward, $this->location, $material['id'], 'Test B3', $this->rawVersion($material['id']));
+        $pending = DB::table('raw_materials')->where('id', $material['id'])->value('pending_revision_id');
+        $this->assertSame([$versionId], app(RawMaterialDocumentSetService::class)->ids($this->steward->organization_id, $pending));
+        $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Nowe zatwierdzenie B3', $this->rawVersion($material['id']));
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->get($export['download_url'])->assertNotFound();
+        $this->assertSame(1, DB::table('raw_material_document_versions')->count());
+    }
+
+    public function test_stage3e_b3_new_apis_preserve_not_ready_gate(): void
+    {
+        $this->b3Storage();
+        $this->selectRawMaterialApiContext($this->steward);
+        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
+        foreach (['/document-uploads', '/catalog-exports/selection', '/bulk-archive/validation'] as $route) {
+            $this->postJson('/api/v1/raw-materials'.$route)->assertStatus(503);
+        }
+        $this->getJson('/api/v1/raw-materials/'.Str::uuid().'/documents')->assertStatus(503);
+        $this->assertSame(0, DB::table('raw_material_document_uploads')->count());
+    }
+
+    private function b3Context(User $actor, Location $location): void
+    {
+        Auth::forgetGuards();
+        $this->flushSession();
+        $actor = User::findOrFail($actor->id);
+        $this->withSession(['identity_version' => $actor->auth_version]);
+        $this->actingAs($actor, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])->assertOk();
+    }
+
+    private function b3ShortUpload(string $key): array
+    {
+        $id = Str::uuid()->toString();
+        $contents = 'Dokument testowy B3';
+        $storageKey = 'raw-material-uploads/'.substr($id, 0, 2).'/'.$id;
+        Storage::disk('raw_material_documents')->put($storageKey, $contents);
+        app(AuthorizationMutationContext::class)->run(AuthorizationMutationScope::rawMaterialMutate(), $this->steward->id, fn () => DB::table('raw_material_document_uploads')->insert([
+            'id' => $id, 'organization_id' => $this->steward->organization_id, 'location_id' => $this->location->id,
+            'actor_user_id' => $this->steward->id, 'idempotency_key' => $key, 'original_filename' => 'dokument.txt',
+            'media_type' => 'text/plain', 'size_bytes' => strlen($contents), 'sha256' => hash('sha256', $contents),
+            'storage_key' => $storageKey, 'scan_state' => 'CLEAN', 'expires_at' => now()->addSeconds(2),
+        ]));
+
+        return ['upload_id' => $id];
+    }
+
+    private function b3Storage(): void
+    {
+        Queue::fake();
+        Storage::fake('raw_material_documents');
+        $scanner = Mockery::mock(DocumentScanner::class);
+        $scanner->shouldReceive('scan')->andReturn(DocumentScanOutcome::clean('test-scanner', 'test-signatures'));
+        $this->app->instance(DocumentScanner::class, $scanner);
+    }
+
+    private function b3Upload(string $key = 'b3-upload', string $filename = 'dokument.txt', string $contents = 'Dokument testowy B3'): array
+    {
+        return app(RawMaterialUploadService::class)->stage($this->steward, $this->location, $key, $filename, $contents);
+    }
+
+    private function b3DraftWithDocument(bool $declared = false): array
+    {
+        $upload = $this->b3Upload('b3-claimed');
+        $input = ['category_id' => $this->category()['id'], 'name' => 'Dokumenty B3', 'base_unit_code' => 'g'];
+        if ($declared) {
+            $input['allergen_declaration'] = ['status' => 'NO_KNOWN_ALLERGENS', 'catalog_version_id' => $this->publishedAllergenCatalogFixture(), 'items' => []];
+        }
+        $material = $this->rawMaterialService->create($this->steward, $this->location, $input + ['document_upload_ids' => [$upload['upload_id']]]);
+
+        return [$material, $input, DB::table('raw_material_document_uploads')->where('id', $upload['upload_id'])->value('claimed_version_id')];
+    }
+
+    private function b3Approve(string $id): void
+    {
+        $this->rawMaterialService->submit($this->steward, $this->location, $id, $this->rawVersion($id));
+        $this->rawMaterialService->approve($this->steward, $this->location, $id, 'Test B3', $this->rawVersion($id));
+    }
+
+    private function b3Recipient(): Location
+    {
+        $location = $this->activeRestaurant('B3RECIPIENT');
+        app(MembershipService::class)->assign($this->steward, $location);
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id, 'location_id' => $location->id,
+            'module_key' => 'RAW_MATERIALS', 'enabled' => true,
+            'created_by' => $this->bootstrapAdministrator->id, 'updated_by' => $this->bootstrapAdministrator->id,
+        ]);
+
+        return $location;
+    }
+}

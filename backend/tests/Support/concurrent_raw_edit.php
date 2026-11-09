@@ -21,6 +21,13 @@ if (! preg_match('/^[a-z0-9-]{1,63}$/D', $application)) {
 }
 DB::select('SELECT set_config(?, ?, false)', ['application_name', $application]);
 $app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
+$documentRoot = getenv('TEST_RAW_DOCUMENT_ROOT');
+if ($documentRoot !== false) {
+    if (! str_starts_with($documentRoot, storage_path('framework/testing/'))) {
+        throw new RuntimeException('Fixture dokumentow wymaga magazynu w izolowanym katalogu testowym.');
+    }
+    config(['filesystems.disks.raw_material_documents.root' => $documentRoot]);
+}
 $actor = User::findOrFail($actorId);
 $context = Location::findOrFail($locationId);
 $service = app(RawMaterialService::class);

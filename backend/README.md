@@ -43,6 +43,81 @@ explicitly enabled and token-gated; sessions do not replace its controls.
 
 See the [project README](../README.md) for Docker setup and test commands.
 
+## RAW — Stage 3E-B.3 (lokalny backend, PARTIAL, nadal NOT_READY)
+
+- `POST /api/v1/raw-materials/document-uploads`: multipart `files[]` oraz
+  odpowiadające im unikalne `keys[]` (1–120 znaków `A-Za-z0-9._:-`).
+  Odpowiedź HTTP 200 zawiera niezależne wyniki `STAGED` / `FAILED` w `data`.
+  Poprawny wynik zawiera nieprzezroczyste `upload_id`, metadane i `expires_at`;
+  wynik błędu zawiera polski komunikat i `error_code`. Nie zwraca ścieżek dysku.
+  PDF, PNG, JPEG, TXT i CSV wymagają zgodnego rzeczywistego MIME i rozszerzenia.
+  Obowiązuje 20 MiB na plik i łącznie plików w żądaniu; przekroczenie sumy
+  odrzuca całe żądanie przed stagingiem. Kolejne żądania umożliwiają dodanie
+  kolejnych załączników. Limit PHP POST wynosi 21 MiB z narzutem multipart.
+- Upload wymaga istniejącego CREATE lub EDIT i jest związany z aktorem,
+  organizacją i lokalizacją. Nie ma publicznego odczytu stagingu. Ten sam klucz
+  i plik zwracają ten sam upload; inny payload oznacza konflikt.
+  `POST /api/v1/raw-materials/document-uploads/{upload}/retry` ponawia skan
+  dostępnego pliku; ponowienie multipart pozwala ponowić nieudany zapis pliku.
+  Błędy skanera i wykryte zagrożenia nie pozwalają na przypięcie.
+- Staging wygasa po godzinie, bez przedłużania przy ponowieniu. Polecenie
+  `php artisan raw-materials:cleanup-uploads` jest planowane co godzinę.
+  Usuwa wyłącznie wygasłe, nieprzypięte pliki pod blokadą `SKIP LOCKED`,
+  nigdy historię lub pliki mające trwałe referencje. Metadane pozostają.
+- Istniejące create oraz zapis draft przyjmują `document_upload_ids: uuid[]`
+  i `detach_document_version_ids: uuid[]`. Claim, dokument, wersja, link,
+  niezmienny zestaw dokumentów, rewizja i audyt mają wspólną transakcję.
+  Nadal obowiązuje B.2 `If-Match`; konflikt lub nieudany zapis wycofuje claim.
+  Powtórzenie udanego create z rezerwacją SKU nie dodaje drugiego dokumentu.
+  Anulowanie odpięcia oznacza pominięcie ID przy zapisie; nie ma osobnego DELETE.
+- Odpięcie zmienia wyłącznie zestaw nowej rewizji, bez usuwania dawnych linków
+  i bajtów. Nowe rewizje, korekty alergenów/storage i restore dziedziczą zestaw.
+  Historyczne hashe V1/V2 pozostają bez zmian: załączniki nadal są poza ich
+  treścią, a membership utrwalają niezmienna tabela i audyt.
+  Po commicie istniejący job ponownie skanuje trwałą wersję; do aktualnego
+  wyniku CLEAN dokument pozostaje niedostępny.
+- `GET /api/v1/raw-materials/{material}/documents` zwraca dokumenty bieżącej
+  widocznej rewizji. Opcjonalne `view=editor` używa istniejącego kontraktu
+  edytora (VIEW i EDIT albo AUDIT_VIEW w kuchni głównej).
+  Linki `/{material}/documents/{version}/download` oraz `/preview` ponownie
+  sprawdzają zakres, rewizję, skan i checksum. Odbiorca widzi wyłącznie obecną
+  zatwierdzoną rewizję przy aktywnym udostępnieniu, nigdy draft/pending.
+  PDF/PNG/JPEG można wyświetlić inline; TXT/CSV tylko pobrać.
+  Odpowiedzi mają bezpieczny Content-Disposition, CSP sandbox, nosniff i
+  private/no-store. API nie gwarantuje renderowania każdego PDF przez przeglądarkę.
+- `POST /api/v1/raw-materials/catalog-exports/selection` wymaga nagłówka
+  `Idempotency-Key`. Opcjonalne `material_ids` wybiera rekordy ze wszystkich
+  stron; brak pola eksportuje wszystkie pasujące rekordy. `columns` wybiera
+  pola w podanej kolejności: `ordinal`, `sku`, `name`, `unit`,
+  `nominal_quantity`, `usable_quantity`, `reference_net_price`,
+  `usable_unit_cost`, `description`, `category`, `lifecycle_state`,
+  `yield_percent`, `supplier_names`. Domyślne są pierwsze osiem z pominięciem
+  niedozwolonych pól finansowych. Nie zmienia to stałych kolumn katalogu.
+  Filtry i sortowanie są wspólne z katalogiem; `page`/`per_page` są zabronione.
+  `ordinal` zachowuje pozycję w całym przefiltrowanym katalogu przed wyborem ID.
+- Wybrany eksport korzysta z istniejącego workflow CSV, limitów (domyślnie
+  5000 rekordów / 5 MiB), manifestu, hasha, audytu i TTL (domyślnie 60 minut).
+  Wartości grożące wykonaniem formuły odrzucają eksport wybranych pól.
+  VIEW nie daje cen; cena wymaga REFERENCE_PRICE_VIEW, koszt dodatkowo FOODCOST.
+  `supplier_names` i filtr dostawcy wymagają SUPPLIER_VIEW.
+  `GET /api/v1/raw-materials/catalog-exports/selection/{export}/download`
+  ponownie sprawdza wszystkie uprawnienia, udostępnienia, filtry i aktualne
+  zatwierdzone rewizje. Cofnięcie dostępu lub nowa zatwierdzona rewizja blokuje
+  pobranie starszego eksportu.
+- `POST /api/v1/raw-materials/bulk-archive/validation` przyjmuje
+  `items: [{id, version}]`. Wymaga dotychczasowego ARCHIVE, kuchni głównej
+  i warunków archiwizacji pojedynczego materiału; sprawdza wszystkie rekordy
+  pod blokadami i zachowuje B.2 (brak wersji 428, konflikt 409).
+  Zwraca `mutation_available: false`, `policy_status: BLOCKED_BY_OWNER_DECISION`
+  i `validated_count`, zapisując audyt walidacji bez mutacji.
+  **Nie ma endpointu wykonującego zbiorczą archiwizację**: źródła nie
+  rozstrzygają atomowości. Walidacja nie rezerwuje stanu; przyszła mutacja
+  będzie wymagała ponownej autoryzacji i sprawdzenia wersji.
+- Migracja 044 jest forward-only. Testy korzystają wyłącznie z
+  [izolowanego Compose B.3](../compose.stage3e-b3-test.yaml), PostgreSQL 17,
+  ograniczonej roli runtime i osobnych zasobów. Bez migracji instalacji,
+  aktywacji modułu, frontendu, hard-delete i zmiany K3 bulk sharing.
+
 ## RAW — Stage 3E-B.2 (lokalny backend, nadal NOT_READY)
 
 - `GET /api/v1/raw-materials/{material}/editor` zwraca bieżącą rewizję roboczą,

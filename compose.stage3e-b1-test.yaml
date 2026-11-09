@@ -1,0 +1,79 @@
+name: veltra-stage3e-b1-test
+
+x-environment: &environment
+  APP_ENV: testing
+  APP_DEBUG: "false"
+  APP_LOCALE: pl
+  APP_FALLBACK_LOCALE: pl
+  APP_URL: http://localhost:8000
+  FRONTEND_URL: http://localhost:5173
+  SANCTUM_STATEFUL_DOMAINS: localhost:5173,localhost:8000,127.0.0.1:5173,127.0.0.1:8000
+  APP_KEY: ${TEST_APP_KEY:?Synthetic test key required}
+  APP_DB_MUTATION_SIGNING_KEY: ${TEST_MUTATION_SIGNING_KEY:?Synthetic signing key required}
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_DATABASE: veltra_testing
+  DB_USERNAME: veltra_app
+  DB_PASSWORD: ${TEST_DB_APP_PASSWORD:?Synthetic password required}
+  APP_DB_USERNAME: veltra_app
+  APP_DB_PASSWORD: ${TEST_DB_APP_PASSWORD}
+  APP_DB_MIGRATION_USERNAME: veltra_migrator
+  APP_DB_MIGRATION_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD:?Synthetic password required}
+  TEST_DB_SETUP_USERNAME: veltra_migrator
+  TEST_DB_SETUP_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD}
+  REDIS_HOST: redis
+  TEST_REDIS_HOST: redis
+  CACHE_STORE: redis
+  SESSION_DRIVER: redis
+  QUEUE_CONNECTION: redis
+  MAIL_MAILER: array
+  LOG_CHANNEL: stderr
+  CLAMAV_HOST: clamav
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: veltra_testing
+      POSTGRES_USER: veltra_test_admin
+      POSTGRES_PASSWORD: ${TEST_PG_ADMIN_PASSWORD:?Synthetic password required}
+      APP_DB_USERNAME: veltra_app
+      APP_DB_PASSWORD: ${TEST_DB_APP_PASSWORD}
+      APP_DB_MIGRATION_USERNAME: veltra_migrator
+      APP_DB_MIGRATION_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD}
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
+    networks: [isolated]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veltra_migrator -d veltra_testing"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs: [/data]
+    networks: [isolated]
+  clamav:
+    image: clamav/clamav:1.4
+    networks: [isolated]
+  runner:
+    image: veltra-stage2f-implementation3d1-test-test-runner:latest
+    environment: *environment
+    volumes:
+      - ./backend:/var/www/html
+      - test-storage:/var/www/html/storage
+      - test-cache:/var/www/html/bootstrap/cache
+    command: ["sleep", "infinity"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [isolated]
+networks:
+  isolated:
+    internal: true
+volumes:
+  test-storage:
+  test-cache:

@@ -2,6 +2,8 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
@@ -37,6 +39,11 @@ final class RawMaterialAuthorization
         }
 
         if (! $this->effectiveGrantIds($freshActor, $permission)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        if ($permission === RawMaterialPermission::ReferencePriceManage
+            && (! app(BusinessAuthorization::class)->hasRole($freshActor, BusinessRole::Administrator)
+                || ! app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext))) {
             throw new AuthorizationException(__('messages.unauthorized'));
         }
     }

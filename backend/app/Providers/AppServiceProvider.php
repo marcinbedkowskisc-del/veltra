@@ -41,6 +41,7 @@ class AppServiceProvider extends ServiceProvider
         // This installation supports cookie sessions only, never bearer-token authentication.
         Sanctum::getAccessTokenFromRequestUsing(fn () => null);
         RateLimiter::for('security', fn (Request $request) => Limit::perMinute(60)->by('security:'.$request->user()?->id.'|'.$request->ip()));
+        RateLimiter::for('raw-sku', fn (Request $request) => Limit::perMinute(20)->by('raw-sku:'.$request->user()?->id));
         RateLimiter::for('account-links', fn (Request $request) => Limit::perMinute(10)->by('account-link:'.$request->ip()));
         RateLimiter::for('login', function (Request $request): array {
             $email = $request->input('email');

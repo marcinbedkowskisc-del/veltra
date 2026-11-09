@@ -6,11 +6,17 @@ use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Sku\SkuAllocationService;
 use App\Domain\Sku\SkuPrefix;
+use App\Http\Requests\InstallationRequest;
+use App\Http\Requests\RawMaterialAllergenDeclarationRequest;
+use App\Http\Requests\RawMaterialDataRequest;
+use App\Http\Requests\RawMaterialStorageVariantsRequest;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -21,6 +27,8 @@ final class RawMaterialService
         private RawMaterialLocationSharePolicy $sharePolicy,
         private AuthorizationMutationContext $contexts,
         private SkuAllocationService $skuAllocation,
+        private RawMaterialCatalogValues $catalogValues,
+        private RawMaterialSkuReservationService $reservations,
     ) {}
 
     public function categories(User $actor, Location $context): array
@@ -101,12 +109,14 @@ final class RawMaterialService
             ->leftJoin('raw_material_categories as categories', 'categories.id', '=', 'revisions.category_id')
             ->where('materials.organization_id', $actor->organization_id)
             ->whereNotNull('materials.approved_revision_id')
+            ->where('materials.lifecycle_state', '<>', 'ARCHIVED')
             ->select([
                 'materials.id', 'materials.code', 'materials.lifecycle_state',
                 'revisions.id as revision_id', 'revisions.revision_no', 'revisions.name',
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
+        $this->catalogValues->select($query, $actor, $context);
         $this->sharePolicy->constrainVisibleMaterials($query, $actor, $context);
 
         if (isset($filters['search'])) {
@@ -127,15 +137,57 @@ final class RawMaterialService
         if (isset($filters['lifecycle_state'])) {
             $query->where('materials.lifecycle_state', $filters['lifecycle_state']);
         }
+        if (isset($filters['unit'])) {
+            $query->where('revisions.base_unit_code', $filters['unit']);
+        }
+        if (isset($filters['supplier_id'])) {
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
+            $query->whereExists(fn ($products) => $products->selectRaw('1')
+                ->from('supplier_products as products')
+                ->join('organization_suppliers as suppliers', function ($join): void {
+                    $join->on('suppliers.id', '=', 'products.supplier_id')
+                        ->on('suppliers.organization_id', '=', 'products.organization_id');
+                })
+                ->join('supplier_product_revisions as product_revisions', function ($join): void {
+                    $join->on('product_revisions.supplier_product_id', '=', 'products.id')
+                        ->on('product_revisions.organization_id', '=', 'products.organization_id');
+                })
+                ->whereColumn('products.organization_id', 'materials.organization_id')
+                ->whereColumn('products.raw_material_id', 'materials.id')
+                ->where('products.supplier_id', $filters['supplier_id'])
+                ->where('products.lifecycle_state', 'ACTIVE')->where('suppliers.lifecycle_state', 'ACTIVE')
+                ->whereColumn('product_revisions.raw_material_revision_id', 'materials.approved_revision_id')
+                ->whereRaw('product_revisions.revision_no = (SELECT max(latest.revision_no) FROM supplier_product_revisions latest
+                    WHERE latest.supplier_product_id = products.id AND latest.organization_id = products.organization_id)'));
+        }
 
-        $sortColumns = ['code' => 'materials.code', 'name' => 'revisions.name', 'lifecycle_state' => 'materials.lifecycle_state'];
-        $sort = $sortColumns[$filters['sort'] ?? 'code'];
+        $sortColumns = [
+            'code' => 'materials.code', 'sku' => 'materials.code', 'name' => 'revisions.name',
+            'unit' => 'revisions.base_unit_code', 'nominal_quantity' => 'revisions.nominal_quantity',
+            'usable_quantity' => 'revisions.usable_quantity', 'lifecycle_state' => 'materials.lifecycle_state',
+        ];
+        $sortKey = $filters['sort'] ?? 'name';
+        if (in_array($sortKey, ['reference_net_price', 'usable_unit_cost'], true)) {
+            if (($sortKey === 'reference_net_price' && ! $this->catalogValues->canReadPrice($actor))
+                || ($sortKey === 'usable_unit_cost' && ! $this->catalogValues->canReadCost($actor, $context))) {
+                throw new AuthorizationException(__('messages.unauthorized'));
+            }
+            $sort = $sortKey === 'reference_net_price' ? RawMaterialCatalogValues::packageExpression() : RawMaterialCatalogValues::costExpression();
+        } else {
+            $sort = $sortColumns[$sortKey] ?? throw ValidationException::withMessages(['sort' => ['Nieprawidłowe sortowanie katalogu.']]);
+        }
         $direction = $filters['direction'] ?? 'asc';
-        $paginator = $query->orderBy($sort, $direction)->orderBy('materials.id')
-            ->paginate($filters['per_page'] ?? 20);
-        $data = $paginator->getCollection()->map(fn (object $row): array => [
+        if (! in_array($direction, ['asc', 'desc'], true)) {
+            throw ValidationException::withMessages(['direction' => ['Nieprawidłowy kierunek sortowania.']]);
+        }
+        $paginator = $query->orderByRaw($sort.' '.$direction.' NULLS LAST')->orderBy('materials.id')
+            ->paginate($filters['per_page'] ?? 50, ['*'], 'page', $filters['page'] ?? 1);
+        $data = $paginator->getCollection()->map(fn (object $row, int $index): array => [
             'id' => $row->id,
             'code' => $row->code,
+            'sku' => $row->code,
+            'ordinal' => ($paginator->currentPage() - 1) * $paginator->perPage() + $index + 1,
+            ...RawMaterialCatalogValues::present($row),
             'lifecycle_state' => $row->lifecycle_state,
             'revision' => $row->revision_id === null ? null : [
                 'id' => $row->revision_id,
@@ -154,6 +206,8 @@ final class RawMaterialService
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
                 'last_page' => $paginator->lastPage(),
+                'from' => $paginator->firstItem(),
+                'to' => $paginator->lastItem(),
             ],
         ];
     }
@@ -176,7 +230,246 @@ final class RawMaterialService
         }
         $revision = $revisionId ? DB::table('raw_material_revisions')->where('id', $revisionId)->first() : null;
 
-        return $this->presentMaterial($material, $revision);
+        $result = $this->presentMaterial($material, $revision);
+        if (! $this->sharePolicy->isPrimaryContext($context) || ! $this->canInspectWorkingRevision($actor)
+            || $revisionId !== ($material->working_revision_id ?? $material->pending_revision_id ?? $material->approved_revision_id)) {
+            unset($result['version']);
+        }
+        $result += app(RawMaterialHistoryService::class)->metadata($actor, $context, $material);
+        if ($revision !== null) {
+            $query = DB::table('raw_materials as materials')
+                ->join('raw_material_revisions as revisions', 'revisions.raw_material_id', '=', 'materials.id')
+                ->where('materials.organization_id', $actor->organization_id)
+                ->where('materials.id', $materialId)->where('revisions.id', $revision->id)
+                ->select('revisions.base_unit_code');
+            $this->catalogValues->select($query, $actor, $context);
+            $result += RawMaterialCatalogValues::present($query->first());
+        }
+
+        return $result;
+    }
+
+    public function editor(User $actor, Location $context, string $materialId): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        if (! $this->sharePolicy->isPrimaryContext($context)
+            || ! $this->canInspectWorkingRevision($actor)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        $material = $this->material($actor, $materialId);
+        $revisionId = $material->working_revision_id ?? $material->pending_revision_id ?? $material->approved_revision_id;
+        $revision = DB::table('raw_material_revisions')->where('id', $revisionId)->firstOrFail();
+        $declaration = $this->allergenDeclarationForRevision($revision->id);
+        if ($declaration !== null) {
+            unset($declaration['attested_by'], $declaration['attested_at']);
+        }
+
+        return $this->presentMaterial($material, $revision) + [
+            'allergen_declaration' => $declaration,
+            'storage_variants' => $this->storageVariantsForRevision($revision->id),
+        ];
+    }
+
+    public function completion(User $actor, Location $context, string $materialId): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        $inspectWorking = $this->sharePolicy->isPrimaryContext($context) && $this->canInspectWorkingRevision($actor);
+        if (! $inspectWorking) {
+            $this->show($actor, $context, $materialId);
+        }
+        $material = $this->material($actor, $materialId);
+        $revisionId = $inspectWorking
+            ? ($material->working_revision_id ?? $material->pending_revision_id ?? $material->approved_revision_id)
+            : $material->approved_revision_id;
+        $revision = DB::table('raw_material_revisions')->where('id', $revisionId)->firstOrFail();
+        $problems = $this->approvalProblems($revision);
+        $actions = $inspectWorking ? $this->availableActions($actor, $context, $material, $problems) : [];
+
+        return [
+            'lifecycle_state' => $material->lifecycle_state,
+            'revision_id' => $revision->id,
+            'version' => $inspectWorking ? $material->edit_version : null,
+            'error_count' => count($problems['errors']),
+            'missing_requirement_count' => count($problems['missing_requirements']),
+            ...$problems,
+            'eligible_for_next_action' => array_diff($actions, ['edit', 'edit_allergens', 'edit_storage']) !== [],
+            'available_actions' => $actions,
+        ];
+    }
+
+    public function validateEdits(User $actor, Location $context, string $materialId, array $input, string $section = 'basic'): array
+    {
+        $permission = match ($section) {
+            'basic' => RawMaterialPermission::Edit,
+            'allergens' => RawMaterialPermission::AllergenManage,
+            'storage' => RawMaterialPermission::StorageManage,
+            default => throw ValidationException::withMessages(['section' => ['Nieprawidłowa sekcja walidacji.']]),
+        };
+        $this->authorization->assertAllowed($actor, $context, $permission);
+        $snapshot = $this->editor($actor, $context, $materialId);
+        $report = $this->completion($actor, $context, $materialId);
+        $errors = [];
+        if (! $this->isEditable($this->material($actor, $materialId))) {
+            $errors[] = [
+                'code' => 'RAW_MATERIAL_REVISION_NOT_EDITABLE', 'field' => 'revision', 'section' => $section,
+                'message' => __('messages.raw_material_revision_not_editable'),
+            ];
+        }
+        try {
+            if ($section === 'basic') {
+                $this->validateForm(new RawMaterialDataRequest, $input);
+                $base = DB::table('raw_material_revisions')->where('id', $snapshot['revision']['id'])->firstOrFail();
+                $input = $this->mergeRevisionInput($base, $input, RawMaterialPermission::Edit);
+                $this->validateBasicData($actor, $input, $materialId);
+            } elseif ($section === 'allergens') {
+                $this->validateForm(new RawMaterialAllergenDeclarationRequest, $input);
+                $this->validateAllergenDeclaration($input);
+                $report['missing_requirements'] = $input['status'] === 'UNKNOWN' ? [[
+                    'code' => 'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', 'field' => 'allergen_declaration',
+                    'section' => 'allergens', 'message' => __('messages.raw_material_allergen_declaration_required'),
+                ]] : [];
+                $report['missing_requirement_count'] = count($report['missing_requirements']);
+            } else {
+                $this->validateForm(new RawMaterialStorageVariantsRequest, $input);
+            }
+        } catch (ValidationException $exception) {
+            foreach ($exception->errors() as $field => $messages) {
+                foreach ($messages as $message) {
+                    $errors[] = ['code' => 'INVALID_VALUE', 'field' => $field, 'section' => $section, 'message' => $message];
+                }
+            }
+        } catch (RawMaterialException $exception) {
+            if ($exception->status !== 422) {
+                throw $exception;
+            }
+            $errors[] = ['code' => $exception->errorCode, 'field' => $section === 'basic' ? 'name' : 'allergen_declaration', 'section' => $section, 'message' => $exception->getMessage()];
+        }
+        $report['errors'] = array_merge($report['errors'], $errors);
+        $report['error_count'] = count($report['errors']);
+        // A preview never authorizes a transition of the not-yet-saved revision.
+        $report['eligible_for_next_action'] = false;
+        $report['available_actions'] = [];
+
+        return $report;
+    }
+
+    private function validateForm(InstallationRequest $form, array $input): void
+    {
+        $form->replace($input);
+        $rules = $form->rules();
+        $unknown = array_diff(array_keys($input), array_keys($rules));
+        if ($unknown !== []) {
+            throw ValidationException::withMessages(['request' => [__('messages.unknown_request_fields', ['fields' => implode(', ', $unknown)])]]);
+        }
+        $validator = Validator::make($input, $rules);
+        if (method_exists($form, 'after')) {
+            $validator->after($form->after());
+        }
+        $validator->validate();
+    }
+
+    private function canInspectWorkingRevision(User $actor): bool
+    {
+        return $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::Edit)
+            || $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::AuditView);
+    }
+
+    private function approvalProblems(object $revision): array
+    {
+        $missing = [];
+        $errors = [];
+        if ($revision->allergen_state !== 'DECLARED'
+            || ((int) $revision->content_hash_version === 2 && ! $this->hasValidV2AllergenAttestation($revision))) {
+            $missing[] = [
+                'code' => 'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', 'field' => 'allergen_declaration',
+                'section' => 'allergens', 'message' => __('messages.raw_material_allergen_declaration_required'),
+            ];
+        }
+        if (! hash_equals($revision->content_hash, $this->hashFromDatabase($revision))) {
+            $errors[] = [
+                'code' => 'RAW_MATERIAL_REVISION_HASH_MISMATCH', 'field' => 'revision',
+                'section' => 'basic', 'message' => __('messages.raw_material_revision_integrity_failed'),
+            ];
+        }
+
+        return ['errors' => $errors, 'missing_requirements' => $missing];
+    }
+
+    private function availableActions(User $actor, Location $context, object $material, array $problems): array
+    {
+        $state = $material->lifecycle_state;
+        $working = $material->working_revision_id !== null;
+        $pending = $material->pending_revision_id !== null;
+        $complete = $problems['errors'] === [] && $problems['missing_requirements'] === [];
+        $editable = $this->isEditable($material);
+        $revisionId = $material->working_revision_id ?? $material->pending_revision_id ?? $material->approved_revision_id;
+        $hasAllergens = DB::table('raw_material_revision_allergen_attestations')->where('revision_id', $revisionId)->exists();
+        $hasStorage = DB::table('raw_material_revision_storage_variants')->where('revision_id', $revisionId)->exists();
+        $canCopyAllergens = ! $hasAllergens || $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
+        $canCopyStorage = ! $hasStorage || $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::StorageManage);
+        $candidates = [
+            'edit' => [$editable && $canCopyAllergens && $canCopyStorage, RawMaterialPermission::Edit],
+            'edit_allergens' => [$editable && $canCopyStorage, RawMaterialPermission::AllergenManage],
+            'edit_storage' => [$editable && $canCopyAllergens, RawMaterialPermission::StorageManage],
+            'submit' => [$working && in_array($state, ['DRAFT', 'ACTIVE'], true), RawMaterialPermission::Submit],
+            'approve' => [$pending && in_array($state, ['VERIFICATION', 'ACTIVE'], true) && $complete, RawMaterialPermission::Approve],
+            'return_for_changes' => [$pending && in_array($state, ['VERIFICATION', 'ACTIVE', 'BLOCKED'], true), RawMaterialPermission::Review],
+            'block' => [$state === 'ACTIVE', RawMaterialPermission::Block],
+            'unblock' => [$state === 'BLOCKED' && ! $pending && $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::Approve), RawMaterialPermission::Unblock],
+            'archive' => [in_array($state, ['ACTIVE', 'BLOCKED'], true) && ! $working && ! $pending, RawMaterialPermission::Archive],
+            'restore' => [$state === 'ARCHIVED' && $canCopyAllergens && $canCopyStorage, RawMaterialPermission::Restore],
+        ];
+        $actions = [];
+        foreach ($candidates as $action => [$eligible, $permission]) {
+            if ($eligible && $this->authorization->hasEffectiveGrant($actor, $permission)) {
+                $actions[] = $action;
+            }
+        }
+
+        return $actions;
+    }
+
+    private function isEditable(object $material): bool
+    {
+        return in_array($material->lifecycle_state, ['DRAFT', 'ACTIVE'], true)
+            && $material->pending_revision_id === null
+            && ($material->lifecycle_state !== 'DRAFT' || $material->working_revision_id !== null);
+    }
+
+    private function validateBasicData(User $actor, array $input, ?string $materialId): array
+    {
+        $rules = (new RawMaterialDataRequest)->rules();
+        unset($rules['sku_reservation_id']);
+        Validator::make($input, $rules)->validate();
+        $this->requireCategory($actor, $input['category_id']);
+        $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
+        RawMaterialCatalogValues::quantities($input);
+        $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
+        $this->assertNoDuplicateTerms($actor, $aliases, $materialId);
+
+        return [$unitData, $aliases];
+    }
+
+    private function mergeRevisionInput(object $baseRevision, array $input, RawMaterialPermission $permission): array
+    {
+        if ($permission !== RawMaterialPermission::Edit) {
+            $input = array_merge($this->revisionInputFor($baseRevision), $input);
+        } elseif (! array_key_exists('nominal_quantity', $input) && ! array_key_exists('usable_quantity', $input)
+            && $baseRevision->nominal_quantity !== null) {
+            if ($input['base_unit_code'] !== $baseRevision->base_unit_code) {
+                throw ValidationException::withMessages(['nominal_quantity' => ['Zmiana jednostki wymaga jawnego podania ilości.']]);
+            }
+            $input['nominal_quantity'] = (string) $baseRevision->nominal_quantity;
+            $input['usable_quantity'] = (string) $baseRevision->usable_quantity;
+        }
+        if (! array_key_exists('allergen_declaration', $input)) {
+            $input['allergen_declaration'] = $this->allergenDeclarationForRevision($baseRevision->id);
+        }
+        if (! array_key_exists('storage_variants', $input)) {
+            $input['storage_variants'] = $this->storageVariantsForRevision($baseRevision->id);
+        }
+
+        return $input;
     }
 
     public function revisions(User $actor, Location $context, string $materialId): array
@@ -229,15 +522,17 @@ final class RawMaterialService
         return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
-            $this->requireCategory($actor, $input['category_id']);
-            $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
-            $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
-            $this->assertNoDuplicateTerms($actor, $aliases, null);
-            $materialId = Str::uuid()->toString();
+            $reservation = isset($input['sku_reservation_id'])
+                ? $this->reservations->claim($actor, $context, $input['sku_reservation_id'], $input) : null;
+            if ($reservation?->consumed_at !== null) {
+                return json_decode($reservation->response_body, true, flags: JSON_THROW_ON_ERROR);
+            }
+            [$unitData, $aliases] = $this->validateBasicData($actor, $input, null);
+            $materialId = $reservation?->id ?? Str::uuid()->toString();
             $revisionId = Str::uuid()->toString();
             $now = now();
             try {
-                $code = $this->skuAllocation->allocateNext($actor, SkuPrefix::Raw, $materialId);
+                $code = $reservation?->sku ?? $this->skuAllocation->allocateNext($actor, SkuPrefix::Raw, $materialId);
             } catch (\InvalidArgumentException $exception) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_CODE_CAPACITY_REACHED',
@@ -271,8 +566,12 @@ final class RawMaterialService
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
             ]);
+            $response = $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
+            if ($reservation !== null) {
+                $this->reservations->consume($reservation->id, $input, $response);
+            }
 
-            return $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
+            return $response;
         }));
     }
 
@@ -343,12 +642,12 @@ final class RawMaterialService
         }));
     }
 
-    public function revise(User $actor, Location $context, string $materialId, array $input): array
+    public function revise(User $actor, Location $context, string $materialId, array $input, ?string $expectedVersion = null): array
     {
-        return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit);
+        return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit, expectedVersion: $expectedVersion);
     }
 
-    public function reviseAllergenDeclaration(User $actor, Location $context, string $materialId, array $input): array
+    public function reviseAllergenDeclaration(User $actor, Location $context, string $materialId, array $input, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AllergenManage);
         $this->validateAllergenDeclaration($input);
@@ -364,11 +663,15 @@ final class RawMaterialService
             ],
             RawMaterialPermission::AllergenManage,
             'ALLERGEN_DECLARATION_CHANGED',
+            $expectedVersion,
         );
     }
 
-    public function reviseStorageVariants(User $actor, Location $context, string $materialId, array $variants): array
+    public function reviseStorageVariants(User $actor, Location $context, string $materialId, array $variants, ?string $expectedVersion = null): array
     {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::StorageManage);
+        $this->validateForm(new RawMaterialStorageVariantsRequest, ['variants' => $variants]);
+
         return $this->reviseWithPermission(
             $actor,
             $context,
@@ -376,6 +679,7 @@ final class RawMaterialService
             ['storage_variants' => $variants],
             RawMaterialPermission::StorageManage,
             'STORAGE_VARIANTS_CHANGED',
+            $expectedVersion,
         );
     }
 
@@ -522,16 +826,16 @@ final class RawMaterialService
         array $input,
         RawMaterialPermission $permission,
         ?string $changeType = null,
+        ?string $expectedVersion = null,
     ): array {
         $this->authorization->assertAllowed($actor, $context, $permission);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input, $permission, $changeType): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input, $permission, $changeType, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, $permission);
             $material = $this->material($actor, $materialId, true);
-            if (! in_array($material->lifecycle_state, ['DRAFT', 'ACTIVE'], true)
-                || $material->pending_revision_id !== null
-                || ($material->lifecycle_state === 'DRAFT' && $material->working_revision_id === null)) {
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
+            if (! $this->isEditable($material)) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_REVISION_NOT_EDITABLE',
                     __('messages.raw_material_revision_not_editable'),
@@ -555,19 +859,8 @@ final class RawMaterialService
                     __('messages.raw_material_revision_not_editable'),
                 );
             }
-            if ($permission !== RawMaterialPermission::Edit) {
-                $input = array_merge($this->revisionInputFor($baseRevision), $input);
-            }
-            if (! array_key_exists('allergen_declaration', $input)) {
-                $input['allergen_declaration'] = $this->allergenDeclarationForRevision($baseRevision->id);
-            }
-            if (! array_key_exists('storage_variants', $input)) {
-                $input['storage_variants'] = $this->storageVariantsForRevision($baseRevision->id);
-            }
-            $this->requireCategory($actor, $input['category_id']);
-            $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
-            $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
-            $this->assertNoDuplicateTerms($actor, $aliases, $materialId);
+            $input = $this->mergeRevisionInput($baseRevision, $input, $permission);
+            [$unitData, $aliases] = $this->validateBasicData($actor, $input, $materialId);
             $latestNo = (int) DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->max('revision_no');
             $revisionId = Str::uuid()->toString();
             DB::table('raw_materials')->where('id', $materialId)->update([
@@ -610,6 +903,10 @@ final class RawMaterialService
             'name' => $revision->name,
             'description' => $revision->description,
             'base_unit_code' => $revision->base_unit_code,
+            ...($revision->nominal_quantity === null ? [] : [
+                'nominal_quantity' => (string) $revision->nominal_quantity,
+                'usable_quantity' => (string) $revision->usable_quantity,
+            ]),
             'conversions' => DB::table('raw_material_revision_units')
                 ->where('revision_id', $revision->id)
                 ->where('unit_code', '<>', $revision->base_unit_code)
@@ -686,14 +983,15 @@ final class RawMaterialService
         }
     }
 
-    public function submit(User $actor, Location $context, string $materialId): array
+    public function submit(User $actor, Location $context, string $materialId, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Submit);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if ($material->working_revision_id === null || ! in_array($material->lifecycle_state, ['DRAFT', 'ACTIVE'], true)) {
                 throw new RawMaterialException('RAW_MATERIAL_SUBMISSION_INVALID', __('messages.raw_material_submission_invalid'));
             }
@@ -713,14 +1011,15 @@ final class RawMaterialService
         }));
     }
 
-    public function returnForChanges(User $actor, Location $context, string $materialId, string $reason): array
+    public function returnForChanges(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Review);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if ($material->pending_revision_id === null
                 || ! in_array($material->lifecycle_state, ['VERIFICATION', 'ACTIVE', 'BLOCKED'], true)) {
                 throw new RawMaterialException('RAW_MATERIAL_REVIEW_INVALID', __('messages.raw_material_review_invalid'));
@@ -755,40 +1054,24 @@ final class RawMaterialService
         }));
     }
 
-    public function approve(User $actor, Location $context, string $materialId, string $reason): array
+    public function approve(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if ($material->pending_revision_id === null
                 || ! in_array($material->lifecycle_state, ['VERIFICATION', 'ACTIVE'], true)) {
                 throw new RawMaterialException('RAW_MATERIAL_APPROVAL_INVALID', __('messages.raw_material_approval_invalid'));
             }
             $revision = DB::table('raw_material_revisions')->where('id', $material->pending_revision_id)->firstOrFail();
-            if ($revision->allergen_state !== 'DECLARED') {
-                throw new RawMaterialException(
-                    'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED',
-                    __('messages.raw_material_allergen_declaration_required'),
-                    422,
-                );
-            }
-            if ((int) $revision->content_hash_version === 2
-                && ! $this->hasValidV2AllergenAttestation($revision)) {
-                throw new RawMaterialException(
-                    'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED',
-                    __('messages.raw_material_allergen_declaration_required'),
-                    422,
-                );
-            }
-            if (! hash_equals($revision->content_hash, $this->hashFromDatabase($revision))) {
-                throw new RawMaterialException(
-                    'RAW_MATERIAL_REVISION_HASH_MISMATCH',
-                    __('messages.raw_material_revision_integrity_failed'),
-                    409,
-                );
+            $problems = $this->approvalProblems($revision);
+            if ($problems['errors'] !== [] || $problems['missing_requirements'] !== []) {
+                $problem = ($problems['errors'] ?: $problems['missing_requirements'])[0];
+                throw new RawMaterialException($problem['code'], $problem['message'], $problems['errors'] !== [] ? 409 : 422);
             }
             $previous = $this->stateHash($material);
             $operationId = Str::uuid()->toString();
@@ -818,14 +1101,15 @@ final class RawMaterialService
         }));
     }
 
-    public function block(User $actor, Location $context, string $materialId, string $reason): array
+    public function block(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Block);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if ($material->lifecycle_state !== 'ACTIVE') {
                 throw new RawMaterialException('RAW_MATERIAL_BLOCK_INVALID', __('messages.raw_material_block_invalid'));
             }
@@ -843,7 +1127,7 @@ final class RawMaterialService
         }));
     }
 
-    public function unblock(User $actor, Location $context, string $materialId, string $reason): array
+    public function unblock(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
@@ -852,11 +1136,12 @@ final class RawMaterialService
             AuthorizationMutationScope::rawMaterialUnblock(),
             $actor->id,
             $materialId,
-            fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+            fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
                 Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
                 $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Unblock);
                 $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Approve);
                 $material = $this->material($actor, $materialId, true);
+                RawMaterialVersion::assertCurrent($material, $expectedVersion);
                 if ($material->lifecycle_state !== 'BLOCKED' || $material->pending_revision_id !== null) {
                     throw new RawMaterialException('RAW_MATERIAL_UNBLOCK_INVALID', __('messages.raw_material_unblock_invalid'));
                 }
@@ -880,14 +1165,15 @@ final class RawMaterialService
             }));
     }
 
-    public function archive(User $actor, Location $context, string $materialId, string $reason): array
+    public function archive(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if (! in_array($material->lifecycle_state, ['ACTIVE', 'BLOCKED'], true)
                 || $material->pending_revision_id !== null || $material->working_revision_id !== null) {
                 throw new RawMaterialException('RAW_MATERIAL_ARCHIVE_INVALID', __('messages.raw_material_archive_invalid'));
@@ -908,14 +1194,15 @@ final class RawMaterialService
         }));
     }
 
-    public function restore(User $actor, Location $context, string $materialId, string $reason): array
+    public function restore(User $actor, Location $context, string $materialId, string $reason, ?string $expectedVersion = null): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $reason, $expectedVersion): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Restore);
             $material = $this->material($actor, $materialId, true);
+            RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if ($material->lifecycle_state !== 'ARCHIVED') {
                 throw new RawMaterialException('RAW_MATERIAL_RESTORE_INVALID', __('messages.raw_material_restore_invalid'));
             }
@@ -930,6 +1217,11 @@ final class RawMaterialService
                 'category_id' => $approved->category_id,
                 'name' => $approved->name,
                 'description' => $approved->description,
+                'base_unit_code' => $approved->base_unit_code,
+                ...($approved->nominal_quantity === null ? [] : [
+                    'nominal_quantity' => (string) $approved->nominal_quantity,
+                    'usable_quantity' => (string) $approved->usable_quantity,
+                ]),
             ];
             $unitData = [
                 'base_unit_code' => $approved->base_unit_code,
@@ -1017,6 +1309,10 @@ final class RawMaterialService
             'base_unit_dimension' => $unitData['base_unit_dimension'],
             'allergen_state' => $stage2d['attestation'] === null ? $allergenState : 'DECLARED',
         ];
+        $quantities = RawMaterialCatalogValues::quantities($input);
+        if ($quantities['nominal_quantity'] !== null) {
+            $payload += $quantities;
+        }
         $hash = $this->hashPayloadV2(
             $payload,
             $unitData['units'],
@@ -1030,6 +1326,7 @@ final class RawMaterialService
             'raw_material_id' => $materialId,
             'revision_no' => $revisionNo,
             ...$payload,
+            ...$quantities,
             'critical_change' => $critical,
             'change_reason' => $reason,
             'created_by' => $actor->id,
@@ -1179,6 +1476,12 @@ final class RawMaterialService
 
         if ((int) $revision->content_hash_version === 1) {
             return $this->hashPayload($payload, $units, $aliases);
+        }
+        if ($revision->nominal_quantity !== null) {
+            $payload += [
+                'nominal_quantity' => (string) $revision->nominal_quantity,
+                'usable_quantity' => (string) $revision->usable_quantity,
+            ];
         }
 
         $attestation = DB::table('raw_material_revision_allergen_attestations as attestations')
@@ -1493,6 +1796,8 @@ final class RawMaterialService
                 'category_id' => $revision->category_id,
                 'base_unit_code' => $revision->base_unit_code,
                 'base_unit_dimension' => $revision->base_unit_dimension,
+                'nominal_quantity' => $revision->nominal_quantity,
+                'usable_quantity' => $revision->usable_quantity,
                 'allergen_state' => $revision->allergen_state,
                 'units' => DB::table('raw_material_revision_units')->where('revision_id', $revision->id)
                     ->orderBy('unit_code')->get()->map(fn (object $unit): array => [
@@ -1510,7 +1815,9 @@ final class RawMaterialService
         return [
             'id' => $material->id,
             'code' => $material->code,
+            'sku' => $material->code,
             'lifecycle_state' => $material->lifecycle_state,
+            'version' => $material->edit_version,
             'approved_revision_id' => $material->approved_revision_id,
             'revision' => $revisionData,
         ];

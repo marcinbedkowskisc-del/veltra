@@ -40,6 +40,7 @@ try {
                 $context,
                 $materialId,
                 'Concurrent approval test',
+                DB::table('raw_materials')->where('id', $materialId)->value('edit_version'),
             ),
         ],
         'revoke' => [

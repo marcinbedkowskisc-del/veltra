@@ -932,6 +932,16 @@ final class RawMaterialCommercialService
                 if (($input['expected_event_no'] ?? -1) !== $latestNo) {
                     $this->conflict('RAW_MATERIAL_VERSION_CONFLICT', 'Historia ceny zmieniła się. Odśwież widok i spróbuj ponownie.');
                 }
+                $nominal = DB::table('raw_material_revisions')->where('id', $material->approved_revision_id)->value('nominal_quantity');
+                if (isset($input['net_pln_per_package'])) {
+                    if ($nominal === null) {
+                        throw ValidationException::withMessages(['net_pln_per_package' => ['Cena opakowania wymaga zatwierdzonej ilości nominalnej.']]);
+                    }
+                    $input['net_pln_per_base_unit'] = (string) DB::scalar(
+                        'SELECT raw_materials_round_half_even_v1(?::numeric / ?::numeric, 14)',
+                        [$input['net_pln_per_package'], $nominal],
+                    );
+                }
                 $id = Str::uuid()->toString();
                 $event = [
                     'id' => $id,
@@ -941,6 +951,7 @@ final class RawMaterialCommercialService
                     'event_type' => $input['event_type'],
                     'effective_from' => $input['effective_from'],
                     'net_pln_per_base_unit' => $input['net_pln_per_base_unit'] ?? null,
+                    'net_pln_per_package' => $input['net_pln_per_package'] ?? null,
                     'reason_code' => $input['reason_code'],
                     'recorded_by' => $actor->id,
                     'operation_id' => $operationId,
@@ -958,6 +969,27 @@ final class RawMaterialCommercialService
                     if (! $matchesCalculatedPrice) {
                         $this->conflict('RAW_MATERIAL_REFERENCE_PRICE_CALCULATION_MISMATCH',
                             'Cena referencyjna nie zgadza się z wybraną ofertą i kursem.');
+                    }
+                }
+                if (! filled($input['source_offer_event_id'] ?? null)) {
+                    $previous = DB::table('raw_material_reference_price_events')
+                        ->where('organization_id', $actor->organization_id)->where('raw_material_id', $materialId)
+                        ->where('effective_from', '<=', $input['effective_from'])
+                        ->orderByDesc('effective_from')->orderByDesc('event_no')->first();
+                    $sameValue = $previous && ($nominal !== null
+                        ? DB::scalar('SELECT coalesce(?::numeric, ?::numeric * ?::numeric) IS NOT DISTINCT FROM coalesce(?::numeric, ?::numeric * ?::numeric)', [
+                            $previous->net_pln_per_package, $previous->net_pln_per_base_unit, $nominal,
+                            $event['net_pln_per_package'], $event['net_pln_per_base_unit'], $nominal,
+                        ])
+                        : DB::scalar('SELECT ?::numeric IS NOT DISTINCT FROM ?::numeric', [
+                            $previous->net_pln_per_base_unit, $event['net_pln_per_base_unit'],
+                        ]));
+                    if ($previous && $previous->event_type === $event['event_type'] && $sameValue) {
+                        $this->audit($actor, $context, $operationId, 'RAW_MATERIAL_REFERENCE_PRICE', $previous->id,
+                            'REFERENCE_PRICE_UNCHANGED', null, ['raw_material_id' => $materialId, 'event_no' => $previous->event_no],
+                            $input['reason_code']);
+
+                        return ['data' => $this->presentReferencePrice($previous), 'changed' => false];
                     }
                 }
                 DB::table('raw_material_reference_price_events')->insert($event);
@@ -1506,6 +1538,7 @@ final class RawMaterialCommercialService
             'effective_from' => $row->effective_from,
             'net_pln_per_base_unit' => $row->net_pln_per_base_unit === null
                 ? null : (string) $row->net_pln_per_base_unit,
+            'net_pln_per_package' => $row->net_pln_per_package === null ? null : (string) $row->net_pln_per_package,
             'currency_code' => 'PLN',
             'reason_code' => $row->reason_code,
             'exchange_rate_event_id' => $row->exchange_rate_event_id,

@@ -48,10 +48,15 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Process;
 use Tests\AuthorizationTestCase;
+use Tests\Concerns\RawCatalogStage3eB1Tests;
+use Tests\Concerns\RawEditingStage3eB2Tests;
 use Tests\Support\ModuleCatalogFixtures;
 
 class RawMaterialsTest extends AuthorizationTestCase
 {
+    use RawCatalogStage3eB1Tests;
+    use RawEditingStage3eB2Tests;
+
     private Location $location;
 
     private User $bootstrapAdministrator;
@@ -86,6 +91,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_stage2e7_integrated_catalog_pricing_and_as_of_exports(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_imports');
         Storage::fake('raw_material_csv_exports');
         $category = $this->category();
@@ -131,10 +137,10 @@ class RawMaterialsTest extends AuthorizationTestCase
             $this->attestWorkingRevision($material->id);
             $this->selectRawMaterialApiContext($this->steward);
             $this->actingAs($this->steward, 'web')
-                ->postJson('/api/v1/raw-materials/'.$material->id.'/submit')
+                ->postJson('/api/v1/raw-materials/'.$material->id.'/submit', headers: ['If-Match' => $this->rawVersion($material->id)])
                 ->assertOk();
             $this->actingAs($this->steward, 'web')
-                ->postJson('/api/v1/raw-materials/'.$material->id.'/approve', ['reason' => 'Zatwierdzenie testu integracyjnego'])
+                ->postJson('/api/v1/raw-materials/'.$material->id.'/approve', ['reason' => 'Zatwierdzenie testu integracyjnego'], ['If-Match' => $this->rawVersion($material->id)])
                 ->assertOk();
         }
 
@@ -357,7 +363,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->update(['sku' => 'INT-000006']));
     }
 
-    public function test_sku_counters_are_scoped_to_each_organization(): void
+    public function test_raw_sku_is_unique_in_the_installation_even_if_organization_constraint_is_bypassed(): void
     {
         $setup = DB::connection('pgsql_setup');
         $setup->statement('ALTER TABLE public.organizations DROP CONSTRAINT organizations_single_installation_unique');
@@ -385,17 +391,16 @@ class RawMaterialsTest extends AuthorizationTestCase
                     Str::uuid()->toString(),
                 ),
             ));
-            $this->assertSame('RAW-000001', DB::transaction(
-                fn (): string => $allocation->allocateNext(
-                    $foreignActor,
-                    SkuPrefix::Raw,
-                    Str::uuid()->toString(),
-                ),
-            ));
+            try {
+                DB::transaction(fn (): string => $allocation->allocateNext($foreignActor, SkuPrefix::Raw, Str::uuid()->toString()));
+                $this->fail('Pełny RAW SKU powtórzył się w instalacji.');
+            } catch (QueryException $exception) {
+                $this->assertSame('23505', $exception->errorInfo[0]);
+            }
             $this->assertSame(1, DB::table('organization_sku_assignments')
                 ->where('organization_id', $this->steward->organization_id)
                 ->where('sku', 'RAW-000001')->count());
-            $this->assertSame(1, DB::table('organization_sku_assignments')
+            $this->assertSame(0, DB::table('organization_sku_assignments')
                 ->where('organization_id', $foreignOrganization->id)
                 ->where('sku', 'RAW-000001')->count());
         } finally {
@@ -408,6 +413,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_import_records_metadata_baseline_and_only_genuine_history_changes(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $material = $this->activeCsvImportMaterial('Składnik do importu CSV');
         $imports = app(RawMaterialCsvImportPersistenceService::class);
         $initial = $this->csvImportRow($material, [
@@ -573,6 +579,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_same_date_conflict_rejects_the_whole_batch_without_writing_history(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $categoryId = $this->category()['id'];
         $firstMaterial = $this->activeCsvImportMaterial('Pierwszy składnik CSV', $categoryId);
         $secondMaterial = $this->activeCsvImportMaterial('Drugi składnik CSV', $categoryId);
@@ -632,6 +639,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_import_history_requires_signed_runtime_mutations_and_composite_tenant_references(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $organizationId = $this->steward->organization_id;
         $actorId = $this->steward->id;
         $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('raw_material_import_batches')->insert([
@@ -937,7 +945,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('raw_material_catalog_import_rows')->count());
     }
 
-    public function test_catalog_csv_import_is_tenant_scoped_and_can_reserve_the_same_sku_in_another_organization(): void
+    public function test_catalog_csv_import_is_tenant_scoped_and_cannot_duplicate_an_installation_sku(): void
     {
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
@@ -989,8 +997,13 @@ class RawMaterialsTest extends AuthorizationTestCase
                 );
 
                 $this->assertTrue($preview['can_commit']);
-                $workflow->commit($this->steward, $this->location, $preview['preview_id'], 'catalog-tenant-sku-key-01', true);
-                $this->assertSame(1, DB::table('raw_materials')
+                try {
+                    $workflow->commit($this->steward, $this->location, $preview['preview_id'], 'catalog-tenant-sku-key-01', true);
+                    $this->fail('Import powtórzył pełny SKU instalacji.');
+                } catch (QueryException $exception) {
+                    $this->assertSame('23505', $exception->errorInfo[0]);
+                }
+                $this->assertSame(0, DB::table('raw_materials')
                     ->where('organization_id', $this->steward->organization_id)->where('code', $sku)->count());
                 $this->assertSame(1, DB::table('organization_sku_assignments')
                     ->where('organization_id', $foreignOrganizationId)->where('sku', $sku)->count());
@@ -1135,6 +1148,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_http_preview_commit_is_private_normalized_idempotent_and_audited(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_imports');
         $material = $this->activeCsvWorkflowMaterial('Mąka; drobna');
         $this->selectRawMaterialApiContext($this->steward);
@@ -1193,6 +1207,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_reports_invalid_ingredients_and_blocks_atomic_commit(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_imports');
         $categoryId = $this->category()['id'];
         $draftId = $this->declaredMaterial($categoryId, 'Szkic CSV', materialCode: 'SUR-000099');
@@ -1222,6 +1237,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_checks_exact_name_units_and_half_even_conversion_with_periods(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_imports');
         $categoryId = $this->category()['id'];
         $mass = $this->activeCsvWorkflowMaterial('Masa CSV', categoryId: $categoryId);
@@ -1291,6 +1307,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_detects_state_race_and_readiness_gate_blocks_http(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_imports');
         $material = $this->activeCsvWorkflowMaterial('Składnik wyścigu CSV');
         $this->selectRawMaterialApiContext($this->steward);
@@ -1572,7 +1589,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Nazwa oczekującej rewizji',
             'description' => 'Tajny opis roboczy',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($raw['id']));
         $this->selectRawMaterialApiContext($this->steward);
 
         DB::enableQueryLog();
@@ -1716,6 +1733,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_reference_price_export_uses_independent_as_of_histories_and_exact_decimals(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         Storage::fake('raw_material_csv_exports');
         $categoryId = $this->category()['id'];
         $material = $this->activeCsvWorkflowMaterial(
@@ -2169,15 +2187,15 @@ class RawMaterialsTest extends AuthorizationTestCase
             'base_unit_code' => 'g',
         ]);
         $activeId = $this->declaredMaterial($category['id'], 'Materiał zatwierdzony');
-        $this->rawMaterialService->submit($this->steward, $this->location, $activeId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $activeId, 'Pierwsze zatwierdzenie');
+        $this->rawMaterialService->submit($this->steward, $this->location, $activeId, expectedVersion: $this->rawVersion($activeId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $activeId, 'Pierwsze zatwierdzenie', expectedVersion: $this->rawVersion($activeId));
         $this->rawMaterialService->revise($this->steward, $this->location, $activeId, [
             'category_id' => $category['id'],
             'name' => 'Oczekująca poufna zmiana',
             'description' => 'Nieopublikowany opis',
             'base_unit_code' => 'g',
-        ]);
-        $this->rawMaterialService->submit($this->steward, $this->location, $activeId);
+        ], expectedVersion: $this->rawVersion($activeId));
+        $this->rawMaterialService->submit($this->steward, $this->location, $activeId, expectedVersion: $this->rawVersion($activeId));
 
         $viewer = $this->user('raw-material-view-only@example.test');
         app(MembershipService::class)->assign($viewer, $this->location);
@@ -2224,24 +2242,24 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Poprawiony szkic',
             'description' => 'Pierwsza edycja',
             'base_unit_code' => 'g',
-        ])->assertOk()->assertJsonPath('data.revision.revision_no', 2)
+        ], ['If-Match' => $this->rawVersion($material['id'])])->assertOk()->assertJsonPath('data.revision.revision_no', 2)
             ->assertJsonPath('data.revision.name', 'Poprawiony szkic');
         $this->assertSame('Szkic do edycji', DB::table('raw_material_revisions')
             ->where('id', $originalRevisionId)->value('name'));
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
         $this->rawMaterialService->returnForChanges(
             $this->steward,
             $this->location,
             $material['id'],
             'Doprecyzuj opis',
-        );
+            expectedVersion: $this->rawVersion($material['id']));
         $returnedRevisionId = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
         $this->rawMaterialService->revise($this->steward, $this->location, $material['id'], [
             'category_id' => $category['id'],
             'name' => 'Poprawiony szkic ponownie',
             'description' => 'Druga edycja',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
 
         $revisions = $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']);
         $this->assertCount(3, $revisions);
@@ -2258,8 +2276,8 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Materiał przed zmianą');
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsze zatwierdzenie');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsze zatwierdzenie', expectedVersion: $this->rawVersion($materialId));
         $approvedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
 
         $this->rawMaterialService->revise($this->steward, $this->location, $materialId, [
@@ -2267,7 +2285,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Materiał po zmianie',
             'description' => 'Zmiana oczekuje na zatwierdzenie',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($materialId));
         $unattestedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
         $this->assertNotSame($approvedRevisionId, $unattestedRevisionId);
         $this->assertSame('DECLARED', DB::table('raw_material_revisions')
@@ -2278,10 +2296,10 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->attestWorkingRevision($materialId);
         $pendingRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('working_revision_id');
         $this->assertNotSame($unattestedRevisionId, $pendingRevisionId);
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
         $this->assertSame($approvedRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id'));
         $this->assertSame($pendingRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('pending_revision_id'));
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowne zatwierdzenie');
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowne zatwierdzenie', expectedVersion: $this->rawVersion($materialId));
 
         $this->assertSame($pendingRevisionId, DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id'));
         $this->assertSame('Materiał przed zmianą', DB::table('raw_material_revisions')
@@ -2346,7 +2364,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Poufna wersja V2',
             'description' => 'Treść oczekująca na zatwierdzenie',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $unattestedV2Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
         $this->assertSame($v1Id, $this->rawMaterialService
             ->show($this->steward, $restaurant, $material['id'])['revision']['id']);
@@ -2375,7 +2393,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'niezatwierdzona-v2.txt',
             'synthetic pending v2',
         );
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
 
         $this->assertSame([$v2Id, $unattestedV2Id, $v1Id], array_column(
             $this->rawMaterialService->revisions($this->steward, $this->location, $material['id']),
@@ -2434,18 +2452,18 @@ class RawMaterialsTest extends AuthorizationTestCase
             $this->location,
             $material['id'],
             'Regresja rewizji oczekującej',
-        );
+            expectedVersion: $this->rawVersion($material['id']));
         $this->assertSame($v1Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
         try {
-            $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Nieprawidłowa próba');
+            $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Nieprawidłowa próba', expectedVersion: $this->rawVersion($material['id']));
             $this->fail('A returned revision was approved without resubmission.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_APPROVAL_INVALID', $exception->errorCode);
         }
         $this->assertSame($v1Id, $this->rawMaterialService
             ->show($this->steward, $restaurant, $material['id'])['revision']['id']);
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
-        $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie wersji V2');
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
+        $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie wersji V2', expectedVersion: $this->rawVersion($material['id']));
         $this->assertSame($v2Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
         $this->assertSame([$v1Id], array_column(
             $commercial->productRevisions($this->steward, $this->location, $productId)['data'],
@@ -2505,10 +2523,10 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Materiał V2',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $this->attestWorkingRevision($material['id']);
         $v2Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
 
         $processes = [];
         try {
@@ -2544,7 +2562,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(['approved', 'denied'], $statuses);
         $this->assertSame(1, count(array_filter(
             $approvalResults,
-            fn (array $result): bool => ($result['code'] ?? null) === 'RAW_MATERIAL_APPROVAL_INVALID',
+            fn (array $result): bool => ($result['code'] ?? null) === 'RAW_MATERIAL_VERSION_CONFLICT',
         )));
         $this->assertSame($v2Id, DB::table('raw_materials')->where('id', $material['id'])->value('approved_revision_id'));
         $this->assertSame(2, DB::table('raw_material_revision_approval_events')
@@ -2554,10 +2572,10 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Materiał V3',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $this->attestWorkingRevision($material['id']);
         $v3Id = DB::table('raw_materials')->where('id', $material['id'])->value('working_revision_id');
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
 
         $processes = [];
         DB::beginTransaction();
@@ -2725,11 +2743,11 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Olej rzepakowy',
             'base_unit_code' => 'ml',
         ]);
-        $this->rawMaterialService->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
         $this->assertSame('VERIFICATION', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
 
         try {
-            $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Test akceptacji');
+            $this->rawMaterialService->approve($this->steward, $this->location, $material['id'], 'Test akceptacji', expectedVersion: $this->rawVersion($material['id']));
             $this->fail('An unknown allergen declaration was approved.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', $exception->errorCode);
@@ -2747,14 +2765,14 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Sól morska');
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsza akceptacja');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Pierwsza akceptacja', expectedVersion: $this->rawVersion($materialId));
         $approvedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
         $code = DB::table('raw_materials')->where('id', $materialId)->value('code');
 
-        $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola bezpieczeństwa');
+        $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola bezpieczeństwa', expectedVersion: $this->rawVersion($materialId));
         $this->assertSame('BLOCKED', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
-        $this->rawMaterialService->unblock($this->steward, $this->location, $materialId, 'Zakończono kontrolę');
+        $this->rawMaterialService->unblock($this->steward, $this->location, $materialId, 'Zakończono kontrolę', expectedVersion: $this->rawVersion($materialId));
         $unblockEvent = DB::table('raw_material_audit_events')
             ->where('subject_id', $materialId)->where('event_code', 'UNBLOCKED')->first();
         $this->assertNotNull($unblockEvent);
@@ -2762,21 +2780,21 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame('ACCEPTED', $unblockEvent->outcome);
         $this->assertNotNull($unblockEvent->transaction_id);
         $this->assertNotSame($unblockEvent->before_hash, $unblockEvent->after_hash);
-        $this->rawMaterialService->archive($this->steward, $this->location, $materialId, 'Wycofanie z katalogu');
-        $this->rawMaterialService->restore($this->steward, $this->location, $materialId, 'Ponowna walidacja');
+        $this->rawMaterialService->archive($this->steward, $this->location, $materialId, 'Wycofanie z katalogu', expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->restore($this->steward, $this->location, $materialId, 'Ponowna walidacja', expectedVersion: $this->rawVersion($materialId));
         $this->assertSame('VERIFICATION', DB::table('raw_materials')->where('id', $materialId)->value('lifecycle_state'));
         $this->rawMaterialService->returnForChanges(
             $this->steward,
             $this->location,
             $materialId,
             'Wymagany nowy atest po przywróceniu',
-        );
+            expectedVersion: $this->rawVersion($materialId));
         $returnedMaterial = DB::table('raw_materials')->where('id', $materialId)->first();
         $this->assertSame('ACTIVE', $returnedMaterial->lifecycle_state);
         $this->assertSame($approvedRevisionId, $returnedMaterial->approved_revision_id);
         $this->attestWorkingRevision($materialId);
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowna akceptacja');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Ponowna akceptacja', expectedVersion: $this->rawVersion($materialId));
 
         $this->assertSame($code, DB::table('raw_materials')->where('id', $materialId)->value('code'));
         $this->assertSame(3, DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->count());
@@ -2792,9 +2810,9 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Materiał do cofnięcia transakcji');
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie');
-        $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie', expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->block($this->steward, $this->location, $materialId, 'Kontrola', expectedVersion: $this->rawVersion($materialId));
         $auditCount = DB::table('raw_material_audit_events')->where('subject_id', $materialId)->count();
 
         try {
@@ -2804,7 +2822,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                     $this->location,
                     $materialId,
                     'Operacja zostanie wycofana',
-                );
+                    expectedVersion: $this->rawVersion($materialId));
                 throw new \RuntimeException('rollback marker');
             });
             $this->fail('Oczekiwano wycofania transakcji testowej.');
@@ -2820,8 +2838,8 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Produkt do cofnięcia transakcji');
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzenie', expectedVersion: $this->rawVersion($materialId));
         $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
         $commercial = app(RawMaterialCommercialService::class);
         $supplierId = $commercial->createSupplier($this->steward, $this->location, [
@@ -3022,8 +3040,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             'to_base_factor' => '0.001000000000',
             'basis' => null,
         ]]);
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza', expectedVersion: $this->rawVersion($materialId));
         $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
         $this->selectContext($this->steward);
 
@@ -3172,10 +3190,11 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_nbp_as_of_overrides_half_even_restatements_and_idempotency(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Cena referencyjna');
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona cena');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona cena', expectedVersion: $this->rawVersion($materialId));
         $this->selectContext($this->steward);
         Http::fake([
             'https://api.nbp.pl/*' => Http::response(
@@ -3365,6 +3384,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_reference_price_view_does_not_disclose_purchasing_source_without_cost_permission(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $fixture = $this->createCommercialOfferFixture('Cena z oferty', 'SOURCE_01', 'SOURCE-1', 'source-disclosure');
         $commercial = app(RawMaterialCommercialService::class);
         $commercial->setReferencePrice($this->steward, $this->location, $fixture['material_id'], [
@@ -3405,7 +3425,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $fixture = $this->createCommercialOfferFixture('Blokowany surowiec', 'BLOCKED_01', 'BLOCKED-1', 'blocked');
         $commercial = app(RawMaterialCommercialService::class);
-        $this->rawMaterialService->block($this->steward, $this->location, $fixture['material_id'], 'Blokada testowa');
+        $this->rawMaterialService->block($this->steward, $this->location, $fixture['material_id'], 'Blokada testowa', expectedVersion: $this->rawVersion($fixture['material_id']));
 
         $this->postJson('/api/v1/raw-materials/supplier-products/'.$fixture['product_id'].'/offers', [], [
             'Idempotency-Key' => 'blocked-material-offer-0001',
@@ -3447,6 +3467,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_archived_supplier_cannot_be_used_as_new_reference_price_source_in_api_or_postgresql(): void
     {
+        $this->role($this->steward, BusinessRole::Administrator);
         $fixture = $this->createCommercialOfferFixture('Archiwizowany dostawca', 'ARCHIVED_01', 'ARCHIVED-1', 'archived');
         $commercial = app(RawMaterialCommercialService::class);
         $commercial->archiveSupplier(
@@ -3908,7 +3929,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $category = $this->category();
         $pendingId = $this->declaredMaterial($category['id'], 'Surowiec oczekujący zatwierdzenia');
-        $this->rawMaterialService->submit($this->steward, $this->location, $pendingId);
+        $this->rawMaterialService->submit($this->steward, $this->location, $pendingId, expectedVersion: $this->rawVersion($pendingId));
         $restaurant = $this->activeRestaurant('RSHARE_PENDING');
 
         try {
@@ -3932,7 +3953,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             $this->location,
             $material['id'],
             'Archiwizacja testowa przed cofnięciem share',
-        );
+            expectedVersion: $this->rawVersion($material['id']));
         $this->assertFalse(app(RawMaterialLocationSharePolicy::class)
             ->canConsume($this->steward, $restaurant, $material['id']));
         $administration->revoke($this->bootstrapAdministrator, $this->location, $material['id'], $restaurant->id);
@@ -4343,7 +4364,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                 $this->location,
                 $archivedMaterial['id'],
                 'Test współbieżności bulk share',
-            ),
+                expectedVersion: $this->rawVersion($archivedMaterial['id'])),
         );
         $this->assertSame('REJECTED', $archiveResult['data']['outcome']);
         $this->assertContains('MATERIAL_NOT_ACTIVE', $archiveResult['data']['data']['invalid_targets'][0]['reasons']);
@@ -4527,8 +4548,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             DB::table('raw_materials')->where('organization_id', $this->steward->organization_id)->count() + 99,
         );
         $materialId = $this->declaredMaterial($categoryId, $materialName, materialCode: $materialCode);
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Zatwierdzona baza', expectedVersion: $this->rawVersion($materialId));
         $materialRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
         $this->selectContext($this->steward);
 
@@ -4583,8 +4604,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->max('sequence_number');
         $code = 'SUR-'.sprintf('%06d', max(99, $lastSequence + 1));
         $materialId = $this->declaredMaterial($categoryId, $name, materialCode: $code);
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa CSV');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa CSV', expectedVersion: $this->rawVersion($materialId));
 
         return [
             'id' => $materialId,
@@ -4624,8 +4645,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             $baseUnitDimension,
             $description,
         );
-        $this->rawMaterialService->submit($this->steward, $this->location, $materialId);
-        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa importu CSV');
+        $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
+        $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa importu CSV', expectedVersion: $this->rawVersion($materialId));
 
         return [
             'id' => $materialId,
@@ -4839,6 +4860,16 @@ class RawMaterialsTest extends AuthorizationTestCase
     ): void {
         $actor ??= $this->steward;
         $context ??= $this->location;
+        $catalogVersionId = $this->publishedAllergenCatalogFixture();
+        $this->rawMaterialService->reviseAllergenDeclaration($actor, $context, $materialId, [
+            'status' => 'NO_KNOWN_ALLERGENS',
+            'catalog_version_id' => $catalogVersionId,
+            'items' => [],
+        ], expectedVersion: $this->rawVersion($materialId));
+    }
+
+    private function publishedAllergenCatalogFixture(): string
+    {
         $catalogVersionId = Str::uuid()->toString();
         $versionNumber = (int) DB::connection('pgsql_setup')
             ->table('raw_material_allergen_catalog_versions')->max('version_number') + 1;
@@ -4859,11 +4890,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                 ->update(['status' => 'PUBLISHED', 'published_at' => now()]);
         });
 
-        $this->rawMaterialService->reviseAllergenDeclaration($actor, $context, $materialId, [
-            'status' => 'NO_KNOWN_ALLERGENS',
-            'catalog_version_id' => $catalogVersionId,
-            'items' => [],
-        ]);
+        return $catalogVersionId;
     }
 
     private function startRevisionProcess(

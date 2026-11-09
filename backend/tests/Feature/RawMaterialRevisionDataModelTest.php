@@ -122,7 +122,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => 'Mieszanka testowa poprawiona',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $revisedId = $revised['revision']['id'];
         $revisedRevision = DB::table('raw_material_revisions')->where('id', $revisedId)->first();
         $this->assertSame(2, DB::table('raw_material_revision_allergen_declarations')
@@ -215,8 +215,8 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             'storage_variants' => [$this->storageVariant()],
         ]);
         $revisionId = $material['revision']['id'];
-        $this->rawMaterials->submit($this->steward, $this->location, $material['id']);
-        $this->rawMaterials->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie testowe');
+        $this->rawMaterials->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
+        $this->rawMaterials->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie testowe', expectedVersion: $this->rawVersion($material['id']));
 
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('raw_material_revision_storage_variants')
             ->where('revision_id', $revisionId)->update(['name_pl' => 'Zmiana po zatwierdzeniu']));
@@ -241,7 +241,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => 'Historyczny materiał po rewizji',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($legacy['material_id']));
         $v2RevisionId = $v2['revision']['id'];
         $v2Revision = DB::table('raw_material_revisions')->where('id', $v2RevisionId)->first();
         $this->assertSame(2, (int) $v2Revision->content_hash_version);
@@ -250,14 +250,14 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             ->where('revision_id', $v2RevisionId)->count());
         $this->assertRevisionHashMatches($v2Revision);
 
-        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id']);
+        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id'], expectedVersion: $this->rawVersion($legacy['material_id']));
         try {
             $this->rawMaterials->approve(
                 $this->steward,
                 $this->location,
                 $legacy['material_id'],
                 'Próba zatwierdzenia bez nowego atestu',
-            );
+                expectedVersion: $this->rawVersion($legacy['material_id']));
             $this->fail('A v2 revision inherited DECLARED state without an exact-revision attestation.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', $exception->errorCode);
@@ -268,7 +268,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             $this->location,
             $legacy['material_id'],
             'Wymagany nowy atest',
-        );
+            expectedVersion: $this->rawVersion($legacy['material_id']));
         $catalogVersionId = $this->publishedCatalog([
             ['allergen_code' => 'TEST_WHEAT', 'name_pl' => 'Pszenica'],
         ]);
@@ -281,17 +281,17 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
                 'catalog_version_id' => $catalogVersionId,
                 'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
             ],
-        );
+            expectedVersion: $this->rawVersion($legacy['material_id']));
         $attestedRevisionId = $attested['revision']['id'];
         $attestedRevision = DB::table('raw_material_revisions')->where('id', $attestedRevisionId)->first();
         $this->assertRevisionHashMatches($attestedRevision);
-        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id']);
+        $this->rawMaterials->submit($this->steward, $this->location, $legacy['material_id'], expectedVersion: $this->rawVersion($legacy['material_id']));
         $approved = $this->rawMaterials->approve(
             $this->steward,
             $this->location,
             $legacy['material_id'],
             'Zatwierdzenie po jawnym atestowaniu',
-        );
+            expectedVersion: $this->rawVersion($legacy['material_id']));
 
         $this->assertSame($attestedRevisionId, $approved['approved_revision_id']);
         $this->assertSame($legacy['hash'], DB::table('raw_material_revisions')

@@ -107,9 +107,9 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             'status' => 'DECLARED',
             'catalog_version_id' => $catalogVersionId,
             'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
-        ]);
-        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
-        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Zatwierdzenie syntetycznego surowca');
+        ], expectedVersion: $this->rawVersion($this->materialId));
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
+        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Zatwierdzenie syntetycznego surowca', expectedVersion: $this->rawVersion($this->materialId));
         $this->rawMaterialRevisionId = DB::table('raw_materials')
             ->where('id', $this->materialId)
             ->value('approved_revision_id');
@@ -302,18 +302,18 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             'catalog_version_id' => DB::table('raw_material_revision_allergen_attestations')
                 ->where('revision_id', $this->rawMaterialRevisionId)->value('catalog_version_id'),
             'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'CROSS_CONTACT_POTENTIAL']],
-        ]);
+        ], expectedVersion: $this->rawVersion($this->materialId));
         $afterRawMaterialRevision = $this->assessments->history($this->steward, $this->location, $this->productId);
         $this->assertSame('PENDING', $afterRawMaterialRevision['status']);
         $this->assertFalse($afterRawMaterialRevision['assessment_context']['raw_material_revision_current']);
 
-        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
         $approved = $this->rawMaterials->approve(
             $this->steward,
             $this->location,
             $this->materialId,
             'Zatwierdzenie zmienionej deklaracji alergenów.',
-        );
+            expectedVersion: $this->rawVersion($this->materialId));
         $newRawMaterialRevisionId = $approved['approved_revision_id'];
         $newProductRevision = $this->commercial->reviseProduct($this->steward, $this->location, $this->productId, [
             'supplier_id' => $this->supplierId,
@@ -426,8 +426,8 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             ],
         ]);
         $this->materialId = $material['id'];
-        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
-        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Pierwsze zatwierdzenie');
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
+        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Pierwsze zatwierdzenie', expectedVersion: $this->rawVersion($this->materialId));
         $this->rawMaterialRevisionId = DB::table('raw_materials')
             ->where('id', $this->materialId)
             ->value('approved_revision_id');
@@ -476,15 +476,15 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             'name' => 'Nowa zatwierdzona rewizja surowca',
             'description' => $approved->description,
             'base_unit_code' => $approved->base_unit_code,
-        ]);
+        ], expectedVersion: $this->rawVersion($this->materialId));
         $catalogVersionId = $this->publishedCatalog();
         $this->rawMaterials->reviseAllergenDeclaration($this->steward, $this->location, $this->materialId, [
             'status' => 'DECLARED',
             'catalog_version_id' => $catalogVersionId,
             'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
-        ]);
-        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
-        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Aktualizacja syntetyczna');
+        ], expectedVersion: $this->rawVersion($this->materialId));
+        $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
+        $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Aktualizacja syntetyczna', expectedVersion: $this->rawVersion($this->materialId));
 
         $this->assertSame($this->rawMaterialRevisionId, $this->assessments
             ->history($this->steward, $this->location, $this->productId)['history'][0]['raw_material_revision_id']);

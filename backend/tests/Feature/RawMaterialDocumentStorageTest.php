@@ -317,7 +317,7 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => 'Nowa rewizja surowca',
             'base_unit_code' => 'g',
-        ]);
+        ], expectedVersion: $this->rawVersion($this->materialId));
         $second = $this->documents->appendVersion(
             $this->steward,
             $this->location,
@@ -474,9 +474,9 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
                 'status' => 'NO_KNOWN_ALLERGENS',
                 'catalog_version_id' => $catalogVersionId,
                 'items' => [],
-            ]);
-            $this->rawMaterials->submit($this->steward, $this->location, $this->materialId);
-            $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Testowa akceptacja surowca');
+            ], expectedVersion: $this->rawVersion($this->materialId));
+            $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
+            $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Testowa akceptacja surowca', expectedVersion: $this->rawVersion($this->materialId));
             $material = DB::table('raw_materials')->where('id', $this->materialId)
                 ->first(['lifecycle_state', 'approved_revision_id']);
         }

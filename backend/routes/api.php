@@ -137,11 +137,17 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::delete('/{material}/shares/{location}', [RawMaterialController::class, 'revokeShare'])
         ->whereUuid('material')->whereUuid('location');
     Route::get('/', [RawMaterialController::class, 'index']);
+    Route::post('/sku-reservations', [RawMaterialController::class, 'reserveSku'])->middleware('throttle:raw-sku');
     Route::post('/', [RawMaterialController::class, 'store']);
     Route::get('/categories', [RawMaterialController::class, 'categories']);
     Route::post('/categories', [RawMaterialController::class, 'storeCategory']);
     Route::patch('/categories/{category}', [RawMaterialController::class, 'renameCategory'])->whereUuid('category');
     Route::get('/{material}', [RawMaterialController::class, 'show'])->whereUuid('material');
+    Route::get('/{material}/editor', [RawMaterialController::class, 'editor'])->whereUuid('material');
+    Route::get('/{material}/completion', [RawMaterialController::class, 'completion'])->whereUuid('material');
+    Route::post('/{material}/validation/{section?}', [RawMaterialController::class, 'validateEdits'])
+        ->whereUuid('material')->whereIn('section', ['basic', 'allergens', 'storage']);
+    Route::get('/{material}/history', [RawMaterialController::class, 'history'])->whereUuid('material');
     Route::patch('/{material}/draft', [RawMaterialController::class, 'updateDraft'])->whereUuid('material');
     Route::get('/{material}/revisions', [RawMaterialController::class, 'revisions'])->whereUuid('material');
     Route::post('/{material}/submit', [RawMaterialController::class, 'submit'])->whereUuid('material');

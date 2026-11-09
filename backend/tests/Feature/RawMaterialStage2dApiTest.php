@@ -102,7 +102,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
                 'status' => 'DECLARED',
                 'catalog_version_id' => $draftCatalogId,
                 'items' => [['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT']],
-            ]);
+            ], expectedVersion: $this->rawVersion($material['id']));
             $this->fail('A draft allergen catalog version was accepted.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_ALLERGEN_CATALOG_UNAVAILABLE', $exception->errorCode);
@@ -115,7 +115,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
                 ['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT'],
                 ['allergen_code' => 'TEST_MILK', 'exposure_kind' => 'CROSS_CONTACT_POTENTIAL'],
             ],
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $declaredRevisionId = $declared['revision']['id'];
         $declaredRevision = DB::table('raw_material_revisions')->where('id', $declaredRevisionId)->first();
         $this->assertSame(2, (int) $declaredRevision->content_hash_version);
@@ -141,7 +141,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             'status' => 'NO_KNOWN_ALLERGENS',
             'catalog_version_id' => $catalogVersionId,
             'items' => [],
-        ]);
+        ], expectedVersion: $this->rawVersion($material['id']));
         $noKnownRevisionId = $noKnown['revision']['id'];
         $noKnownData = $this->rawMaterials->revisionStage2d(
             $this->steward,
@@ -168,9 +168,9 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             'status' => 'NO_KNOWN_ALLERGENS',
             'catalog_version_id' => $catalogVersionId,
             'items' => [],
-        ]);
-        $this->rawMaterials->submit($this->steward, $this->location, $material['id']);
-        $approved = $this->rawMaterials->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie testowe');
+        ], expectedVersion: $this->rawVersion($material['id']));
+        $this->rawMaterials->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
+        $approved = $this->rawMaterials->approve($this->steward, $this->location, $material['id'], 'Zatwierdzenie testowe', expectedVersion: $this->rawVersion($material['id']));
         $approvedRevisionId = $approved['approved_revision_id'];
         $approvedHash = DB::table('raw_material_revisions')->where('id', $approvedRevisionId)->value('content_hash');
 
@@ -179,7 +179,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             $this->location,
             $material['id'],
             [$this->storageVariant()],
-        );
+            expectedVersion: $this->rawVersion($material['id']));
         $draftRevisionId = $updated['revision']['id'];
         $draft = DB::table('raw_material_revisions')->where('id', $draftRevisionId)->first();
         $this->assertSame($approvedRevisionId, $updated['approved_revision_id']);
@@ -202,14 +202,14 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             $initialRevisionId,
         )['storage_variants']);
 
-        $this->rawMaterials->submit($this->steward, $this->location, $material['id']);
+        $this->rawMaterials->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
         try {
             $this->rawMaterials->reviseStorageVariants(
                 $this->steward,
                 $this->location,
                 $material['id'],
                 [],
-            );
+                expectedVersion: $this->rawVersion($material['id']));
             $this->fail('A submitted revision was editable.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_REVISION_NOT_EDITABLE', $exception->errorCode);
@@ -245,7 +245,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             $this->rawMaterials->reviseAllergenDeclaration($viewer, $this->location, $material['id'], [
                 'status' => 'UNKNOWN',
                 'items' => [],
-            ]);
+            ], expectedVersion: $this->rawVersion($material['id']));
             $this->fail('A user without the explicit allergen permission changed revision data.');
         } catch (AuthorizationException) {
             $this->assertSame(1, DB::table('raw_material_revisions')
@@ -286,7 +286,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
                 $this->location,
                 $material['id'],
                 [$this->storageVariant()],
-            );
+                expectedVersion: $this->rawVersion($material['id']));
             $this->fail('A revision succeeded despite a failing audit insert.');
         } catch (QueryException $exception) {
             $this->assertSame('P0001', $exception->errorInfo[0] ?? null);

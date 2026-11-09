@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Api\V1;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialCompatibilityAssessmentService;
+use App\Domain\RawMaterials\RawMaterialHistoryService;
 use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
+use App\Domain\RawMaterials\RawMaterialSkuReservationService;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ListRawMaterialsRequest;
 use App\Http\Requests\RawMaterialAllergenDeclarationRequest;
@@ -22,6 +24,7 @@ use App\Http\Requests\RawMaterialExchangeRateOverrideRequest;
 use App\Http\Requests\RawMaterialExchangeRateQueryRequest;
 use App\Http\Requests\RawMaterialExchangeRateRequest;
 use App\Http\Requests\RawMaterialGrantRequest;
+use App\Http\Requests\RawMaterialHistoryRequest;
 use App\Http\Requests\RawMaterialOfferPriceRequest;
 use App\Http\Requests\RawMaterialOfferRequest;
 use App\Http\Requests\RawMaterialProductListRequest;
@@ -33,6 +36,7 @@ use App\Http\Requests\RawMaterialReferencePriceRequest;
 use App\Http\Requests\RawMaterialRestatementRequest;
 use App\Http\Requests\RawMaterialShareRequest;
 use App\Http\Requests\RawMaterialShareRevocationRequest;
+use App\Http\Requests\RawMaterialSkuReservationRequest;
 use App\Http\Requests\RawMaterialStorageVariantsRequest;
 use App\Http\Requests\RawMaterialSupplierCorrectionRequest;
 use App\Http\Requests\RawMaterialSupplierListRequest;
@@ -43,6 +47,33 @@ use Illuminate\Http\Request;
 
 class RawMaterialController extends Controller
 {
+    public function editor(Request $request, string $material, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->editor($request->user(), $request->attributes->get('operating_location'), $material)]);
+    }
+
+    public function completion(Request $request, string $material, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->completion($request->user(), $request->attributes->get('operating_location'), $material)]);
+    }
+
+    public function validateEdits(Request $request, string $material, RawMaterialService $service, string $section = 'basic'): JsonResponse
+    {
+        return response()->json(['data' => $service->validateEdits($request->user(), $request->attributes->get('operating_location'), $material, $request->all(), $section)]);
+    }
+
+    public function history(RawMaterialHistoryRequest $request, string $material, RawMaterialHistoryService $service): JsonResponse
+    {
+        return response()->json($service->history($request->user(), $request->attributes->get('operating_location'), $material, $request->validated()));
+    }
+
+    public function reserveSku(RawMaterialSkuReservationRequest $request, RawMaterialSkuReservationService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->reserve(
+            $request->user(), $request->attributes->get('operating_location'), $request->idempotencyKey(),
+        )], 201);
+    }
+
     public function suppliers(RawMaterialSupplierListRequest $request, RawMaterialCommercialService $service): JsonResponse
     {
         return response()->json($service->suppliers(
@@ -466,6 +497,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated(),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -479,6 +511,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('variants'),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -498,6 +531,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated(),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -507,6 +541,7 @@ class RawMaterialController extends Controller
             $request->user(),
             $request->attributes->get('operating_location'),
             $material,
+            $request->header('If-Match'),
         )]);
     }
 
@@ -517,6 +552,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason') ?? '',
+            $request->header('If-Match'),
         )]);
     }
 
@@ -527,6 +563,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason'),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -537,6 +574,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason'),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -547,6 +585,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason'),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -557,6 +596,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason'),
+            $request->header('If-Match'),
         )]);
     }
 
@@ -567,6 +607,7 @@ class RawMaterialController extends Controller
             $request->attributes->get('operating_location'),
             $material,
             $request->validated('reason'),
+            $request->header('If-Match'),
         )]);
     }
 

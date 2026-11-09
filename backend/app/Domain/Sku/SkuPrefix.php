@@ -11,7 +11,7 @@ enum SkuPrefix: string
 
     public function format(int $sequence): string
     {
-        if ($sequence < 1 || $sequence > 999999999) {
+        if ($sequence < 1 || $sequence > ($this === self::Raw ? 999999 : 999999999)) {
             throw new \InvalidArgumentException('Numer SKU jest poza dozwolonym zakresem.');
         }
 
@@ -26,6 +26,10 @@ enum SkuPrefix: string
 
         $sequence = (int) $matches[1];
 
-        return $sequence > 0 && $this->format($sequence) === $sku ? $sequence : null;
+        if ($sequence < 1 || ($this === self::Raw && $sequence > 999999)) {
+            return null;
+        }
+
+        return $this->format($sequence) === $sku ? $sequence : null;
     }
 }

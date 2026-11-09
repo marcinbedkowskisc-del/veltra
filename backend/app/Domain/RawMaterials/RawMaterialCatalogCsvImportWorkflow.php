@@ -487,7 +487,11 @@ final class RawMaterialCatalogCsvImportWorkflow
                         ];
                     }
                 } else {
-                    $statusCode = 'CREATE';
+                    if (preg_match('/\ARAW-(?!000000)[0-9]{6}\z/', $row['sku']) !== 1) {
+                        $error = ['code' => 'SKU_INVALID', 'message' => 'Nowy SKU RAW musi mieć dokładnie sześć cyfr w zakresie 000001–999999.'];
+                    } else {
+                        $statusCode = 'CREATE';
+                    }
                 }
             }
 
@@ -560,7 +564,7 @@ final class RawMaterialCatalogCsvImportWorkflow
             return ['code' => 'SKU_REQUIRED', 'message' => 'Pole SKU jest wymagane.'];
         }
         if (preg_match('/\ARAW-[0-9]{6,9}\z/', $row['sku']) !== 1) {
-            return ['code' => 'SKU_INVALID', 'message' => 'SKU musi mieć format RAW- z 6–9 cyframi.'];
+            return ['code' => 'SKU_INVALID', 'message' => 'SKU musi mieć format RAW-000001; istniejące historyczne numery pozostają obsługiwane.'];
         }
         if ($row['entity_type'] !== 'RAW') {
             return ['code' => 'ENTITY_TYPE_UNSUPPORTED', 'message' => 'W tej wersji import obsługuje wyłącznie entity_type RAW.'];

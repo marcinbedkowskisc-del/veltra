@@ -54,6 +54,20 @@ final class RawMaterialAuthorization
         ];
     }
 
+    /**
+     * @return array{permission: bool, context: bool}
+     */
+    public function evaluateEditCapability(User $actor, Location $context): array
+    {
+        [$freshActor, $freshContext] = $this->resolveActorContext($actor, $context);
+
+        return [
+            'permission' => $this->hasEffectiveGrant($freshActor, RawMaterialPermission::Edit),
+            'context' => ! RawMaterialPermission::Edit->requiresPrimaryCatalogContext()
+                || app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext),
+        ];
+    }
+
     public function hasEffectiveGrant(User $user, RawMaterialPermission $permission): bool
     {
         return $this->effectiveGrantIds($user, $permission) !== [];

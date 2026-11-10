@@ -20,8 +20,8 @@ export type RawMaterialCapabilities = {
   locationId: string
   readiness: 'READY' | 'NOT_READY'
   available: boolean
-  permissions: { create: boolean }
-  actions: { create: boolean }
+  permissions: { create: boolean; edit: boolean }
+  actions: { create: boolean; edit: boolean }
 }
 
 export type RawMaterialSkuReservation = {
@@ -80,9 +80,12 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     || (value.readiness !== 'READY' && value.readiness !== 'NOT_READY')
     || typeof value.available !== 'boolean'
     || !isRecord(value.permissions) || typeof value.permissions.create !== 'boolean'
+    || typeof value.permissions.edit !== 'boolean'
     || !isRecord(value.actions) || typeof value.actions.create !== 'boolean'
+    || typeof value.actions.edit !== 'boolean'
     || (value.available && value.readiness !== 'READY')
-    || (value.actions.create && (!value.permissions.create || !value.available))) {
+    || (value.actions.create && (!value.permissions.create || !value.available))
+    || (value.actions.edit && (!value.permissions.edit || !value.available))) {
     throw new Error('Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.')
   }
 
@@ -91,8 +94,8 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     locationId: value.location_id,
     readiness: value.readiness,
     available: value.available,
-    permissions: { create: value.permissions.create },
-    actions: { create: value.actions.create },
+    permissions: { create: value.permissions.create, edit: value.permissions.edit },
+    actions: { create: value.actions.create, edit: value.actions.edit },
   }
 }
 

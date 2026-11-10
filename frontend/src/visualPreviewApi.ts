@@ -233,8 +233,8 @@ export function installVisualPreviewApi(): void {
       location_id: '00000000-0000-4000-8000-000000000101',
       readiness: unavailable ? 'NOT_READY' : 'READY',
       available: !unavailable,
-      permissions: { create: authorized || mode === 'create-not-ready' },
-      actions: { create: authorized && !unavailable },
+      permissions: { create: authorized || mode === 'create-not-ready', edit: false },
+      actions: { create: authorized && !unavailable, edit: false },
     } })
   }
 

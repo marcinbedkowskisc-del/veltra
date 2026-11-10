@@ -16,8 +16,8 @@ describe('fetchRawMaterialCapabilities', () => {
         location_id: locationId,
         readiness: 'READY',
         available: true,
-        permissions: { create: true },
-        actions: { create: true },
+        permissions: { create: true, edit: true },
+        actions: { create: true, edit: true },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -27,13 +27,33 @@ describe('fetchRawMaterialCapabilities', () => {
       locationId,
       readiness: 'READY',
       available: true,
-      permissions: { create: true },
-      actions: { create: true },
+      permissions: { create: true, edit: true },
+      actions: { create: true, edit: true },
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/security/raw-materials/capabilities',
       expect.objectContaining({ method: 'GET', cache: 'no-store', credentials: 'same-origin' }),
     )
+  })
+
+  it('zachowuje rozdzielenie EDIT od CREATE i readiness', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        module: 'RAW_MATERIALS',
+        location_id: locationId,
+        readiness: 'NOT_READY',
+        available: false,
+        permissions: { create: false, edit: true },
+        actions: { create: false, edit: false },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(fetchRawMaterialCapabilities(locationId)).resolves.toMatchObject({
+      readiness: 'NOT_READY',
+      available: false,
+      permissions: { create: false, edit: true },
+      actions: { create: false, edit: false },
+    })
   })
 
   it.each([
@@ -46,8 +66,37 @@ describe('fetchRawMaterialCapabilities', () => {
       location_id: locationId,
       readiness: 'READY',
       available: true,
-      permissions: { create: true },
-      actions: { create: true },
+      permissions: { create: true, edit: true },
+      actions: { create: true, edit: true },
+      ...override,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: value }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(fetchRawMaterialCapabilities(locationId)).rejects.toThrow(
+      'Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.',
+    )
+  })
+
+  it.each([
+    ['brak permissions.edit', { permissions: { create: true } }],
+    ['brak actions.edit', { actions: { create: true } }],
+    ['akcja EDIT bez grantu', { permissions: { create: true, edit: false } }],
+    ['akcja EDIT przy NOT_READY', {
+      readiness: 'NOT_READY',
+      available: false,
+      actions: { create: false, edit: true },
+    }],
+  ])('odrzuca niekompletną lub niedozwoloną capability EDIT: %s', async (_label, override) => {
+    const value = {
+      module: 'RAW_MATERIALS',
+      location_id: locationId,
+      readiness: 'READY',
+      available: true,
+      permissions: { create: true, edit: true },
+      actions: { create: true, edit: true },
       ...override,
     }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: value }), {

@@ -11,6 +11,8 @@ import {
   fetchRawMaterialDetail,
   fetchRawMaterialRevisions,
   fetchSuppliers,
+  reserveRawMaterialSku,
+  createRawMaterial,
   type RawMaterialCapabilities,
 } from './api'
 import type { CatalogPage, CatalogQuery } from './catalog'
@@ -25,6 +27,8 @@ vi.mock('./api', () => ({
   fetchRawMaterialRevisions: vi.fn(),
   fetchRawMaterialCapabilities: vi.fn(),
   fetchSuppliers: vi.fn(),
+  reserveRawMaterialSku: vi.fn(),
+  createRawMaterial: vi.fn(),
 }))
 
 const materialA = '00000000-0000-4000-8000-000000000001'
@@ -115,6 +119,8 @@ const fetchRawMaterialDetailMock = vi.mocked(fetchRawMaterialDetail)
 const fetchRawMaterialRevisionsMock = vi.mocked(fetchRawMaterialRevisions)
 const fetchRawMaterialCapabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
 const fetchSuppliersMock = vi.mocked(fetchSuppliers)
+const reserveRawMaterialSkuMock = vi.mocked(reserveRawMaterialSku)
+const createRawMaterialMock = vi.mocked(createRawMaterial)
 const exportCatalogMock = vi.mocked(exportCatalog)
 const downloadCatalogExportMock = vi.mocked(downloadCatalogExport)
 let originalVisibilityDescriptor: PropertyDescriptor | undefined
@@ -129,8 +135,8 @@ beforeEach(() => {
     locationId,
     readiness: 'NOT_READY',
     available: false,
-    permissions: { create: false },
-    actions: { create: false },
+    permissions: { create: false, edit: false },
+    actions: { create: false, edit: false },
   }))
   fetchSuppliersMock.mockResolvedValue([{ id: 'supplier-1', code: 'SUP-01', name: 'Dostawca A' }])
   exportCatalogMock.mockResolvedValue({
@@ -167,8 +173,8 @@ describe('katalog surowców', () => {
         locationId: locationA,
         readiness: 'READY',
         available: true,
-        permissions: { create: true },
-        actions: { create: true },
+        permissions: { create: true, edit: false },
+        actions: { create: true, edit: false },
       })
     })
     await screen.findByText('Surowiec 1')
@@ -181,8 +187,8 @@ describe('katalog surowców', () => {
       locationId: locationA,
       readiness: 'READY',
       available: true,
-      permissions: { create: true },
-      actions: { create: true },
+      permissions: { create: true, edit: false },
+      actions: { create: true, edit: false },
     })
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
 
@@ -202,16 +208,16 @@ describe('katalog surowców', () => {
         locationId: locationA,
         readiness: 'READY',
         available: true,
-        permissions: { create: true },
-        actions: { create: true },
+        permissions: { create: true, edit: false },
+        actions: { create: true, edit: false },
       })
       .mockResolvedValueOnce({
         module: 'RAW_MATERIALS',
         locationId: locationA,
         readiness: 'READY',
         available: true,
-        permissions: { create: false },
-        actions: { create: false },
+        permissions: { create: false, edit: false },
+        actions: { create: false, edit: false },
       })
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
 
@@ -227,8 +233,8 @@ describe('katalog surowców', () => {
       locationId: locationA,
       readiness: 'NOT_READY',
       available: false,
-      permissions: { create: true },
-      actions: { create: false },
+      permissions: { create: true, edit: false },
+      actions: { create: false, edit: false },
     })
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
 
@@ -243,13 +249,31 @@ describe('katalog surowców', () => {
       locationId: locationA,
       readiness: 'READY',
       available: true,
-      permissions: { create: false },
-      actions: { create: false },
+      permissions: { create: false, edit: false },
+      actions: { create: false, edit: false },
     })
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
 
     await screen.findByText('Surowiec 1')
     expect(screen.queryByRole('button', { name: 'Dodaj surowiec' })).toBeNull()
+  })
+
+  it('akceptuje globalne EDIT bez udostępniania formularza lub rezerwacji SKU', async () => {
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS',
+      locationId: locationA,
+      readiness: 'READY',
+      available: true,
+      permissions: { create: false, edit: true },
+      actions: { create: false, edit: true },
+    })
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    await screen.findByText('Surowiec 1')
+    expect(screen.queryByRole('button', { name: 'Dodaj surowiec' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edytuj surowiec' })).toBeNull()
+    expect(reserveRawMaterialSkuMock).not.toHaveBeenCalled()
+    expect(createRawMaterialMock).not.toHaveBeenCalled()
   })
 
   it('fail-closed po błędzie capabilities i odświeża wynik po powrocie karty do aktywnego stanu', async () => {
@@ -259,8 +283,8 @@ describe('katalog surowców', () => {
       locationId: locationA,
       readiness: 'READY',
       available: true,
-      permissions: { create: true },
-      actions: { create: true },
+      permissions: { create: true, edit: false },
+      actions: { create: true, edit: false },
     })
     originalVisibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState')
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
@@ -283,8 +307,8 @@ describe('katalog surowców', () => {
         locationId,
         readiness: 'READY',
         available: true,
-        permissions: { create: true },
-        actions: { create: true },
+        permissions: { create: false, edit: false },
+        actions: { create: false, edit: false },
       }))
     const onSessionExpired = vi.fn()
     const { rerender } = render(
@@ -293,20 +317,22 @@ describe('katalog surowców', () => {
     await waitFor(() => expect(fetchRawMaterialCapabilitiesMock).toHaveBeenCalledTimes(1))
 
     rerender(<RawMaterialsCatalogPage onSessionExpired={onSessionExpired} operatingLocationId={locationB} />)
-    expect(await screen.findByRole('button', { name: 'Dodaj surowiec' })).toBeTruthy()
+    await screen.findByText('Surowiec 1')
+    expect(screen.queryByRole('button', { name: 'Dodaj surowiec' })).toBeNull()
     await act(async () => {
       resolvePrevious?.({
         module: 'RAW_MATERIALS',
         locationId: locationA,
         readiness: 'READY',
         available: true,
-        permissions: { create: true },
-        actions: { create: true },
+        permissions: { create: true, edit: true },
+        actions: { create: true, edit: true },
       })
     })
 
     expect(fetchRawMaterialCapabilitiesMock).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole('button', { name: 'Dodaj surowiec' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Dodaj surowiec' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edytuj surowiec' })).toBeNull()
     expect(onSessionExpired).not.toHaveBeenCalled()
   })
 

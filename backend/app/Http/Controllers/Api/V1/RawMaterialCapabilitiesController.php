@@ -24,7 +24,8 @@ final class RawMaterialCapabilitiesController
             throw new HttpException(403, __('messages.operating_location_required'));
         }
 
-        $capability = $authorization->evaluateCreateCapability($actor, $location);
+        $createCapability = $authorization->evaluateCreateCapability($actor, $location);
+        $editCapability = $authorization->evaluateEditCapability($actor, $location);
         $definition = $modules->find('RAW_MATERIALS');
         $moduleAvailable = $definition !== null && $availability->enabled($location, 'RAW_MATERIALS');
 
@@ -35,10 +36,12 @@ final class RawMaterialCapabilitiesController
                 'readiness' => $definition?->ready ? 'READY' : 'NOT_READY',
                 'available' => $moduleAvailable,
                 'permissions' => [
-                    'create' => $capability['permission'],
+                    'create' => $createCapability['permission'],
+                    'edit' => $editCapability['permission'],
                 ],
                 'actions' => [
-                    'create' => $capability['permission'] && $capability['context'] && $moduleAvailable,
+                    'create' => $createCapability['permission'] && $createCapability['context'] && $moduleAvailable,
+                    'edit' => $editCapability['permission'] && $editCapability['context'] && $moduleAvailable,
                 ],
             ],
         ], 200, ['Cache-Control' => 'private, no-store']);

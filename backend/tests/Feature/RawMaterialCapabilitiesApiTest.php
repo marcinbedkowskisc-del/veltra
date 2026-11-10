@@ -57,10 +57,16 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.readiness', 'NOT_READY')
             ->assertJsonPath('data.available', false)
             ->assertJsonPath('data.permissions.create', true)
-            ->assertJsonPath('data.actions.create', false);
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', false);
         $this->assertSame(
             app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->steward, RawMaterialPermission::Create),
             $response->json('data.permissions.create'),
+        );
+        $this->assertSame(
+            app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->steward, RawMaterialPermission::Edit),
+            $response->json('data.permissions.edit'),
         );
         $this->assertStringContainsString('private', (string) $response->headers->get('Cache-Control'));
         $this->assertStringContainsString('no-store', (string) $response->headers->get('Cache-Control'));
@@ -82,7 +88,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.readiness', 'READY')
             ->assertJsonPath('data.available', true)
             ->assertJsonPath('data.permissions.create', true)
-            ->assertJsonPath('data.actions.create', true);
+            ->assertJsonPath('data.actions.create', true)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', true);
 
         $secondaryKitchen = $this->kitchen('CK2');
         app(MembershipService::class)->assign($this->steward, $secondaryKitchen);
@@ -93,7 +101,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertOk()
             ->assertJsonPath('data.location_id', $secondaryKitchen->id)
             ->assertJsonPath('data.permissions.create', true)
-            ->assertJsonPath('data.actions.create', false);
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', false);
     }
 
     public function test_ready_module_readiness_is_separate_from_location_availability(): void
@@ -106,7 +116,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.readiness', 'READY')
             ->assertJsonPath('data.available', false)
             ->assertJsonPath('data.permissions.create', true)
-            ->assertJsonPath('data.actions.create', false);
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', false);
     }
 
     public function test_view_without_create_does_not_expose_create_capability(): void
@@ -126,7 +138,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
         $response->assertOk()
             ->assertJsonPath('data.permissions.create', false)
-            ->assertJsonPath('data.actions.create', false);
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
         $this->assertFalse(app(RawMaterialAuthorization::class)
             ->hasEffectiveGrant($viewOnly, RawMaterialPermission::Create));
     }
@@ -140,7 +154,155 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         $this->actingAs($operator, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
             ->assertOk()
             ->assertJsonPath('data.permissions.create', false)
-            ->assertJsonPath('data.actions.create', false);
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_create_without_edit_does_not_expose_edit_capability(): void
+    {
+        $this->prepareReadyModule();
+        $createOnly = $this->newRecipient('capabilities-create-without-edit@example.test');
+        $this->delegateCreate($createOnly);
+        $createOnly->refresh();
+
+        $this->selectContext($createOnly, $this->location);
+        $this->actingAs($createOnly, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.create', true)
+            ->assertJsonPath('data.actions.create', true)
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_edit_without_create_does_not_expose_create_capability(): void
+    {
+        $this->prepareReadyModule();
+        $editOnly = $this->newRecipient('capabilities-edit-without-create@example.test');
+        $this->delegateEdit($editOnly);
+        $editOnly->refresh();
+        $this->selectContext($editOnly, $this->location);
+        $this->actingAs($editOnly, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.create', false)
+            ->assertJsonPath('data.actions.create', false)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', true);
+    }
+
+    public function test_expired_edit_grant_is_not_effective(): void
+    {
+        $this->prepareReadyModule();
+        $recipient = $this->newRecipient('capabilities-expired-edit@example.test');
+        $grantStarts = DB::table('organization_permission_grants')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('user_id', $this->steward->id)
+            ->whereIn('permission', [
+                RawMaterialPermission::Edit->value,
+                RawMaterialPermission::PermissionDelegate->value,
+            ])
+            ->pluck('valid_from')
+            ->map(static fn ($date) => Carbon::parse($date));
+        $validFrom = $grantStarts->max();
+        $validUntil = $validFrom->copy()->addMicrosecond();
+        $this->assertTrue($validUntil->isPast());
+        $this->delegateEdit($recipient, $validFrom->toISOString(), $validUntil->toISOString());
+        $this->selectContext($recipient, $this->location);
+
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_delegated_edit_uses_effective_grant_and_respects_revocation(): void
+    {
+        $this->prepareReadyModule();
+        $recipient = $this->newRecipient('capabilities-delegated-edit@example.test');
+        $grant = $this->delegateEdit($recipient);
+        $this->selectContext($recipient, $this->location);
+
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', true);
+
+        app(OrganizationRawMaterialPermissionAdministration::class)->revoke(
+            $this->steward,
+            $this->location,
+            $grant['id'],
+            'Cofnięcie EDIT w teście capabilities',
+        );
+        $this->selectContext($recipient, $this->location);
+
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_delegated_edit_disappears_when_its_source_grant_is_revoked(): void
+    {
+        $this->prepareReadyModule();
+        $recipient = $this->newRecipient('capabilities-revoked-edit-source@example.test');
+        $this->delegateEdit($recipient);
+        $this->selectContext($recipient, $this->location);
+
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', true);
+
+        $sourceGrantId = DB::table('organization_permission_grants')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('user_id', $this->steward->id)
+            ->where('permission', RawMaterialPermission::Edit->value)
+            ->value('id');
+        app(OrganizationRawMaterialPermissionAdministration::class)->revoke(
+            $this->steward,
+            $this->location,
+            $sourceGrantId,
+            'Cofnięcie źródła delegowanego EDIT',
+        );
+        $this->selectContext($recipient, $this->location);
+
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.edit', false)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_edit_action_requires_primary_context_while_permission_remains_effective(): void
+    {
+        $this->prepareReadyModule();
+        $secondaryKitchen = $this->kitchen('CK2');
+        app(MembershipService::class)->assign($this->steward, $secondaryKitchen);
+        $this->enableRawMaterials($secondaryKitchen);
+        $this->selectContext($this->steward, $secondaryKitchen);
+
+        $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.location_id', $secondaryKitchen->id)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', false);
+    }
+
+    public function test_inactive_membership_cannot_read_capabilities(): void
+    {
+        $this->selectContext($this->steward, $this->location);
+        DB::connection('pgsql_setup')->table('location_memberships')
+            ->where('user_id', $this->steward->id)
+            ->where('location_id', $this->location->id)
+            ->update([
+                'is_active' => false,
+                'deactivated_at' => now()->addSecond(),
+                'deactivation_reason' => 'Test nieaktywnego członkostwa',
+                'updated_at' => now(),
+            ]);
+
+        $this->actingAs($this->steward, 'web')
+            ->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertForbidden();
     }
 
     public function test_future_create_grant_is_not_effective(): void
@@ -248,6 +410,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
     public function test_requested_foreign_location_cannot_override_the_session_context(): void
     {
+        $this->prepareReadyModule();
         $this->selectContext($this->steward, $this->location);
 
         $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
@@ -255,7 +418,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
                 ->getJson('/api/v1/security/raw-materials/capabilities?location_id='.$foreignLocation->id)
                 ->assertOk()
                 ->assertJsonPath('data.location_id', $this->location->id)
-                ->assertJsonPath('data.permissions.create', true);
+                ->assertJsonPath('data.permissions.create', true)
+                ->assertJsonPath('data.permissions.edit', true)
+                ->assertJsonPath('data.actions.edit', true);
         });
     }
 
@@ -276,7 +441,8 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
         $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
             ->assertOk()
-            ->assertJsonPath('data.actions.create', true);
+            ->assertJsonPath('data.actions.create', true)
+            ->assertJsonPath('data.actions.edit', true);
 
         $this->assertSame($before, [
             'grants' => DB::table('organization_permission_grants')->count(),
@@ -359,6 +525,22 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             $recipient,
             RawMaterialPermission::Create,
             'Delegowanie CREATE do testu capabilities',
+            $validFrom,
+            $validUntil,
+        );
+    }
+
+    private function delegateEdit(
+        User $recipient,
+        ?string $validFrom = null,
+        ?string $validUntil = null,
+    ): array {
+        return app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $recipient,
+            RawMaterialPermission::Edit,
+            'Delegowanie EDIT do testu capabilities',
             $validFrom,
             $validUntil,
         );

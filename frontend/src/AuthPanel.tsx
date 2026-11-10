@@ -1,37 +1,39 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, isRecord, request } from './api'
 
-type User = { id: string; first_name: string; last_name: string; email: string }
-type Location = { id: string; name: string; code: string; type: 'CENTRAL_KITCHEN' | 'RESTAURANT' }
+export type AuthUser = { id: string; first_name: string; last_name: string; email: string }
+export type AuthLocation = { id: string; name: string; code: string; type: 'CENTRAL_KITCHEN' | 'RESTAURANT' }
+export type AuthContext = { user: AuthUser; location: AuthLocation | null }
 
-function isUser(value: unknown): value is User {
+function isUser(value: unknown): value is AuthUser {
   return isRecord(value) && ['id', 'first_name', 'last_name', 'email'].every((key) => typeof value[key] === 'string')
 }
 
-function isLocation(value: unknown): value is Location {
+function isLocation(value: unknown): value is AuthLocation {
   return isRecord(value) && ['id', 'name', 'code'].every((key) => typeof value[key] === 'string')
     && (value.type === 'CENTRAL_KITCHEN' || value.type === 'RESTAURANT')
 }
 
-export default function AuthPanel() {
-  const [user, setUser] = useState<User | null>(null)
-  const [locations, setLocations] = useState<Location[]>([])
-  const [current, setCurrent] = useState<Location | null>(null)
+export default function AuthPanel({ onContextChange }: { onContextChange: (context: AuthContext | null) => void }) {
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [locations, setLocations] = useState<AuthLocation[]>([])
+  const [current, setCurrent] = useState<AuthLocation | null>(null)
   const [selected, setSelected] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  function reset() {
+  const reset = useCallback(() => {
     setUser(null)
     setLocations([])
     setCurrent(null)
     setSelected('')
-  }
+    onContextChange(null)
+  }, [onContextChange])
 
-  async function loadProfile() {
+  const loadProfile = useCallback(async () => {
     const profile = await request('/api/v1/auth/me')
     if (!isUser(profile)) throw new Error('Nieprawidłowy profil użytkownika.')
     setUser(profile)
@@ -42,7 +44,8 @@ export default function AuthPanel() {
     setLocations(assigned)
     setCurrent(operating)
     setSelected(operating?.id ?? '')
-  }
+    onContextChange({ user: profile, location: operating })
+  }, [onContextChange])
 
   useEffect(() => {
     let active = true
@@ -62,7 +65,7 @@ export default function AuthPanel() {
     }
     void initialize()
     return () => { active = false }
-  }, [])
+  }, [loadProfile, reset])
 
   async function act(operation: () => Promise<void>) {
     setBusy(true)
@@ -75,6 +78,7 @@ export default function AuthPanel() {
         setCurrent(null)
         setSelected('')
         setLocations([])
+        if (user) onContextChange({ user, location: null })
       }
       setError(cause instanceof Error ? cause.message : 'Nie można wykonać operacji.')
     } finally {
@@ -123,6 +127,7 @@ export default function AuthPanel() {
             const result = await request('/api/v1/auth/operating-location', 'PUT', { location_id: selected })
             if (!isLocation(result)) throw new Error('Nieprawidłowy kontekst lokalizacji.')
             setCurrent(result)
+            if (user) onContextChange({ user, location: result })
           })}>Wybierz lokalizację</button>
           <button disabled={busy} onClick={() => void act(loadProfile)}>Odśwież przypisania</button>
           <button disabled={busy} onClick={() => void act(async () => {

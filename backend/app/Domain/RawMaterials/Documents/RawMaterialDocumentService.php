@@ -217,6 +217,7 @@ final class RawMaterialDocumentService
             })
             ->where('versions.id', $versionId)
             ->where('versions.organization_id', $actor->organization_id)
+            ->whereNull('materials.deleted_at')
             ->select([
                 'versions.id',
                 'versions.document_id',
@@ -415,6 +416,11 @@ final class RawMaterialDocumentService
         $revision = DB::table('raw_material_revisions')
             ->where('id', $revisionId)
             ->where('organization_id', $actor->organization_id)
+            ->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.id', 'raw_material_revisions.raw_material_id')
+                ->whereColumn('raw_materials.organization_id', 'raw_material_revisions.organization_id')
+                ->whereNull('raw_materials.deleted_at'))
             ->first(['id']);
         if (! $revision) {
             throw new RawMaterialDocumentException(

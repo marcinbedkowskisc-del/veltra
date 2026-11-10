@@ -1,9 +1,21 @@
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code: string | null
+  constructor(status: number, message: string, code: string | null = null) {
     super(message)
     this.status = status
+    this.code = code
   }
+}
+
+export type ApiEnvelope = {
+  data: unknown
+  meta?: unknown
+}
+
+type RequestOptions = {
+  signal?: AbortSignal
+  headers?: Record<string, string>
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -22,27 +34,70 @@ function httpErrorMessage(status: number): string {
   return `Nie udało się wykonać żądania (HTTP ${status}).`
 }
 
-export async function request(path: string, method = 'GET', body?: object): Promise<unknown> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
+function responseError(status: number, result: unknown, response: Response): ApiError {
+  const error = isRecord(result) && isRecord(result.error) ? result.error : null
+  const code = error && typeof error.code === 'string' ? error.code : null
+  const serverMessage = error && typeof error.message === 'string'
+    ? error.message
+    : isRecord(result) && typeof result.message === 'string'
+      ? result.message
+      : null
+  const localized = response.headers.get('Content-Language')?.toLowerCase() === 'pl'
+  const message = code === 'RAW_MATERIALS_MODULE_UNAVAILABLE' && serverMessage
+    ? serverMessage
+    : localized && status < 500 && serverMessage
+      ? serverMessage
+      : httpErrorMessage(status)
+
+  return new ApiError(status, message, code)
+}
+
+async function send(
+  path: string,
+  method: string,
+  body: object | undefined,
+  options: RequestOptions,
+): Promise<Response> {
+  const headers: Record<string, string> = { Accept: 'application/json', ...options.headers }
   if (method !== 'GET') {
     const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='))
-    if (cookie) headers['X-XSRF-TOKEN'] = decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
-    headers['Content-Type'] = 'application/json'
+    if (cookie) headers['X-XSRF-TOKEN'] ??= decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
+    headers['Content-Type'] ??= 'application/json'
   }
-  let response: Response
   try {
-    response = await fetch(path, {
+    return await fetch(path, {
       method, headers, credentials: 'same-origin', cache: 'no-store',
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
+        : AbortSignal.timeout(15_000),
     })
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'TimeoutError') {
       throw new Error('Przekroczono czas oczekiwania na odpowiedź backendu.')
     }
+    if (options.signal?.aborted) throw cause
     throw new Error('Nie można połączyć się z backendem.')
   }
-  if (response.status === 204) return null
+}
+
+async function parseErrorResponse(response: Response): Promise<ApiError> {
+  try {
+    return responseError(response.status, await response.json(), response)
+  } catch (cause) {
+    if (cause instanceof ApiError) throw cause
+    return new ApiError(response.status, httpErrorMessage(response.status))
+  }
+}
+
+export async function requestEnvelope(
+  path: string,
+  method = 'GET',
+  body?: object,
+  options: RequestOptions = {},
+): Promise<ApiEnvelope> {
+  const response = await send(path, method, body, options)
+  if (response.status === 204) return { data: null }
   let result: unknown
   try {
     result = await response.json()
@@ -50,13 +105,47 @@ export async function request(path: string, method = 'GET', body?: object): Prom
     if (response.ok) throw new Error('Backend zwrócił nieprawidłową odpowiedź.')
     throw new ApiError(response.status, httpErrorMessage(response.status))
   }
-  if (!response.ok) {
-    const localized = response.headers.get('Content-Language')?.toLowerCase() === 'pl'
-    const message = localized && response.status < 500 && isRecord(result) && typeof result.message === 'string'
-      ? result.message
-      : httpErrorMessage(response.status)
-    throw new ApiError(response.status, message)
-  }
+  if (!response.ok) throw responseError(response.status, result, response)
   if (!isRecord(result) || !('data' in result)) throw new Error('Nieprawidłowa odpowiedź API.')
-  return result.data
+
+  return 'meta' in result ? { data: result.data, meta: result.meta } : { data: result.data }
+}
+
+export async function request(
+  path: string,
+  method = 'GET',
+  body?: object,
+  options: RequestOptions = {},
+): Promise<unknown> {
+  return (await requestEnvelope(path, method, body, options)).data
+}
+
+function safeDownloadName(header: string | null): string {
+  const encoded = header?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  const quoted = header?.match(/filename="([^"]+)"/i)?.[1]
+  let name: string
+  try {
+    name = encoded ? decodeURIComponent(encoded) : quoted ?? 'katalog-raw.csv'
+  } catch {
+    throw new Error('Backend zwrócił nieprawidłową nazwę pliku eksportu.')
+  }
+  name = [...name].map((character) => {
+    const code = character.charCodeAt(0)
+    return character === '/' || character === '\\' || code < 32 || code === 127 ? '_' : character
+  }).join('').trim()
+
+  return name || 'katalog-raw.csv'
+}
+
+export async function requestDownload(path: string, options: RequestOptions = {}): Promise<{ blob: Blob; filename: string }> {
+  const response = await send(path, 'GET', undefined, options)
+  if (!response.ok) throw await parseErrorResponse(response)
+  if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('text/csv')) {
+    throw new Error('Backend zwrócił nieprawidłowy plik eksportu.')
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: safeDownloadName(response.headers.get('Content-Disposition')),
+  }
 }

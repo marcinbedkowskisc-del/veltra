@@ -37,6 +37,7 @@ final class RawMaterialCompatibilityAssessmentService
             $approvedRevisionId = DB::table('raw_materials')
                 ->where('organization_id', $actor->organization_id)
                 ->where('id', $product->raw_material_id)
+                ->whereNull('deleted_at')
                 ->value('approved_revision_id');
             $history->where('raw_material_revision_id', $approvedRevisionId);
             if (($assessmentContext['raw_material_revision_current'] ?? false) !== true) {
@@ -256,6 +257,7 @@ final class RawMaterialCompatibilityAssessmentService
         $material = DB::table('raw_materials')
             ->where('organization_id', $actor->organization_id)
             ->where('id', $current->raw_material_id)
+            ->whereNull('deleted_at')
             ->first(['id', 'approved_revision_id', 'pending_revision_id', 'working_revision_id']);
         $rawRevisionIsCurrent = $material
             && $material->approved_revision_id === $current->raw_material_revision_id
@@ -349,6 +351,7 @@ final class RawMaterialCompatibilityAssessmentService
         $material = DB::table('raw_materials')
             ->where('organization_id', $actor->organization_id)
             ->where('id', $product->raw_material_id)
+            ->whereNull('deleted_at')
             ->lockForUpdate()
             ->first();
         $productRevision = DB::table('supplier_product_revisions')
@@ -401,7 +404,12 @@ final class RawMaterialCompatibilityAssessmentService
     {
         $query = DB::table('supplier_products')
             ->where('organization_id', $actor->organization_id)
-            ->where('id', $productId);
+            ->where('id', $productId)
+            ->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.id', 'supplier_products.raw_material_id')
+                ->whereColumn('raw_materials.organization_id', 'supplier_products.organization_id')
+                ->whereNull('raw_materials.deleted_at'));
         if ($lock) {
             $query->lockForUpdate();
         }

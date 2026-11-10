@@ -1,0 +1,27 @@
+name: veltra-stage3e-b41-test
+
+services:
+  postgres:
+    extends:
+      file: compose.stage3e-b1-test.yaml
+      service: postgres
+  redis:
+    extends:
+      file: compose.stage3e-b1-test.yaml
+      service: redis
+  clamav:
+    extends:
+      file: compose.stage3e-b1-test.yaml
+      service: clamav
+  runner:
+    extends:
+      file: compose.stage3e-b1-test.yaml
+      service: runner
+
+networks:
+  isolated:
+    internal: true
+
+volumes:
+  test-storage:
+  test-cache:

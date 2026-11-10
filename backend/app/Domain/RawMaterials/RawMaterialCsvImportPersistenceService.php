@@ -290,6 +290,7 @@ final class RawMaterialCsvImportPersistenceService
             $material = DB::table('raw_materials')
                 ->where('organization_id', $actor->organization_id)
                 ->where('code', $row['ingredient_id'])
+                ->whereNull('deleted_at')
                 ->first();
             if (! $material) {
                 $plan['error_code'] = 'UNKNOWN_INGREDIENT_ID';

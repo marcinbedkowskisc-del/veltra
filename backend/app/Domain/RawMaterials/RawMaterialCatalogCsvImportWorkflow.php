@@ -427,6 +427,7 @@ final class RawMaterialCatalogCsvImportWorkflow
                 'materials.id',
                 'materials.code',
                 'materials.lifecycle_state',
+                'materials.deleted_at',
                 'materials.working_revision_id',
                 'materials.pending_revision_id',
                 'materials.approved_revision_id',
@@ -465,7 +466,13 @@ final class RawMaterialCatalogCsvImportWorkflow
             $statusCode = 'INVALID';
             $materialId = null;
             if ($error === null) {
-                if ($assignment !== null || $material !== null) {
+                if ($material?->deleted_at !== null) {
+                    $statusCode = 'CONFLICT';
+                    $error = [
+                        'code' => 'TOMBSTONED_MATERIAL',
+                        'message' => "SKU {$row['sku']} należy do trwale usuniętego szkicu i nie może zostać ponownie użyty.",
+                    ];
+                } elseif ($assignment !== null || $material !== null) {
                     $matchesAssignment = $assignment !== null
                         && $assignment->entity_type === 'RAW'
                         && $material !== null

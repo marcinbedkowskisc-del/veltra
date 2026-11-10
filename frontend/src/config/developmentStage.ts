@@ -1,1 +1,1 @@
-export const developmentStageLabel = 'ETAP 2C / WERYFIKACJA KOŃCOWA'
+export const developmentStageLabel = 'ETAP 4A / FUNDAMENT RAW_MATERIALS'

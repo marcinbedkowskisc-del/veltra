@@ -261,6 +261,7 @@ final class RawMaterialCsvImportWorkflow
                 })
                 ->where('materials.organization_id', $actor->organization_id)
                 ->where('materials.code', $row['ingredient_id'])
+                ->whereNull('materials.deleted_at')
                 ->select([
                     'materials.id',
                     'materials.lifecycle_state',

@@ -24,7 +24,9 @@ use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialSkuReservationService;
 use App\Models\Location;
 use App\Models\LocationModuleState;
+use App\Models\Organization;
 use App\Models\User;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -410,22 +412,413 @@ trait RawDocumentsStage3eB3Tests
         $this->assertStringContainsString('B3SUP', $this->get($created['download_url'])->assertOk()->streamedContent());
     }
 
-    public function test_stage3e_b3_bulk_archive_only_validates_and_never_mutates(): void
+    public function test_stage3e_b31_bulk_archive_validation_is_non_mutating_and_uses_atomic_policy(): void
     {
         $material = $this->stage3eMaterial('Walidacja archiwizacji B3', 'g', '1');
         $this->selectRawMaterialApiContext($this->steward);
         $body = ['items' => [['id' => $material['id'], 'version' => $this->rawVersion($material['id'])]]];
         $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertOk()
-            ->assertJsonPath('data.mutation_available', false)->assertJsonPath('data.policy_status', 'BLOCKED_BY_OWNER_DECISION')->assertJsonPath('data.validated_count', 1);
+            ->assertJsonPath('data.mutation_available', true)->assertJsonPath('data.mutation_performed', false)
+            ->assertJsonPath('data.policy_status', 'ALL_OR_NOTHING')->assertJsonPath('data.validated_count', 1);
         $this->assertSame($body['items'][0]['version'], $this->rawVersion($material['id']));
         $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
-        $this->postJson('/api/v1/raw-materials/bulk-archive', $body)->assertNotFound();
         $this->postJson('/api/v1/raw-materials/bulk-archive/validation', ['items' => [['id' => $material['id']]]])->assertStatus(428);
         $body['items'][0]['version'] = Str::uuid()->toString();
         $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertConflict();
         $body['items'][0]['id'] = Str::uuid()->toString();
         $this->postJson('/api/v1/raw-materials/bulk-archive/validation', $body)->assertNotFound();
         $this->assertSame(1, DB::table('raw_material_audit_events')->where('event_code', 'BULK_ARCHIVE_VALIDATED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_commits_two_materials_and_audits_them_together(): void
+    {
+        $categoryId = $this->category()['id'];
+        $first = $this->stage3eMaterial('Archiwizacja atomowa 1', 'g', '1', categoryId: $categoryId);
+        $second = $this->stage3eMaterial('Archiwizacja atomowa 2', 'g', '2', categoryId: $categoryId);
+        $items = [
+            ['id' => $first['id'], 'version' => $this->rawVersion($first['id'])],
+            ['id' => $second['id'], 'version' => $this->rawVersion($second['id'])],
+        ];
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $result = $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => $items,
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertOk()->assertJsonPath('data.archived_count', 2)->json('data');
+
+        $expectedIds = [$first['id'], $second['id']];
+        sort($expectedIds);
+        $this->assertSame($expectedIds, collect($result['materials'])->pluck('id')->sort()->values()->all());
+        foreach ($items as $item) {
+            $this->assertDatabaseHas('raw_materials', ['id' => $item['id'], 'lifecycle_state' => 'ARCHIVED']);
+            $this->assertNotSame($item['version'], $this->rawVersion($item['id']));
+        }
+        $events = DB::table('raw_material_audit_events')->whereIn('subject_id', [$first['id'], $second['id']])
+            ->where('event_code', 'ARCHIVED')->orderBy('subject_id')->get();
+        $this->assertCount(2, $events);
+        $this->assertSame([$result['operation_id']], $events->pluck('operation_id')->unique()->values()->all());
+        $this->assertSame(['USER_PROVIDED', 'USER_PROVIDED'], $events->pluck('reason_code')->all());
+
+        $auditCount = $events->count();
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => $items,
+            'reason' => 'Ponowienie żądania',
+        ])->assertConflict();
+        $this->assertSame($auditCount, DB::table('raw_material_audit_events')->whereIn('subject_id', [$first['id'], $second['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_commits_several_materials(): void
+    {
+        $categoryId = $this->category()['id'];
+        $materials = [];
+        foreach (range(1, 4) as $index) {
+            $materials[] = $this->stage3eMaterial('Archiwizacja grupowa '.$index, 'g', (string) $index, categoryId: $categoryId);
+        }
+        $items = array_map(fn (array $material): array => [
+            'id' => $material['id'],
+            'version' => $this->rawVersion($material['id']),
+        ], $materials);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => $items,
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertOk()->assertJsonPath('data.archived_count', 4);
+
+        foreach ($materials as $material) {
+            $this->assertDatabaseHas('raw_materials', ['id' => $material['id'], 'lifecycle_state' => 'ARCHIVED']);
+        }
+        $this->assertSame(4, DB::table('raw_material_audit_events')->whereIn('subject_id', array_column($materials, 'id'))
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_rejects_one_ineligible_material_without_partial_commit(): void
+    {
+        $categoryId = $this->category()['id'];
+        $eligible = $this->stage3eMaterial('Zdolny do archiwizacji', 'g', '1', categoryId: $categoryId);
+        $draft = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => $categoryId,
+            'name' => 'Szkic niekwalifikujący się do archiwizacji',
+            'base_unit_code' => 'g',
+        ]);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [
+                ['id' => $eligible['id'], 'version' => $this->rawVersion($eligible['id'])],
+                ['id' => $draft['id'], 'version' => $this->rawVersion($draft['id'])],
+            ],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertConflict()->assertJsonPath('error.code', 'RAW_MATERIAL_ARCHIVE_INVALID');
+
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $eligible['id'])->value('lifecycle_state'));
+        $this->assertSame('DRAFT', DB::table('raw_materials')->where('id', $draft['id'])->value('lifecycle_state'));
+        $this->assertSame(0, DB::table('raw_material_audit_events')->whereIn('subject_id', [$eligible['id'], $draft['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_rejects_a_stale_version_without_partial_commit(): void
+    {
+        $categoryId = $this->category()['id'];
+        $first = $this->stage3eMaterial('Aktualna wersja', 'g', '1', categoryId: $categoryId);
+        $second = $this->stage3eMaterial('Nieaktualna wersja', 'g', '2', categoryId: $categoryId);
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [
+                ['id' => $first['id'], 'version' => $this->rawVersion($first['id'])],
+                ['id' => $second['id'], 'version' => Str::uuid()->toString()],
+            ],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertConflict()->assertJsonPath('error.code', 'RAW_MATERIAL_VERSION_CONFLICT');
+
+        foreach ([$first, $second] as $material) {
+            $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        }
+        $this->assertSame(0, DB::table('raw_material_audit_events')->whereIn('subject_id', [$first['id'], $second['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_rejects_an_unavailable_material_without_leaking_or_mutating(): void
+    {
+        $eligible = $this->stage3eMaterial('Dostępny materiał', 'g', '1');
+        $missingId = Str::uuid()->toString();
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $response = $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [
+                ['id' => $eligible['id'], 'version' => $this->rawVersion($eligible['id'])],
+                ['id' => $missingId, 'version' => Str::uuid()->toString()],
+            ],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertNotFound();
+
+        $this->assertStringNotContainsString($missingId, $response->getContent());
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $eligible['id'])->value('lifecycle_state'));
+        $this->assertSame(0, DB::table('raw_material_audit_events')->where('subject_id', $eligible['id'])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_rejects_malformed_selections_and_versions(): void
+    {
+        $material = $this->stage3eMaterial('Walidacja listy archiwizacji', 'g', '1');
+        $item = ['id' => $material['id'], 'version' => $this->rawVersion($material['id'])];
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertUnprocessable();
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [$item, $item],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertUnprocessable();
+        $tooManyItems = [];
+        foreach (range(1, 101) as $index) {
+            $tooManyItems[] = ['id' => Str::uuid()->toString(), 'version' => Str::uuid()->toString()];
+        }
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => $tooManyItems,
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertUnprocessable();
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [['id' => $item['id']]],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertStatus(428);
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [['id' => $item['id'], 'version' => 'not-a-version']],
+            'reason' => 'Porządkowanie katalogu',
+        ])->assertUnprocessable();
+
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        $this->assertSame(0, DB::table('raw_material_audit_events')->where('subject_id', $material['id'])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_rolls_back_every_change_after_an_in_transaction_failure(): void
+    {
+        $categoryId = $this->category()['id'];
+        $first = $this->stage3eMaterial('Rollback pierwszy', 'g', '1', categoryId: $categoryId);
+        $second = $this->stage3eMaterial('Rollback drugi', 'g', '2', categoryId: $categoryId);
+        $this->selectRawMaterialApiContext($this->steward);
+        $updates = 0;
+        $injectFailure = true;
+        DB::listen(function (QueryExecuted $query) use (&$updates, &$injectFailure): void {
+            if ($injectFailure && $query->connectionName === 'pgsql' && preg_match('/^update "raw_materials"/i', ltrim($query->sql))) {
+                $updates++;
+                if ($updates === 2) {
+                    $injectFailure = false;
+                    throw new \RuntimeException('Błąd testowy po mutacji pierwszego materiału.');
+                }
+            }
+        });
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [
+                ['id' => $first['id'], 'version' => $this->rawVersion($first['id'])],
+                ['id' => $second['id'], 'version' => $this->rawVersion($second['id'])],
+            ],
+            'reason' => 'Test atomowego rollbacku',
+        ])->assertServerError();
+
+        $this->assertSame(2, $updates);
+        foreach ([$first, $second] as $material) {
+            $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        }
+        $this->assertSame(0, DB::table('raw_material_audit_events')->whereIn('subject_id', [$first['id'], $second['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_recipient_cannot_archive_a_read_only_shared_material(): void
+    {
+        $material = $this->stage3eMaterial('Udostępniony tylko do odczytu', 'g', '1');
+        $recipient = $this->b3Recipient();
+        app(RawMaterialLocationShareAdministration::class)->share(
+            $this->bootstrapAdministrator, $this->location, $material['id'], $recipient->id,
+        );
+        $this->b3Context($this->steward, $recipient);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [['id' => $material['id'], 'version' => $this->rawVersion($material['id'])]],
+            'reason' => 'Nieuprawniona próba',
+        ])->assertForbidden();
+
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        $this->assertSame(0, DB::table('raw_material_audit_events')->where('subject_id', $material['id'])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_preserves_revision_document_and_commercial_history(): void
+    {
+        $this->b3Storage();
+        $this->role($this->steward, BusinessRole::Administrator);
+        $material = $this->stage3eMaterial('Historia do zachowania', 'g', '100');
+        $document = app(RawMaterialDocumentService::class)->create(
+            $this->steward,
+            $this->location,
+            $material['revision']['id'],
+            'SPECIFICATION',
+            'historia.txt',
+            'Treść dokumentu historycznego',
+        );
+        $this->stage3ePrice($material['id'], '0.1', 'b31-preserved-price');
+        $revisionCount = DB::table('raw_material_revisions')->where('raw_material_id', $material['id'])->count();
+        $documentVersionId = $document['version']['id'];
+        $priceCount = DB::table('raw_material_reference_price_events')->where('raw_material_id', $material['id'])->count();
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $this->postJson('/api/v1/raw-materials/bulk-archive', [
+            'items' => [['id' => $material['id'], 'version' => $this->rawVersion($material['id'])]],
+            'reason' => 'Archiwizacja bez utraty historii',
+        ])->assertOk();
+
+        $this->assertSame($revisionCount, DB::table('raw_material_revisions')->where('raw_material_id', $material['id'])->count());
+        $this->assertDatabaseHas('raw_material_document_version_links', [
+            'document_version_id' => $documentVersionId,
+            'raw_material_revision_id' => $material['revision']['id'],
+        ]);
+        $this->assertSame($priceCount, DB::table('raw_material_reference_price_events')->where('raw_material_id', $material['id'])->count());
+    }
+
+    public function test_stage3e_b31_overlapping_bulk_requests_with_reversed_order_are_serialized(): void
+    {
+        $categoryId = $this->category()['id'];
+        $first = $this->stage3eMaterial('Blokada zbiorcza A', 'g', '1', categoryId: $categoryId);
+        $second = $this->stage3eMaterial('Blokada zbiorcza B', 'g', '2', categoryId: $categoryId);
+        $items = [
+            ['id' => $first['id'], 'version' => $this->rawVersion($first['id'])],
+            ['id' => $second['id'], 'version' => $this->rawVersion($second['id'])],
+        ];
+        $payload = ['items' => $items, 'reason' => 'Wyścig zbiorczy'];
+        $reversedPayload = ['items' => array_reverse($items), 'reason' => 'Wyścig zbiorczy'];
+
+        $results = $this->b3RaceProcesses([
+            ['operation' => 'bulk-archive', 'material_id' => $first['id'], 'version' => $items[0]['version'], 'payload' => $payload],
+            ['operation' => 'bulk-archive', 'material_id' => $second['id'], 'version' => $items[1]['version'], 'payload' => $reversedPayload],
+        ]);
+        $statuses = array_column($results, 'status');
+        sort($statuses);
+        $this->assertSame([200, 409], $statuses);
+        $conflict = array_values(array_filter($results, fn (array $result): bool => $result['status'] === 409))[0];
+        $this->assertSame('RAW_MATERIAL_VERSION_CONFLICT', $conflict['code']);
+        foreach ([$first, $second] as $material) {
+            $this->assertSame('ARCHIVED', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
+        }
+        $this->assertSame(2, DB::table('raw_material_audit_events')->whereIn('subject_id', [$first['id'], $second['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_racing_with_single_material_edit_has_one_winner(): void
+    {
+        $material = $this->stage3eMaterial('Wyścig edycji i archiwizacji zbiorczej', 'g', '1');
+        $archivePayload = [
+            'items' => [['id' => $material['id'], 'version' => $this->rawVersion($material['id'])]],
+            'reason' => 'Wyścig edycji',
+        ];
+        $editPayload = [
+            'category_id' => $material['revision']['category_id'],
+            'name' => 'Zmieniona nazwa',
+            'base_unit_code' => 'g',
+        ];
+        $results = $this->b3RaceProcesses([
+            ['operation' => 'bulk-archive', 'material_id' => $material['id'], 'version' => $archivePayload['items'][0]['version'], 'payload' => $archivePayload],
+            ['operation' => 'revise', 'material_id' => $material['id'], 'version' => $archivePayload['items'][0]['version'], 'payload' => $editPayload],
+        ]);
+
+        $statuses = array_column($results, 'status');
+        sort($statuses);
+        $this->assertSame([200, 409], $statuses);
+        $this->assertSame('RAW_MATERIAL_VERSION_CONFLICT', array_values(array_filter(
+            $results,
+            fn (array $result): bool => $result['status'] === 409,
+        ))[0]['code']);
+        $state = DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state');
+        $this->assertContains($state, ['ACTIVE', 'ARCHIVED']);
+        $this->assertSame($state === 'ARCHIVED' ? 1 : 0, DB::table('raw_material_audit_events')
+            ->where('subject_id', $material['id'])->where('event_code', 'ARCHIVED')->count());
+    }
+
+    public function test_stage3e_b31_bulk_archive_racing_with_approval_never_partially_archives(): void
+    {
+        $categoryId = $this->category()['id'];
+        $eligible = $this->stage3eMaterial('Kandydat do archiwizacji', 'g', '1', categoryId: $categoryId);
+        $pending = $this->rawMaterialService->create($this->steward, $this->location, [
+            'category_id' => $categoryId,
+            'name' => 'Kandydat do zatwierdzenia',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '2',
+            'allergen_declaration' => [
+                'status' => 'NO_KNOWN_ALLERGENS',
+                'catalog_version_id' => $this->publishedAllergenCatalogFixture(),
+                'items' => [],
+            ],
+        ]);
+        $this->rawMaterialService->submit($this->steward, $this->location, $pending['id'], $this->rawVersion($pending['id']));
+        $pendingVersion = $this->rawVersion($pending['id']);
+        $archivePayload = [
+            'items' => [
+                ['id' => $eligible['id'], 'version' => $this->rawVersion($eligible['id'])],
+                ['id' => $pending['id'], 'version' => $pendingVersion],
+            ],
+            'reason' => 'Wyścig zatwierdzania',
+        ];
+        $results = $this->b3RaceProcesses([
+            ['operation' => 'bulk-archive', 'material_id' => $eligible['id'], 'version' => $archivePayload['items'][0]['version'], 'payload' => $archivePayload],
+            ['operation' => 'approve', 'material_id' => $pending['id'], 'version' => $pendingVersion, 'payload' => []],
+        ]);
+
+        $statuses = array_column($results, 'status');
+        sort($statuses);
+        $this->assertSame([200, 409], $statuses);
+        $failure = array_values(array_filter($results, fn (array $result): bool => $result['status'] === 409))[0];
+        $this->assertContains($failure['code'], ['RAW_MATERIAL_ARCHIVE_INVALID', 'RAW_MATERIAL_VERSION_CONFLICT']);
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $eligible['id'])->value('lifecycle_state'));
+        $this->assertSame('ACTIVE', DB::table('raw_materials')->where('id', $pending['id'])->value('lifecycle_state'));
+        $this->assertSame(0, DB::table('raw_material_audit_events')->whereIn('subject_id', [$eligible['id'], $pending['id']])
+            ->where('event_code', 'ARCHIVED')->count());
+    }
+
+    /**
+     * @param  list<array{operation: string, material_id: string, version: string, payload: array<string, mixed>}>  $jobs
+     * @return list<array<string, mixed>>
+     */
+    private function b3RaceProcesses(array $jobs): array
+    {
+        $processes = [];
+        try {
+            DB::beginTransaction();
+            Organization::whereKey($this->steward->organization_id)->lockForUpdate()->firstOrFail();
+            foreach ($jobs as $index => $job) {
+                $application = 'stage3eb31-race-'.$index;
+                $process = new Process([
+                    PHP_BINARY,
+                    base_path('tests/Support/concurrent_raw_edit.php'),
+                    $this->steward->id,
+                    $this->location->id,
+                    $job['material_id'],
+                    $job['version'],
+                    $job['operation'],
+                    json_encode($job['payload'], JSON_THROW_ON_ERROR),
+                    $application,
+                ], base_path(), timeout: 30);
+                $process->start();
+                $processes[] = $process;
+                $this->assertRevisionProcessWaitingOnOrganizationLock($process, $application);
+            }
+            DB::commit();
+
+            return array_map(fn (Process $process): array => $this->finishRevisionProcess($process), $processes);
+        } finally {
+            while (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
     }
 
     public function test_stage3e_b3_export_all_is_not_paginated_and_selection_spans_pages(): void
@@ -510,7 +903,7 @@ trait RawDocumentsStage3eB3Tests
         $this->b3Storage();
         $this->selectRawMaterialApiContext($this->steward);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
-        foreach (['/document-uploads', '/catalog-exports/selection', '/bulk-archive/validation'] as $route) {
+        foreach (['/document-uploads', '/catalog-exports/selection', '/bulk-archive/validation', '/bulk-archive'] as $route) {
             $this->postJson('/api/v1/raw-materials'.$route)->assertStatus(503);
         }
         $this->getJson('/api/v1/raw-materials/'.Str::uuid().'/documents')->assertStatus(503);

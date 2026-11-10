@@ -107,12 +107,19 @@ See the [project README](../README.md) for Docker setup and test commands.
 - `POST /api/v1/raw-materials/bulk-archive/validation` przyjmuje
   `items: [{id, version}]`. Wymaga dotychczasowego ARCHIVE, kuchni głównej
   i warunków archiwizacji pojedynczego materiału; sprawdza wszystkie rekordy
-  pod blokadami i zachowuje B.2 (brak wersji 428, konflikt 409).
-  Zwraca `mutation_available: false`, `policy_status: BLOCKED_BY_OWNER_DECISION`
-  i `validated_count`, zapisując audyt walidacji bez mutacji.
-  **Nie ma endpointu wykonującego zbiorczą archiwizację**: źródła nie
-  rozstrzygają atomowości. Walidacja nie rezerwuje stanu; przyszła mutacja
-  będzie wymagała ponownej autoryzacji i sprawdzenia wersji.
+  pod blokadami i zachowuje B.2 (brak wersji 428, konflikt 409). Zwraca
+  `mutation_available: true`, `mutation_performed: false`,
+  `policy_status: ALL_OR_NOTHING` i `validated_count`. Walidacja nie rezerwuje
+  stanu; endpoint mutacji ponownie autoryzuje i sprawdza całą listę.
+- `POST /api/v1/raw-materials/bulk-archive` przyjmuje te same
+  `items: [{id, version}]` oraz wymagany `reason`; limit wynosi 100 materiałów.
+  W ramach jednej podpisanej transakcji blokuje organizację, następnie wszystkie
+  materiały w kolejności UUID, sprawdza uprawnienie ARCHIVE, wersje i warunki
+  lifecycle przed pierwszą zmianą, po czym zapisuje stan ARCHIVED i kanoniczny
+  audyt `ARCHIVED` dla każdej pozycji. Błąd dowolnej pozycji lub zapisu wycofuje
+  całość. Powtórzenie nie tworzy kolejnych zdarzeń: stare wersje powodują
+  konflikt, a aktualna wersja zarchiwizowanego materiału nie spełnia lifecycle.
+  Historia rewizji, dokumentów i relacji handlowych pozostaje bez zmian.
 - Migracja 044 jest forward-only. Testy korzystają wyłącznie z
   [izolowanego Compose B.3](../compose.stage3e-b3-test.yaml), PostgreSQL 17,
   ograniczonej roli runtime i osobnych zasobów. Bez migracji instalacji,
@@ -168,10 +175,22 @@ See the [project README](../README.md) for Docker setup and test commands.
   samej bezpiecznej projekcji audytu. Bez AUDIT_VIEW tożsamość aktora i link są
   ukryte. Zmiany ukrytych szkiców i cen nie zmieniają metadanych odbiorcy.
   Próba zapisu niezmienionej ceny jest w historii, lecz nie jako ostatnia zmiana.
-- **Usuwanie szkiców: BLOCKED.** Istniejące bezwarunkowe triggery ochrony mastera,
-  rewizji i dzieci rewizji oraz RESTRICT FK nie pozwalają bezpiecznie usunąć nawet
-  nigdy niezatwierdzonego szkicu. Zgodnie z granicą B.2 nie osłabiono tych ochron
-  i nie dodano DELETE endpointu ani akcji delete. SKU i audyt pozostają trwałe.
+- **Stage 3E-B.4.1 — nieodwracalny tombstone szkicu:** `DELETE
+  /api/v1/raw-materials/{material}/draft` wymaga bieżącego `If-Match`,
+  niedelegowalnego `RAW_MATERIALS_DELETE_DRAFT` oraz primary central kitchen.
+  Akceptuje wyłącznie `DRAFT` bez historii `APPROVED`/`RETURNED` i bez trwałych
+  zależności (m.in. dostawcy, cen, importu, udostępnień, ocen zgodności
+  i przypiętych dokumentów). Puste zestawy dokumentów i nieprzypięte uploady
+  stagingowe nie blokują operacji.
+- Operacja zachowuje master, wszystkie rewizje, audyt, przypisanie SKU i kod;
+  rekord staje się niezmiennym tombstone’em, jest ukrywany w zwykłych odczytach
+  i nie można ponownie użyć jego tożsamości ani SKU. To nie jest archiwizacja
+  ani formalne wycofanie. Fizyczny DELETE, aktualizowanie rewizji i globalne
+  wyłączanie triggerów/FK pozostają zabronione.
+- Migracja 045 jest forward-only. Weryfikacja B.4.1 korzysta z osobnego,
+  nietrwałego projektu [izolowanego Compose](../compose.stage3e-b41-test.yaml);
+  nie uruchamiać jej na bazie instalacyjnej. `RAW_MATERIALS` pozostaje
+  `NOT_READY`; backendowa implementacja nie oznacza wdrożenia ani aktywacji.
 - Testy B.2: [oddzielny Compose](../compose.stage3e-b2-test.yaml), projekt
   `veltra-stage3e-b2-test`, dziedziczy wyłącznie konfigurację narzędziową B.1;
   ma własne kontenery, sieć, bazę i wolumeny. Migracje wyłącznie w izolacji.

@@ -68,6 +68,7 @@ Route::prefix('v1/raw-materials')->middleware([
 ])->group(function (): void {
     Route::post('/document-uploads', [RawMaterialDocumentController::class, 'upload']);
     Route::post('/bulk-archive/validation', [RawMaterialController::class, 'validateBulkArchive']);
+    Route::post('/bulk-archive', [RawMaterialController::class, 'bulkArchive']);
     Route::post('/document-uploads/{upload}/retry', [RawMaterialDocumentController::class, 'retry'])->whereUuid('upload');
     Route::get('/{material}/documents', [RawMaterialDocumentController::class, 'index'])->whereUuid('material');
     Route::get('/{material}/documents/{version}/download', [RawMaterialDocumentController::class, 'download'])->whereUuid('material')->whereUuid('version');
@@ -142,6 +143,7 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::post('/{material}/shares', [RawMaterialController::class, 'createShare'])->whereUuid('material');
     Route::post('/{material}/shares/bulk', [RawMaterialController::class, 'bulkShareLocations'])
         ->whereUuid('material');
+    Route::delete('/{material}/draft', [RawMaterialController::class, 'deleteDraft'])->whereUuid('material');
     Route::post('/bulk-shares/by-location', [RawMaterialController::class, 'bulkShareMaterials']);
     Route::delete('/{material}/shares/{location}', [RawMaterialController::class, 'revokeShare'])
         ->whereUuid('material')->whereUuid('location');

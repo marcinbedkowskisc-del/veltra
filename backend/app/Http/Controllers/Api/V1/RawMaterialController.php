@@ -14,6 +14,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\ListRawMaterialsRequest;
 use App\Http\Requests\RawMaterialAllergenDeclarationRequest;
 use App\Http\Requests\RawMaterialApprovalRequest;
+use App\Http\Requests\RawMaterialBulkArchiveRequest;
 use App\Http\Requests\RawMaterialBulkShareLocationsRequest;
 use App\Http\Requests\RawMaterialBulkShareMaterialsRequest;
 use App\Http\Requests\RawMaterialCategoryRenameRequest;
@@ -44,6 +45,7 @@ use App\Http\Requests\RawMaterialSupplierRequest;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class RawMaterialController extends Controller
 {
@@ -54,6 +56,33 @@ class RawMaterialController extends Controller
         return response()->json(['data' => $service->validateBulkArchive(
             $request->user(), $request->attributes->get('operating_location'), $input['items'],
         )]);
+    }
+
+    public function bulkArchive(RawMaterialBulkArchiveRequest $request, RawMaterialService $service): JsonResponse
+    {
+        $input = $request->validated();
+
+        return response()->json(['data' => $service->archiveBulk(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $input['items'],
+            $input['reason'],
+        )]);
+    }
+
+    public function deleteDraft(
+        Request $request,
+        string $material,
+        RawMaterialService $service,
+    ): Response {
+        $service->deleteDraft(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $material,
+            $request->header('If-Match'),
+        );
+
+        return response()->noContent();
     }
 
     public function editor(Request $request, string $material, RawMaterialService $service): JsonResponse

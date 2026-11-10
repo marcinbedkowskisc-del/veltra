@@ -214,7 +214,8 @@ final class RawMaterialLocationShareAdministration
 
     private function assertMaterialExists(User $actor, string $materialId): void
     {
-        if (! DB::table('raw_materials')->where('organization_id', $actor->organization_id)->where('id', $materialId)->exists()) {
+        if (! DB::table('raw_materials')->where('organization_id', $actor->organization_id)
+            ->where('id', $materialId)->whereNull('deleted_at')->exists()) {
             throw new RawMaterialException('RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found'), 404);
         }
     }
@@ -224,6 +225,7 @@ final class RawMaterialLocationShareAdministration
         $material = DB::table('raw_materials')
             ->where('organization_id', $actor->organization_id)
             ->where('id', $materialId)
+            ->whereNull('deleted_at')
             ->first();
         if (! $material || $this->materialShareRejectionReasons($material) !== []) {
             throw new RawMaterialException(
@@ -284,6 +286,7 @@ final class RawMaterialLocationShareAdministration
 
                     $materials = DB::table('raw_materials')
                         ->where('organization_id', $actor->organization_id)
+                        ->whereNull('deleted_at')
                         ->whereIn('id', $materialIds)
                         ->orderBy('id')
                         ->lockForUpdate()

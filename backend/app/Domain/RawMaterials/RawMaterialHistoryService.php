@@ -23,7 +23,8 @@ final class RawMaterialHistoryService
         if (! $this->sharePolicy->isPrimaryContext($context)) {
             $this->sharePolicy->assertCanConsume($actor, $context, $materialId);
         }
-        $material = DB::table('raw_materials')->where('organization_id', $actor->organization_id)->where('id', $materialId)->first();
+        $material = DB::table('raw_materials')->where('organization_id', $actor->organization_id)
+            ->where('id', $materialId)->whereNull('deleted_at')->first();
         if (! $material) {
             throw new RawMaterialException('RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found'), 404);
         }

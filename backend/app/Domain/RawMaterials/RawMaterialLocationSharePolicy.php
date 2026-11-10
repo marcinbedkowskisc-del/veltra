@@ -66,6 +66,7 @@ final class RawMaterialLocationSharePolicy
         $query = DB::table('raw_materials as materials')
             ->where('materials.organization_id', $actor->organization_id)
             ->where('materials.id', $materialId)
+            ->whereNull('materials.deleted_at')
             ->where('materials.lifecycle_state', 'ACTIVE')
             ->whereNotNull('materials.approved_revision_id')
             ->whereExists(fn (Builder $query) => $query->selectRaw('1')

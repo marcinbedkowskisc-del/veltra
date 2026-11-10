@@ -47,7 +47,13 @@ final class RawMaterialCommercialService
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $product = DB::table('supplier_products')->where('organization_id', $actor->organization_id)
-            ->where('id', $productId)->first();
+            ->where('id', $productId)
+            ->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.id', 'supplier_products.raw_material_id')
+                ->whereColumn('raw_materials.organization_id', 'supplier_products.organization_id')
+                ->whereNull('raw_materials.deleted_at'))
+            ->first();
         if (! $product) {
             $this->notFound();
         }
@@ -292,6 +298,7 @@ final class RawMaterialCommercialService
                     ->on('materials.organization_id', '=', 'products.organization_id');
             })
             ->where('products.organization_id', $actor->organization_id)
+            ->whereNull('materials.deleted_at')
             ->where('products.raw_material_id', $materialId)
             ->whereRaw('revisions.revision_no = (SELECT max(latest.revision_no)
                 FROM supplier_product_revisions latest
@@ -504,6 +511,7 @@ final class RawMaterialCommercialService
                             ->on('materials.organization_id', '=', 'products.organization_id');
                     })
                     ->where('products.organization_id', $actor->organization_id)
+                    ->whereNull('materials.deleted_at')
                     ->where('products.id', $productId)->lockForUpdate()->first([
                         'products.id', 'products.lifecycle_state', 'suppliers.lifecycle_state as supplier_state',
                         'materials.lifecycle_state as material_state', 'materials.approved_revision_id',
@@ -614,6 +622,7 @@ final class RawMaterialCommercialService
                             ->on('materials.organization_id', '=', 'products.organization_id');
                     })
                     ->where('products.organization_id', $actor->organization_id)
+                    ->whereNull('materials.deleted_at')
                     ->where('products.id', $offer->supplier_product_id)->first([
                         'products.id', 'products.lifecycle_state', 'materials.lifecycle_state as material_state',
                         'materials.approved_revision_id', 'materials.id as raw_material_id',
@@ -1340,6 +1349,7 @@ final class RawMaterialCommercialService
                     ->on('materials.organization_id', '=', 'products.organization_id');
             })
             ->where('revisions.organization_id', $actor->organization_id)
+            ->whereNull('materials.deleted_at')
             ->where('revisions.id', $event->supplier_product_revision_id)
             ->where('revisions.raw_material_id', $material->id)
             ->select([
@@ -1574,7 +1584,13 @@ final class RawMaterialCommercialService
     private function presentProduct(User $actor, string $productId): array
     {
         $product = DB::table('supplier_products')->where('organization_id', $actor->organization_id)
-            ->where('id', $productId)->first();
+            ->where('id', $productId)
+            ->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.id', 'supplier_products.raw_material_id')
+                ->whereColumn('raw_materials.organization_id', 'supplier_products.organization_id')
+                ->whereNull('raw_materials.deleted_at'))
+            ->first();
         if (! $product) {
             $this->notFound();
         }
@@ -1612,7 +1628,8 @@ final class RawMaterialCommercialService
 
     private function material(User $actor, string $materialId, bool $activeOnly = false): ?object
     {
-        $query = DB::table('raw_materials')->where('organization_id', $actor->organization_id)->where('id', $materialId);
+        $query = DB::table('raw_materials')->where('organization_id', $actor->organization_id)
+            ->where('id', $materialId)->whereNull('deleted_at');
         if ($activeOnly) {
             $query->where('lifecycle_state', 'ACTIVE')->whereNotNull('approved_revision_id');
         }
@@ -1648,6 +1665,7 @@ final class RawMaterialCommercialService
             })
             ->where('products.organization_id', $actor->organization_id)
             ->where('products.id', $productId)
+            ->whereNull('materials.deleted_at')
             ->where('materials.lifecycle_state', 'ACTIVE')
             ->whereColumn('materials.approved_revision_id', 'revisions.raw_material_revision_id')
             ->whereRaw('revisions.revision_no = (SELECT max(latest.revision_no)

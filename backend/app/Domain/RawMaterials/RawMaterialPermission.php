@@ -14,6 +14,7 @@ enum RawMaterialPermission: string
     case Unblock = 'RAW_MATERIALS_UNBLOCK';
     case Archive = 'RAW_MATERIALS_ARCHIVE';
     case Restore = 'RAW_MATERIALS_RESTORE';
+    case DeleteDraft = 'RAW_MATERIALS_DELETE_DRAFT';
     case CategoryManage = 'RAW_MATERIALS_CATEGORY_MANAGE';
     case SupplierView = 'RAW_MATERIALS_SUPPLIER_VIEW';
     case SupplierManage = 'RAW_MATERIALS_SUPPLIER_MANAGE';
@@ -31,7 +32,7 @@ enum RawMaterialPermission: string
 
     public function delegable(): bool
     {
-        return $this !== self::PermissionDelegate;
+        return ! in_array($this, [self::PermissionDelegate, self::DeleteDraft], true);
     }
 
     public function requiresPrimaryCatalogContext(): bool
@@ -46,6 +47,7 @@ enum RawMaterialPermission: string
             self::Unblock,
             self::Archive,
             self::Restore,
+            self::DeleteDraft,
             self::CategoryManage,
             self::AllergenManage,
             self::StorageManage,

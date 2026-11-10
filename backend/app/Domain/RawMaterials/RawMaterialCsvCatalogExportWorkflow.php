@@ -124,6 +124,7 @@ final class RawMaterialCsvCatalogExportWorkflow
                     ->on('revisions.organization_id', '=', 'materials.organization_id');
             })
             ->where('materials.organization_id', $actor->organization_id)
+            ->whereNull('materials.deleted_at')
             ->where('materials.lifecycle_state', 'ACTIVE')
             ->orderBy('materials.code')
             ->limit($maxRows + 1);

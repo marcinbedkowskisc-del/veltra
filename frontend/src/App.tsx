@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
-import AuthPanel from './AuthPanel'
 import AccountLinkForm from './AccountLinkForm'
+import AuthPanel, { type AuthContext } from './AuthPanel'
 import { developmentStageLabel } from './config/developmentStage'
+import RawMaterialsCatalogPage from './rawMaterials/RawMaterialsCatalogPage'
 
 type Health = {
   app: string
@@ -34,6 +35,12 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [attempt, setAttempt] = useState(0)
+  const [authContext, setAuthContext] = useState<AuthContext | null>(null)
+  const [authKey, setAuthKey] = useState(0)
+  const [sessionExpired, setSessionExpired] = useState(false)
+  const isRawMaterialsRoute = window.location.pathname === '/raw-materials'
+  const isActivationRoute = window.location.pathname === '/activate'
+    || window.location.pathname === '/reset-password'
 
   useEffect(() => {
     const controller = new AbortController()
@@ -87,33 +94,97 @@ function App() {
     }
   }, [attempt])
 
+  const handleContextChange = useCallback((context: AuthContext | null) => {
+    setAuthContext(context)
+    if (context) setSessionExpired(false)
+  }, [])
+
+  const handleSessionExpired = useCallback(() => {
+    setAuthContext(null)
+    setSessionExpired(true)
+    setAuthKey((key) => key + 1)
+  }, [])
+
+  if (isActivationRoute) {
+    return (
+      <main className="account-route">
+        <a className="brand-link" href="/">VELTRA <span>2.0</span></a>
+        <AccountLinkForm activation={window.location.pathname === '/activate'} />
+      </main>
+    )
+  }
+
   return (
-    <main>
-      <p className="eyebrow">{developmentStageLabel}</p>
-      <h1>VELTRA 2.0</h1>
-      <section aria-label="Status środowiska" aria-live="polite" aria-busy={loading}>
-        <h2>Status backendu</h2>
-        {loading && <p>Sprawdzanie połączenia...</p>}
-        {error && <p role="alert" className="error">Backend niedostępny: {error}</p>}
-        {health && (
-          <>
-            <p className={health.status === 'ok' ? 'success' : 'error'}>
-              {health.status === 'ok' ? 'Backend działa poprawnie' : 'Backend: awaria zależności'}
-            </p>
-            <dl>
-              <div><dt>PostgreSQL</dt><dd>{health.checks.postgresql === 'up' ? 'Dostępny' : 'Niedostępny'}</dd></div>
-              <div><dt>Redis</dt><dd>{health.checks.redis === 'up' ? 'Dostępny' : 'Niedostępny'}</dd></div>
-            </dl>
-          </>
-        )}
-      </section>
-      <button disabled={loading} onClick={() => setAttempt((value) => value + 1)}>
-        Sprawdź ponownie
-      </button>
-      {window.location.pathname === '/activate' || window.location.pathname === '/reset-password'
-        ? <AccountLinkForm activation={window.location.pathname === '/activate'} />
-        : <AuthPanel />}
-    </main>
+    <div className="app-shell">
+      <header className="app-header">
+        <a className="brand-link" href="/" aria-label="VELTRA 2.0 — strona główna">
+          VELTRA <span>2.0</span>
+        </a>
+        <nav className="primary-nav" aria-label="Nawigacja główna">
+          <a href="/" aria-current={isRawMaterialsRoute ? undefined : 'page'}>Start</a>
+          <a href="/raw-materials" aria-current={isRawMaterialsRoute ? 'page' : undefined}>Surowce</a>
+        </nav>
+        <span className="stage-label">{developmentStageLabel}</span>
+      </header>
+
+      <div className="app-layout">
+        <aside className="app-sidebar" aria-label="Konto i status środowiska">
+          <section className="health-card" aria-label="Status środowiska" aria-live="polite" aria-busy={loading}>
+            <div className="section-heading">
+              <span className="status-indicator" data-status={health?.status ?? (error ? 'down' : 'loading')} aria-hidden="true" />
+              <h2>Status backendu</h2>
+            </div>
+            {loading && <p>Sprawdzanie połączenia…</p>}
+            {error && <p role="alert" className="error">Backend niedostępny: {error}</p>}
+            {health && (
+              <>
+                <p className={health.status === 'ok' ? 'success' : 'error'}>
+                  {health.status === 'ok' ? 'Backend działa poprawnie' : 'Backend: awaria zależności'}
+                </p>
+                <dl>
+                  <div><dt>PostgreSQL</dt><dd>{health.checks.postgresql === 'up' ? 'Dostępny' : 'Niedostępny'}</dd></div>
+                  <div><dt>Redis</dt><dd>{health.checks.redis === 'up' ? 'Dostępny' : 'Niedostępny'}</dd></div>
+                </dl>
+              </>
+            )}
+            <button type="button" className="button button-quiet" disabled={loading} onClick={() => setAttempt((value) => value + 1)}>
+              Sprawdź ponownie
+            </button>
+          </section>
+          <AuthPanel key={authKey} onContextChange={handleContextChange} />
+        </aside>
+
+        <main className="app-main">
+          {isRawMaterialsRoute ? (
+            authContext?.user ? (
+              authContext.location ? (
+                <RawMaterialsCatalogPage
+                  key={`${authContext.user.id}:${authContext.location.id}`}
+                  onSessionExpired={handleSessionExpired}
+                />
+              ) : (
+                <section className="state-panel">
+                  <h1>Wybierz lokalizację operacyjną</h1>
+                  <p>Katalog surowców wymaga aktywnego kontekstu lokalizacji. Wybierz go w panelu konta.</p>
+                </section>
+              )
+            ) : (
+              <section className="state-panel">
+                <h1>Katalog surowców</h1>
+                <p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie w panelu konta.' : 'Zaloguj się i wybierz lokalizację, aby otworzyć katalog.'}</p>
+              </section>
+            )
+          ) : (
+            <section className="welcome-panel">
+              <p className="eyebrow">OPERACJE • DANE • KONTROLA</p>
+              <h1>Przestrzeń operacyjna VELTRA</h1>
+              <p>Kontrolowany dostęp do danych i procesów operacyjnych.</p>
+              <a className="button button-primary" href="/raw-materials">Otwórz katalog surowców</a>
+            </section>
+          )}
+        </main>
+      </div>
+    </div>
   )
 }
 

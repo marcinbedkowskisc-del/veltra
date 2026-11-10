@@ -145,6 +145,7 @@ final class RawMaterialService
             })
             ->leftJoin('raw_material_categories as categories', 'categories.id', '=', 'revisions.category_id')
             ->where('materials.organization_id', $actor->organization_id)
+            ->whereNull('materials.deleted_at')
             ->whereNotNull('materials.approved_revision_id')
             ->where('materials.lifecycle_state', '<>', 'ARCHIVED')
             ->select([
@@ -733,7 +734,12 @@ final class RawMaterialService
         $revisionQuery = DB::table('raw_material_revisions')
             ->where('organization_id', $actor->organization_id)
             ->where('raw_material_id', $materialId)
-            ->where('id', $revisionId);
+            ->where('id', $revisionId)
+            ->whereExists(fn ($materials) => $materials->selectRaw('1')
+                ->from('raw_materials')
+                ->whereColumn('raw_materials.organization_id', 'raw_material_revisions.organization_id')
+                ->whereColumn('raw_materials.id', 'raw_material_revisions.raw_material_id')
+                ->whereNull('raw_materials.deleted_at'));
         if (! $isPrimary) {
             $revisionQuery->whereExists(fn ($materials) => $materials->selectRaw('1')
                 ->from('raw_materials')
@@ -1210,11 +1216,7 @@ final class RawMaterialService
     public function validateBulkArchive(User $actor, Location $context, array $items): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
-        Validator::make(['items' => $items], [
-            'items' => ['required', 'array', 'min:1', 'max:'.config('raw_material_csv.export_max_rows')],
-            'items.*.id' => ['required', 'uuid', 'distinct'],
-            'items.*.version' => ['sometimes', 'nullable', 'string'],
-        ])->validate();
+        $items = $this->validateBulkArchiveItems($items);
 
         return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, function () use ($actor, $context, $items): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
@@ -1228,17 +1230,162 @@ final class RawMaterialService
             $operationId = Str::uuid()->toString();
             foreach ($items as $item) {
                 $this->audit($actor, $context, 'RAW_MATERIAL', $item['id'], 'BULK_ARCHIVE_VALIDATED', null, [
-                    'mutation_performed' => false, 'policy_status' => 'BLOCKED_BY_OWNER_DECISION',
+                    'mutation_performed' => false, 'policy_status' => 'ALL_OR_NOTHING',
                 ], operationId: $operationId);
             }
 
             return [
                 'validated_count' => count($items),
-                'mutation_available' => false,
-                'policy_status' => 'BLOCKED_BY_OWNER_DECISION',
-                'message' => 'Walidacja nie archiwizuje rekordów. Wymagana jest decyzja właściciela o atomowości operacji zbiorczej.',
+                'mutation_available' => true,
+                'mutation_performed' => false,
+                'policy_status' => 'ALL_OR_NOTHING',
+                'message' => 'Cała lista spełnia warunki archiwizacji. Walidacja nie zmieniła stanu surowców.',
             ];
         });
+    }
+
+    public function archiveBulk(User $actor, Location $context, array $items, string $reason): array
+    {
+        $items = $this->validateBulkArchiveItems($items);
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $items, $reason): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Archive);
+            usort($items, fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+            $materials = DB::table('raw_materials')
+                ->where('organization_id', $actor->organization_id)
+                ->whereNull('deleted_at')
+                ->whereIn('id', array_column($items, 'id'))
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            if ($materials->count() !== count($items)) {
+                throw new RawMaterialException('RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+
+            foreach ($items as $item) {
+                $material = $materials->get($item['id']);
+                RawMaterialVersion::assertCurrent($material, $item['version'] ?? null);
+                $this->assertArchivable($material);
+            }
+
+            $operationId = Str::uuid()->toString();
+            $archived = [];
+            foreach ($items as $item) {
+                $material = $materials->get($item['id']);
+                $previous = $this->stateHash($material);
+                DB::table('raw_materials')->where('id', $material->id)->update([
+                    'lifecycle_state' => 'ARCHIVED',
+                    'blocked_at' => null,
+                    'blocked_by' => null,
+                    'block_reason' => null,
+                    'archived_at' => now(),
+                    'archived_by' => $actor->id,
+                    'updated_at' => now(),
+                ]);
+                $this->audit($actor, $context, 'RAW_MATERIAL', $material->id, 'ARCHIVED', $previous, [], $reason, $operationId);
+                $updated = $this->material($actor, $material->id);
+                $archived[] = [
+                    'id' => $updated->id,
+                    'lifecycle_state' => $updated->lifecycle_state,
+                    'version' => $updated->edit_version,
+                ];
+            }
+
+            return [
+                'operation_id' => $operationId,
+                'archived_count' => count($archived),
+                'materials' => $archived,
+            ];
+        }));
+    }
+
+    public function deleteDraft(User $actor, Location $context, string $materialId, ?string $expectedVersion): void
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::DeleteDraft);
+
+        $this->contexts->runForSubject(
+            AuthorizationMutationScope::rawMaterialDraftDelete(),
+            $actor->id,
+            $materialId,
+            fn () => DB::transaction(function () use ($actor, $context, $materialId, $expectedVersion): void {
+                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+                $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::DeleteDraft);
+                $material = $this->material($actor, $materialId, true);
+                RawMaterialVersion::assertCurrent($material, $expectedVersion);
+                $this->assertDraftDeletable($material);
+
+                $operationId = Str::uuid()->toString();
+                $deletedAt = now();
+                $afterHash = hash('sha256', json_encode([
+                    'id' => $material->id,
+                    'code' => $material->code,
+                    'lifecycle_state' => $material->lifecycle_state,
+                    'deleted_at' => $deletedAt->toISOString(),
+                    'deleted_by' => $actor->id,
+                    'deleted_operation_id' => $operationId,
+                ], JSON_THROW_ON_ERROR));
+                DB::table('raw_material_audit_events')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'operation_id' => $operationId,
+                    'actor_user_id' => $actor->id,
+                    'actor_location_id' => $context->id,
+                    'subject_type' => 'RAW_MATERIAL',
+                    'subject_id' => $material->id,
+                    'event_code' => 'DRAFT_DELETED',
+                    'outcome' => 'ACCEPTED',
+                    'before_hash' => $this->stateHash($material),
+                    'after_hash' => $afterHash,
+                    'metadata' => json_encode([
+                        'code' => $material->code,
+                        'version' => $material->edit_version,
+                    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                ]);
+                DB::table('raw_materials')->where('id', $material->id)->update([
+                    'deleted_at' => $deletedAt,
+                    'deleted_by' => $actor->id,
+                    'deleted_operation_id' => $operationId,
+                    'updated_at' => $deletedAt,
+                ]);
+            }),
+        );
+    }
+
+    private function assertDraftDeletable(object $material): void
+    {
+        if ($material->deleted_at !== null
+            || $material->lifecycle_state !== 'DRAFT'
+            || $material->approved_revision_id !== null
+            || $material->pending_revision_id !== null
+            || $material->working_revision_id === null
+            || DB::table('raw_materials as materials')
+                ->where('materials.organization_id', $material->organization_id)
+                ->where('materials.id', $material->id)
+                ->whereRaw('public.raw_materials_draft_has_dependencies(materials.organization_id, materials.id)')
+                ->exists()) {
+            throw new RawMaterialException(
+                'RAW_MATERIAL_DRAFT_DELETE_INVALID',
+                'Szkicu nie można usunąć, ponieważ nie spełnia warunków bezpiecznego usunięcia.',
+            );
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function validateBulkArchiveItems(array $items): array
+    {
+        return Validator::make(['items' => $items], [
+            'items' => ['required', 'array', 'min:1', 'max:100'],
+            'items.*' => ['required', 'array:id,version'],
+            'items.*.id' => ['required', 'uuid', 'distinct'],
+            'items.*.version' => ['sometimes', 'nullable', 'string'],
+        ])->validate()['items'];
     }
 
     private function assertArchivable(object $material): void
@@ -1831,7 +1978,7 @@ final class RawMaterialService
     private function material(User $actor, string $materialId, bool $lock = false): object
     {
         $query = DB::table('raw_materials')->where('organization_id', $actor->organization_id)
-            ->where('id', $materialId);
+            ->where('id', $materialId)->whereNull('deleted_at');
         if ($lock) {
             $query->lockForUpdate();
         }

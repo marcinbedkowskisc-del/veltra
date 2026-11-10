@@ -169,6 +169,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.mutate');
     }
 
+    public static function rawMaterialDraftDelete(): self
+    {
+        return new self('raw-material.draft.delete');
+    }
+
     public static function rawMaterialShare(): self
     {
         return new self('raw-material.share');

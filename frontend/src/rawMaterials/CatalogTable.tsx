@@ -21,6 +21,7 @@ type Props = {
   onSort: (key: SortKey) => void
   onToggle: (id: string) => void
   onTogglePage: () => void
+  onOpenDetail: (id: string, trigger: HTMLButtonElement) => void
 }
 
 type SortableColumn = {
@@ -51,6 +52,7 @@ export default function CatalogTable({
   onSort,
   onToggle,
   onTogglePage,
+  onOpenDetail,
 }: Props) {
   const selectPageRef = useRef<HTMLInputElement>(null)
   const selectedOnPage = rows.filter((row) => selectedIds.has(row.id)).length
@@ -149,7 +151,17 @@ export default function CatalogTable({
                 </div>
               </td>
               <td className="sku-cell">{row.sku}</td>
-              <td className="name-cell">{row.name}</td>
+              <td className="name-cell">
+                <button
+                  type="button"
+                  className="detail-link"
+                  onClick={(event) => onOpenDetail(row.id, event.currentTarget)}
+                  disabled={selectionDisabled}
+                  aria-label={`Pokaż szczegóły: ${row.name}`}
+                >
+                  {row.name}
+                </button>
+              </td>
               <td>{row.unit}</td>
               <td>{formatDecimal(row.nominalQuantity)}</td>
               <td>{formatDecimal(row.usableQuantity)}</td>

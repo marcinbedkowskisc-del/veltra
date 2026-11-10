@@ -1,4 +1,7 @@
+import { isRecord } from './api'
+
 type PreviewMode = 'demo' | 'compact' | 'restricted' | 'not-ready' | 'session-expired' | 'forbidden'
+  | 'detail-forbidden' | 'create-demo' | 'create-saving' | 'create-not-ready' | 'create-unauthorized'
 
 const names = [
   'Mąka pszenna typ 550',
@@ -62,7 +65,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function catalogResponse(url: URL, mode: PreviewMode): Response {
-  if (mode === 'not-ready') {
+  if (mode === 'not-ready' || mode === 'create-not-ready') {
     return jsonResponse({
       error: {
         code: 'RAW_MATERIALS_MODULE_UNAVAILABLE',
@@ -128,9 +131,112 @@ function catalogResponse(url: URL, mode: PreviewMode): Response {
   })
 }
 
+function detailResponse(materialId: string, mode: PreviewMode): Response {
+  if (mode === 'detail-forbidden') return jsonResponse({ message: 'Brak dostępu.' }, 403)
+  const product = products.find((item) => item.id === materialId)
+  if (!product) return jsonResponse({ message: 'Nie znaleziono surowca.' }, 404)
+
+  const data = {
+    id: product.id,
+    code: product.sku,
+    sku: product.sku,
+    lifecycle_state: product.lifecycle_state,
+    version: 3,
+    approved_revision_id: `REV-${product.ordinal}-3`,
+    revision: {
+      id: `REV-${product.ordinal}-3`,
+      revision_no: 3,
+      name: product.revision.name,
+      description: 'Syntetyczny opis demonstracyjny surowca do izolowanej weryfikacji interfejsu.',
+      category_id: product.category_id,
+      base_unit_code: product.revision.base_unit_code,
+      base_unit_dimension: product.revision.base_unit_code === 'pc' ? 'COUNT' : 'MASS',
+      nominal_quantity: product.nominal_quantity,
+      usable_quantity: product.usable_quantity,
+      allergen_state: 'DECLARED',
+      units: [{
+        unit_code: product.revision.base_unit_code,
+        dimension: product.revision.base_unit_code === 'pc' ? 'COUNT' : 'MASS',
+        conversion_kind: 'BASE',
+        to_base_factor: '1.000000',
+        basis: null,
+      }],
+      aliases: ['wariant demonstracyjny', 'alias syntetyczny'],
+    },
+    nominal_quantity: product.nominal_quantity,
+    usable_quantity: product.usable_quantity,
+    yield_percent: '96.000000',
+    last_update: {
+      occurred_at: '2025-01-15T10:30:00Z',
+      actor: { id: 'DEMO-ACTOR', first_name: 'Użytkownik', last_name: 'demonstracyjny' },
+    },
+    history_url: mode === 'restricted' ? null : `/api/v1/raw-materials/${product.id}/history`,
+    ...(mode === 'restricted' ? {} : {
+      reference_net_price: product.reference_net_price,
+      currency_code: 'PLN',
+      usable_unit_cost: product.usable_unit_cost,
+      usable_cost_basis: product.usable_cost_basis,
+    }),
+  }
+  return jsonResponse({ data })
+}
+
+function revisionsResponse(materialId: string): Response {
+  const product = products.find((item) => item.id === materialId)
+  if (!product) return jsonResponse({ message: 'Nie znaleziono surowca.' }, 404)
+  return jsonResponse({ data: [
+    {
+      id: `REV-${product.ordinal}-3`,
+      revision_no: 3,
+      name: product.revision.name,
+      category_id: product.category_id,
+      base_unit_code: product.revision.base_unit_code,
+      allergen_state: 'DECLARED',
+      critical_change: false,
+      created_at: '2025-01-15T10:30:00Z',
+      approvals: [{ outcome: 'APPROVED', actor_user_id: 'DEMO-ACTOR', occurred_at: '2025-01-15T10:30:00Z', reason: 'Weryfikacja demonstracyjna' }],
+    },
+    {
+      id: `REV-${product.ordinal}-2`,
+      revision_no: 2,
+      name: `${product.revision.name} — poprzednia rewizja`,
+      category_id: product.category_id,
+      base_unit_code: product.revision.base_unit_code,
+      allergen_state: 'UNKNOWN',
+      critical_change: true,
+      created_at: '2024-12-10T09:00:00Z',
+      approvals: [],
+    },
+  ] })
+}
+
 export function installVisualPreviewApi(): void {
   const mode = new URLSearchParams(window.location.search).get('mode') as PreviewMode | null ?? 'demo'
   const nativeFetch = window.fetch.bind(window)
+  const reservations = new Map<string, { reservation_id: string; sku: string; expires_at: string; status: string }>()
+  const createdMaterials = new Map<string, {
+    id: string
+    code: string
+    sku: string
+    lifecycle_state: 'DRAFT'
+    version: number
+    approved_revision_id: null
+    revision: { name: string; description: string | null; category_id: string; base_unit_code: string }
+  }>()
+  let nextSku = 42
+
+  function capabilitiesResponse(): Response {
+    const unavailable = mode === 'not-ready' || mode === 'create-not-ready'
+    const authorized = mode === 'create-demo' || mode === 'create-saving'
+    return jsonResponse({ data: {
+      module: 'RAW_MATERIALS',
+      location_id: '00000000-0000-4000-8000-000000000101',
+      readiness: unavailable ? 'NOT_READY' : 'READY',
+      available: !unavailable,
+      permissions: { create: authorized || mode === 'create-not-ready' },
+      actions: { create: authorized && !unavailable },
+    } })
+  }
 
   window.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof Request ? input.url : input.href, window.location.origin)
@@ -141,19 +247,110 @@ export function installVisualPreviewApi(): void {
       throw new Error('Zablokowano żądanie spoza demonstracyjnego API.')
     }
 
+    if (url.pathname === '/api/v1/security/raw-materials/capabilities') {
+      return capabilitiesResponse()
+    }
+
     if (url.pathname === '/api/v1/raw-materials' && (init?.method ?? 'GET') === 'GET') {
       return catalogResponse(url, mode)
+    }
+    const revisionPath = url.pathname.match(/^\/api\/v1\/raw-materials\/([^/]+)\/revisions$/)
+    if (revisionPath && (init?.method ?? 'GET') === 'GET') {
+      return revisionsResponse(decodeURIComponent(revisionPath[1]))
     }
     if (url.pathname === '/api/v1/raw-materials/categories') {
       return jsonResponse({ data: [
         { id: 'CAT-FOOD', name: 'Produkty spożywcze' },
         { id: 'CAT-OIL', name: 'Oleje i tłuszcze' },
+        { id: '00000000-0000-4000-8000-000000000201', name: 'Nowe surowce demonstracyjne' },
       ] })
+    }
+    if (url.pathname === '/api/v1/raw-materials/sku-reservations' && init?.method === 'POST') {
+      if (mode !== 'create-demo' && mode !== 'create-saving') {
+        return jsonResponse({ message: 'Brak uprawnień demonstracyjnych.' }, 403)
+      }
+      const requestHeaders = new Headers(init.headers)
+      const key = requestHeaders.get('Idempotency-Key')
+      if (!key || !/^[A-Za-z0-9._:-]{8,120}$/.test(key)) {
+        return jsonResponse({ message: 'Brak prawidłowego klucza idempotencji.' }, 422)
+      }
+      let reservation = reservations.get(key)
+      if (!reservation) {
+        const ordinal = nextSku++
+        const sequence = String(ordinal).padStart(6, '0')
+        reservation = {
+          reservation_id: `00000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+          sku: `RAW-${sequence}`,
+          expires_at: '2099-01-01T00:00:00Z',
+          status: 'RESERVED',
+        }
+        reservations.set(key, reservation)
+      }
+      return jsonResponse({ data: reservation }, 201)
+    }
+    if (url.pathname === '/api/v1/raw-materials' && init?.method === 'POST') {
+      if (mode !== 'create-demo' && mode !== 'create-saving') {
+        return jsonResponse({ message: 'Brak uprawnień demonstracyjnych.' }, 403)
+      }
+      if (mode === 'create-saving') await new Promise((resolve) => setTimeout(resolve, 2200))
+      let body: Record<string, unknown>
+      try {
+        const parsed: unknown = JSON.parse(String(init.body ?? '{}'))
+        if (!isRecord(parsed)) {
+          throw new Error('Nieprawidłowy payload demonstracyjny.')
+        }
+        body = parsed
+      } catch {
+        return jsonResponse({ message: 'Nieprawidłowy payload demonstracyjny.' }, 422)
+      }
+      const reserved = [...reservations.values()].find((item) => item.reservation_id === body.sku_reservation_id)
+      if (!reserved) return jsonResponse({ message: 'Nie znaleziono rezerwacji SKU.' }, 409)
+      const existing = createdMaterials.get(reserved.reservation_id)
+      if (existing) return jsonResponse({ data: existing }, 201)
+      if (typeof body.name !== 'string' || typeof body.category_id !== 'string'
+        || typeof body.base_unit_code !== 'string') {
+        return jsonResponse({ message: 'Sprawdź dane formularza.' }, 422)
+      }
+      const material = {
+        id: reserved.reservation_id,
+        code: reserved.sku,
+        sku: reserved.sku,
+        lifecycle_state: 'DRAFT' as const,
+        version: 1,
+        approved_revision_id: null,
+        revision: {
+          name: body.name,
+          description: typeof body.description === 'string' ? body.description : null,
+          category_id: body.category_id,
+          base_unit_code: body.base_unit_code,
+        },
+      }
+      createdMaterials.set(material.id, material)
+      products.push({
+        id: material.id,
+        ordinal: products.length + 1,
+        sku: material.sku,
+        lifecycle_state: material.lifecycle_state,
+        nominal_quantity: typeof body.nominal_quantity === 'string' ? body.nominal_quantity : '1.000000',
+        usable_quantity: typeof body.usable_quantity === 'string' ? body.usable_quantity : '1.000000',
+        reference_net_price: '0.00',
+        currency_code: 'PLN',
+        usable_unit_cost: '0.00',
+        usable_cost_basis: 'PLN/100g',
+        revision: { name: material.revision.name, base_unit_code: material.revision.base_unit_code },
+        category_id: material.revision.category_id,
+        supplier_id: 'SUP-1',
+      })
+      return jsonResponse({ data: material }, 201)
     }
     if (url.pathname === '/api/v1/raw-materials/suppliers') {
       return jsonResponse({ data: { data: [
         { id: 'SUP-1', supplier_code: 'D-001', display_name: 'Dostawca demonstracyjny' },
       ] } })
+    }
+    const detailPath = url.pathname.match(/^\/api\/v1\/raw-materials\/([^/]+)$/)
+    if (detailPath && (init?.method ?? 'GET') === 'GET') {
+      return detailResponse(decodeURIComponent(detailPath[1]), mode)
     }
     if (url.pathname === '/api/v1/raw-materials/catalog-exports/selection' && init?.method === 'POST') {
       return jsonResponse({ data: {

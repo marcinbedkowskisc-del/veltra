@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './App.css'
 import './index.css'
@@ -8,7 +8,13 @@ import { installVisualPreviewApi } from './visualPreviewApi'
 installVisualPreviewApi()
 
 function VisualPreview() {
+  const mode = new URLSearchParams(window.location.search).get('mode') ?? 'demo'
+  const createPreview = mode.startsWith('create-')
   const [sessionExpired, setSessionExpired] = useState(false)
+  const handleSessionExpired = useCallback(() => setSessionExpired(true), [])
+  const previewDetailId = new URLSearchParams(window.location.search).get('detail') === 'first'
+    ? '00000000-0000-4000-8000-000000000001'
+    : undefined
   const [canvasWidth, canvasHeight] = (new URLSearchParams(window.location.search).get('canvas') ?? '')
     .split('x')
     .map(Number)
@@ -38,6 +44,11 @@ function VisualPreview() {
               </div>
               <p className="error">Backend wyłączony — odpowiedzi API są symulowane.</p>
               <p>Moduł RAW_MATERIALS: NOT_READY</p>
+              {createPreview && (
+                <p className="notice">
+                  Podgląd tworzenia używa syntetycznych capabilities i danych. Żądania zapisu są symulowane; produkcyjna gotowość pozostaje NOT_READY.
+                </p>
+              )}
             </section>
             <section className="auth-panel" aria-label="Konto i lokalizacja">
               <h2>Kontekst testowy</h2>
@@ -54,7 +65,11 @@ function VisualPreview() {
                 <p>Żądanie demonstracyjne otrzymało HTTP 401.</p>
               </section>
             )}
-            <RawMaterialsCatalogPage onSessionExpired={() => setSessionExpired(true)} />
+            <RawMaterialsCatalogPage
+              onSessionExpired={handleSessionExpired}
+              previewDetailId={previewDetailId}
+              operatingLocationId="00000000-0000-4000-8000-000000000101"
+            />
           </main>
         </div>
       </div>

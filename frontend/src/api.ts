@@ -1,10 +1,17 @@
 export class ApiError extends Error {
   status: number
   code: string | null
-  constructor(status: number, message: string, code: string | null = null) {
+  errors: Record<string, string[]>
+  constructor(
+    status: number,
+    message: string,
+    code: string | null = null,
+    errors: Record<string, string[]> = {},
+  ) {
     super(message)
     this.status = status
     this.code = code
+    this.errors = errors
   }
 }
 
@@ -37,6 +44,15 @@ function httpErrorMessage(status: number): string {
 function responseError(status: number, result: unknown, response: Response): ApiError {
   const error = isRecord(result) && isRecord(result.error) ? result.error : null
   const code = error && typeof error.code === 'string' ? error.code : null
+  const validationSource = isRecord(result) && isRecord(result.errors) ? result.errors : null
+  const errors: Record<string, string[]> = {}
+  if (validationSource) {
+    Object.entries(validationSource).forEach(([field, messages]) => {
+      if (Array.isArray(messages) && messages.every((message): message is string => typeof message === 'string')) {
+        errors[field] = messages
+      }
+    })
+  }
   const serverMessage = error && typeof error.message === 'string'
     ? error.message
     : isRecord(result) && typeof result.message === 'string'
@@ -49,7 +65,7 @@ function responseError(status: number, result: unknown, response: Response): Api
       ? serverMessage
       : httpErrorMessage(status)
 
-  return new ApiError(status, message, code)
+  return new ApiError(status, message, code, errors)
 }
 
 async function send(

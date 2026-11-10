@@ -17,8 +17,20 @@ const allowedNames = new Set([
   'raw-catalog-filtered.png',
   'raw-catalog-restricted.png',
   'raw-catalog-not-ready.png',
+  'raw-catalog-detail-1920.png',
+  'raw-catalog-detail-1440.png',
+  'raw-catalog-detail-restricted.png',
+  'raw-catalog-detail-forbidden.png',
+  'raw-catalog-detail-not-ready.png',
+  'raw-material-create-empty.png',
+  'raw-material-create-filled.png',
+  'raw-material-create-validation.png',
+  'raw-material-create-saving.png',
+  'raw-material-create-success.png',
+  'raw-material-create-not-ready.png',
+  'raw-material-create-unauthorized.png',
+  'raw-material-create-mobile.png',
 ])
-const outputDirectory = resolve('artifacts/stage4a1')
 
 const server = createServer(async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:4179')
@@ -53,6 +65,11 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end('Nieprawidłowy plik PNG.')
       return
     }
+    const outputDirectory = resolve(name.startsWith('raw-material-create-')
+      ? 'artifacts/stage4b2a'
+      : name.startsWith('raw-catalog-detail-')
+        ? 'artifacts/stage4b1'
+        : 'artifacts/stage4a1')
     await mkdir(outputDirectory, { recursive: true })
     await writeFile(resolve(outputDirectory, name), bytes)
     response.writeHead(201, { 'Content-Type': 'application/json' }).end(JSON.stringify({ saved: name, bytes: size }))

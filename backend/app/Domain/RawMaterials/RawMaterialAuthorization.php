@@ -15,15 +15,7 @@ final class RawMaterialAuthorization
 {
     public function assertAllowed(User $actor, Location $context, RawMaterialPermission $permission): void
     {
-        $freshActor = User::with('organization')->find($actor->id);
-        $freshContext = Location::find($context->id);
-
-        if (! $freshActor || ! $freshContext || ! $freshActor->is_active || ! $freshContext->is_active
-            || $freshActor->email_verified_at === null || ! $freshActor->organization->is_active
-            || $freshContext->organization_id !== $freshActor->organization_id
-            || ! app(MembershipService::class)->available($freshActor)->where('location_id', $freshContext->id)->exists()) {
-            throw new AuthorizationException(__('messages.unauthorized'));
-        }
+        [$freshActor, $freshContext] = $this->resolveActorContext($actor, $context);
 
         if ($permission->requiresPrimaryCatalogContext()
             && ! app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext)) {
@@ -48,9 +40,41 @@ final class RawMaterialAuthorization
         }
     }
 
+    /**
+     * @return array{permission: bool, context: bool}
+     */
+    public function evaluateCreateCapability(User $actor, Location $context): array
+    {
+        [$freshActor, $freshContext] = $this->resolveActorContext($actor, $context);
+
+        return [
+            'permission' => $this->hasEffectiveGrant($freshActor, RawMaterialPermission::Create),
+            'context' => ! RawMaterialPermission::Create->requiresPrimaryCatalogContext()
+                || app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext),
+        ];
+    }
+
     public function hasEffectiveGrant(User $user, RawMaterialPermission $permission): bool
     {
         return $this->effectiveGrantIds($user, $permission) !== [];
+    }
+
+    /**
+     * @return array{User, Location}
+     */
+    private function resolveActorContext(User $actor, Location $context): array
+    {
+        $freshActor = User::with('organization')->find($actor->id);
+        $freshContext = Location::find($context->id);
+
+        if (! $freshActor || ! $freshContext || ! $freshActor->is_active || ! $freshContext->is_active
+            || $freshActor->email_verified_at === null || $freshActor->organization?->is_active !== true
+            || $freshContext->organization_id !== $freshActor->organization_id
+            || ! app(MembershipService::class)->available($freshActor)->where('location_id', $freshContext->id)->exists()) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+
+        return [$freshActor, $freshContext];
     }
 
     /**

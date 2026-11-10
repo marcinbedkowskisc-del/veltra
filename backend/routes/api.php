@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\V1\RawMaterialController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvCatalogExportController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvImportController;
 use App\Http\Controllers\Api\V1\RawMaterialDocumentController;
+use App\Http\Controllers\Api\V1\RawMaterialCapabilitiesController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
@@ -31,6 +32,7 @@ Route::prefix('v1/account')->middleware([RequireSpaSession::class, 'throttle:acc
 });
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {
+    Route::get('/raw-materials/capabilities', RawMaterialCapabilitiesController::class);
     Route::post('/locations', [SecurityStructureController::class, 'store']);
     Route::patch('/locations/{location}', [SecurityStructureController::class, 'update'])->whereUuid('location');
     Route::post('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');

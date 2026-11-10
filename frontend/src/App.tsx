@@ -160,6 +160,7 @@ function App() {
               authContext.location ? (
                 <RawMaterialsCatalogPage
                   key={`${authContext.user.id}:${authContext.location.id}`}
+                  operatingLocationId={authContext.location.id}
                   onSessionExpired={handleSessionExpired}
                 />
               ) : (

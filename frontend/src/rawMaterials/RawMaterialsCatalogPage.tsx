@@ -1,9 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ApiError } from '../api'
 import CatalogFilters, { type SupplierFilterState } from './CatalogFilters'
 import CatalogTable from './CatalogTable'
+import RawMaterialCreateForm from './RawMaterialCreateForm'
+import RawMaterialDetailDrawer from './RawMaterialDetailDrawer'
 import SelectionActionBar from './SelectionActionBar'
-import { downloadCatalogExport, exportCatalog, fetchCatalog, fetchCategories, fetchSuppliers } from './api'
+import {
+  downloadCatalogExport,
+  exportCatalog,
+  fetchCatalog,
+  fetchCategories,
+  fetchRawMaterialCapabilities,
+  fetchSuppliers,
+  type CreatedRawMaterial,
+  type RawMaterialCapabilities,
+} from './api'
 import {
   PAGE_SIZES,
   catalogExportPayload,
@@ -20,6 +31,8 @@ import {
 
 type Props = {
   onSessionExpired: () => void
+  previewDetailId?: string
+  operatingLocationId?: string
 }
 
 type CatalogState = 'loading' | 'ready' | 'forbidden' | 'unavailable' | 'error'
@@ -27,6 +40,11 @@ type CatalogState = 'loading' | 'ready' | 'forbidden' | 'unavailable' | 'error'
 type PreviousPage = {
   page: number
   ids: Set<string>
+}
+
+type SelectedDetail = {
+  id: string
+  trigger: HTMLButtonElement | null
 }
 
 function isSessionExpired(cause: unknown): boolean {
@@ -50,7 +68,11 @@ const EMPTY_META: CatalogMeta = {
   to: null,
 }
 
-export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
+export default function RawMaterialsCatalogPage({
+  onSessionExpired,
+  previewDetailId,
+  operatingLocationId,
+}: Props) {
   const [filters, setFilters] = useState<FilterValues>(EMPTY_FILTERS)
   const [searchText, setSearchText] = useState('')
   const [sort, setSort] = useState<SortKey>('name')
@@ -72,12 +94,207 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
   const [supplierSuggestions, setSupplierSuggestions] = useState<SupplierOption[]>([])
   const [supplierSearching, setSupplierSearching] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [selectedDetail, setSelectedDetail] = useState<SelectedDetail | null>(null)
   const [exporting, setExporting] = useState(false)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [capabilities, setCapabilities] = useState<RawMaterialCapabilities | null>(null)
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null)
+  const [createFormLocationId, setCreateFormLocationId] = useState<string | null>(null)
+  const [createOpeningLocationId, setCreateOpeningLocationId] = useState<string | null>(null)
+  const [createReturnFocus, setCreateReturnFocus] = useState<HTMLButtonElement | null>(null)
+  const [createdMaterial, setCreatedMaterial] = useState<CreatedRawMaterial | null>(null)
+  const [createdMaterialLocationId, setCreatedMaterialLocationId] = useState<string | null>(null)
   const exportKey = useRef<{ fingerprint: string; key: string } | null>(null)
   const previousPage = useRef<PreviousPage | null>(null)
+  const moduleUnavailable = useRef(false)
+  const capabilitiesGeneration = useRef(0)
+  const capabilitiesController = useRef<AbortController | null>(null)
+  const previewDetailOpened = useRef(false)
+  const operatingLocationRef = useRef(operatingLocationId)
+  const previousOperatingLocation = useRef(operatingLocationId)
+  const locationGeneration = useRef(0)
+  useLayoutEffect(() => {
+    operatingLocationRef.current = operatingLocationId
+    if (previousOperatingLocation.current !== operatingLocationId) {
+      previousOperatingLocation.current = operatingLocationId
+      locationGeneration.current += 1
+    }
+  }, [operatingLocationId])
+  const createOpening = createOpeningLocationId === operatingLocationId && createOpeningLocationId !== null
+  const currentCreatedMaterial = createdMaterialLocationId === operatingLocationId ? createdMaterial : null
   const searchPending = searchText !== filters.search
+
+  const refreshCapabilities = useCallback(async (): Promise<RawMaterialCapabilities | null> => {
+    if (!operatingLocationId) return null
+
+    const generation = ++capabilitiesGeneration.current
+    capabilitiesController.current?.abort()
+    const controller = new AbortController()
+    capabilitiesController.current = controller
+    setCapabilities(null)
+    setCapabilitiesLoading(true)
+    setCapabilitiesError(null)
+
+    try {
+      const result = await fetchRawMaterialCapabilities(operatingLocationId, controller.signal)
+      if (controller.signal.aborted || generation !== capabilitiesGeneration.current) return null
+      setCapabilities(result)
+      return result
+    } catch (cause) {
+      if (controller.signal.aborted || generation !== capabilitiesGeneration.current) return null
+      setCapabilities(null)
+      setCapabilitiesError('Nie można potwierdzić uprawnień do tworzenia. Akcja pozostaje ukryta.')
+      if (isSessionExpired(cause)) onSessionExpired()
+      return null
+    } finally {
+      if (!controller.signal.aborted && generation === capabilitiesGeneration.current) {
+        setCapabilitiesLoading(false)
+      }
+    }
+  }, [onSessionExpired, operatingLocationId])
+
+  useEffect(() => {
+    return () => {
+      setCreateFormLocationId(null)
+      setCreateOpeningLocationId(null)
+      setCreatedMaterial(null)
+      setCreatedMaterialLocationId(null)
+    }
+  }, [operatingLocationId])
+
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => {
+      if (active) void refreshCapabilities()
+    })
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshCapabilities()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      active = false
+      capabilitiesGeneration.current += 1
+      capabilitiesController.current?.abort()
+      capabilitiesController.current = null
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [refreshCapabilities])
+
+  useEffect(() => {
+    if (!previewDetailId || previewDetailOpened.current || catalogState !== 'ready'
+      || !rows.some((row) => row.id === previewDetailId)) return
+    previewDetailOpened.current = true
+    setSelectedDetail({ id: previewDetailId, trigger: null })
+  }, [catalogState, previewDetailId, rows])
+
+  const handleDetailSessionExpired = useCallback(() => {
+    setSelectedDetail(null)
+    setRows([])
+    setMeta(EMPTY_META)
+    setCanReadReferencePrice(null)
+    setCanReadUsableCost(null)
+    setSelectedIds(new Set())
+    setCatalogState('forbidden')
+    setCatalogError('Sesja wygasła. Zaloguj się ponownie.')
+    onSessionExpired()
+  }, [onSessionExpired])
+
+  const markModuleUnavailable = useCallback(() => {
+    setSelectedDetail(null)
+    setCreateFormLocationId(null)
+    setCapabilities(null)
+    setCapabilitiesLoading(false)
+    moduleUnavailable.current = true
+    setRows([])
+    setMeta(EMPTY_META)
+    setCategories([])
+    setCategoriesAvailable(false)
+    setSupplierState('module-unavailable')
+    setSupplierInput('')
+    setSupplierSuggestions([])
+    setSupplierSearching(false)
+    setFilters(EMPTY_FILTERS)
+    setSearchText('')
+    setSelectedIds(new Set())
+    setCanReadReferencePrice(null)
+    setCanReadUsableCost(null)
+    setCatalogState('unavailable')
+    setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+    setExportMessage(null)
+    setExportError(null)
+    exportKey.current = null
+    previousPage.current = null
+  }, [])
+
+  async function openCreateForm(trigger: HTMLButtonElement) {
+    const expectedLocationId = operatingLocationId
+    const expectedGeneration = locationGeneration.current
+    if (!expectedLocationId || createOpening) return
+    setCreateOpeningLocationId(expectedLocationId)
+    setCreateReturnFocus(trigger)
+    setCapabilitiesError(null)
+    try {
+      const current = await refreshCapabilities()
+      if (operatingLocationRef.current !== expectedLocationId
+        || locationGeneration.current !== expectedGeneration) return
+      if (!current) return
+      if (current.locationId !== expectedLocationId || !current.actions.create) {
+        setCapabilitiesError('Brak aktualnego uprawnienia do tworzenia w tej lokalizacji. Akcja pozostaje niedostępna.')
+        return
+      }
+
+      const currentCategories = await fetchCategories()
+      if (operatingLocationRef.current !== expectedLocationId
+        || locationGeneration.current !== expectedGeneration) return
+      setCategories(currentCategories)
+      setCategoriesAvailable(true)
+      setCreateFormLocationId(expectedLocationId)
+    } catch (cause) {
+      if (operatingLocationRef.current !== expectedLocationId
+        || locationGeneration.current !== expectedGeneration) return
+      if (isSessionExpired(cause)) {
+        onSessionExpired()
+      } else if (cause instanceof ApiError && (cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE' || cause.status === 503)) {
+        markModuleUnavailable()
+      } else if (cause instanceof ApiError && cause.status === 403) {
+        setCapabilities(null)
+        setCapabilitiesError('Nie można odczytać kategorii w bieżącym kontekście. Formularz pozostaje zamknięty.')
+      } else {
+        setCapabilitiesError(cause instanceof Error
+          ? `Nie można przygotować listy kategorii: ${cause.message}`
+          : 'Nie można przygotować listy kategorii.')
+      }
+    } finally {
+      if (operatingLocationRef.current === expectedLocationId
+        && locationGeneration.current === expectedGeneration) {
+        setCreateOpeningLocationId(null)
+      }
+    }
+  }
+
+  function handleCreated(material: CreatedRawMaterial) {
+    setCreatedMaterial(material)
+    setCreatedMaterialLocationId(operatingLocationId ?? null)
+    setSelectedIds(new Set())
+    exportKey.current = null
+    setRetryCount((count) => count + 1)
+  }
+
+  function handleCreateSessionExpired() {
+    setRows([])
+    setMeta(EMPTY_META)
+    setCategories([])
+    setCategoriesAvailable(false)
+    setSelectedIds(new Set())
+    setCanReadReferencePrice(null)
+    setCanReadUsableCost(null)
+    setCatalogState('forbidden')
+    setCatalogError('Sesja wygasła. Zaloguj się ponownie.')
+    onSessionExpired()
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -90,76 +307,61 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
     if (catalogState !== 'ready') return
     const controller = new AbortController()
     void fetchCategories(controller.signal).then((result) => {
+      if (controller.signal.aborted || moduleUnavailable.current) return
       setCategories(result)
       setCategoriesAvailable(true)
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || moduleUnavailable.current) return
       if (isSessionExpired(cause)) onSessionExpired()
       if (cause instanceof ApiError && cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE') {
-        setRows([])
-        setMeta(EMPTY_META)
-        setSelectedIds(new Set())
-        setCanReadReferencePrice(null)
-        setCanReadUsableCost(null)
-        setCatalogState('unavailable')
-        setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+        markModuleUnavailable()
+        return
       }
       setCategories([])
       setCategoriesAvailable(false)
     })
     return () => controller.abort()
-  }, [catalogState, onSessionExpired])
+  }, [catalogState, markModuleUnavailable, onSessionExpired])
 
   useEffect(() => {
     if (catalogState !== 'ready') return
     const controller = new AbortController()
     void fetchSuppliers('', controller.signal).then((result) => {
+      if (controller.signal.aborted || moduleUnavailable.current) return
       setSupplierSuggestions(result)
       setSupplierState('available')
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || moduleUnavailable.current) return
       if (isSessionExpired(cause)) {
         onSessionExpired()
         return
       }
       if (cause instanceof ApiError && cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE') {
-        setRows([])
-        setMeta(EMPTY_META)
-        setSelectedIds(new Set())
-        setCanReadReferencePrice(null)
-        setCanReadUsableCost(null)
-        exportKey.current = null
-        setCatalogState('unavailable')
-        setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+        markModuleUnavailable()
+        return
       }
       setSupplierState(cause instanceof ApiError && cause.status === 403 ? 'denied' : 'unavailable')
       setSupplierSuggestions([])
     })
     return () => controller.abort()
-  }, [catalogState, onSessionExpired])
+  }, [catalogState, markModuleUnavailable, onSessionExpired])
 
   useEffect(() => {
     if (supplierState !== 'available' || !supplierInput.trim() || filters.supplierId) return
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       void fetchSuppliers(supplierInput, controller.signal).then((result) => {
+        if (controller.signal.aborted || moduleUnavailable.current) return
         setSupplierSuggestions(result)
         setSupplierSearching(false)
       }).catch((cause: unknown) => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted || moduleUnavailable.current) return
         if (isSessionExpired(cause)) {
           onSessionExpired()
           return
         }
         if (cause instanceof ApiError && cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE') {
-          setRows([])
-          setMeta(EMPTY_META)
-          setSelectedIds(new Set())
-          setCanReadReferencePrice(null)
-          setCanReadUsableCost(null)
-          exportKey.current = null
-          setCatalogState('unavailable')
-          setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+          markModuleUnavailable()
           return
         }
         setSupplierSuggestions([])
@@ -177,7 +379,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [filters.supplierId, onSessionExpired, supplierInput, supplierState])
+  }, [filters.supplierId, markModuleUnavailable, onSessionExpired, supplierInput, supplierState])
 
   const query = useMemo<CatalogQuery>(() => ({
     ...filters,
@@ -192,6 +394,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
     const controller = new AbortController()
 
     void fetchCatalog(query, controller.signal).then((result) => {
+      if (controller.signal.aborted || moduleUnavailable.current) return
       if (previousPage.current?.page === query.page) {
         const currentIds = new Set(result.rows.map((row) => row.id))
         const removedIds = [...previousPage.current.ids].filter((id) => !currentIds.has(id))
@@ -212,11 +415,12 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
       setCatalogState('ready')
       setCatalogError(null)
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || moduleUnavailable.current) return
       setSelectedIds(new Set())
       exportKey.current = null
 
       if (isSessionExpired(cause)) {
+        setSelectedDetail(null)
         setRows([])
         setMeta(EMPTY_META)
         setCatalogState('forbidden')
@@ -224,6 +428,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
         return
       }
       if (cause instanceof ApiError && cause.status === 403 && query.supplierId) {
+        setSelectedDetail(null)
         setRows([])
         setMeta(EMPTY_META)
         setSupplierState('denied')
@@ -234,6 +439,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
       }
       if (cause instanceof ApiError && cause.status === 403
         && (query.sort === 'reference_net_price' || query.sort === 'usable_unit_cost')) {
+        setSelectedDetail(null)
         setRows([])
         setMeta(EMPTY_META)
         if (query.sort === 'reference_net_price') setCanReadReferencePrice(false)
@@ -244,6 +450,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
         return
       }
       if (cause instanceof ApiError && cause.status === 403) {
+        setSelectedDetail(null)
         setRows([])
         setMeta(EMPTY_META)
         setCanReadReferencePrice(false)
@@ -253,12 +460,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
         return
       }
       if (cause instanceof ApiError && cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE') {
-        setRows([])
-        setMeta(EMPTY_META)
-        setCanReadReferencePrice(null)
-        setCanReadUsableCost(null)
-        setCatalogState('unavailable')
-        setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+        markModuleUnavailable()
         return
       }
 
@@ -266,7 +468,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
       setCatalogState('error')
     })
     return () => controller.abort()
-  }, [onSessionExpired, query, queryKey, retryCount])
+  }, [markModuleUnavailable, onSessionExpired, query, queryKey, retryCount])
 
   function clearSelection() {
     exportKey.current = null
@@ -364,7 +566,9 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
 
     try {
       const exportResult = await exportCatalog(payload, key)
+      if (moduleUnavailable.current) return
       const file = await downloadCatalogExport(exportResult.downloadUrl)
+      if (moduleUnavailable.current) return
       beginDownload(file.blob, file.filename)
       setExportMessage('Plik CSV został przygotowany i pobrany.')
     } catch (cause) {
@@ -373,14 +577,10 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
         return
       }
       if (cause instanceof ApiError && cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE') {
-        setRows([])
-        setMeta(EMPTY_META)
-        setCanReadReferencePrice(null)
-        setCanReadUsableCost(null)
-        setCatalogState('unavailable')
-        setCatalogError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+        markModuleUnavailable()
         return
       }
+      if (moduleUnavailable.current) return
       if (cause instanceof ApiError && cause.status === 403) {
         setSelectedIds(new Set())
         exportKey.current = null
@@ -435,14 +635,26 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
           <h1 id="catalog-title">Katalog surowców</h1>
           <p className="catalog-subtitle">Zatwierdzone surowce dostępne w bieżącym kontekście.</p>
         </div>
-        <div className="deferred-action">
-          <button type="button" className="button button-primary" disabled>
-            <span aria-hidden="true">+</span> Dodaj surowiec
-          </button>
-          <small>Edytor surowca jest planowany w etapie 4B.</small>
-        </div>
+        {createOpening || (capabilities && capabilities.locationId === operatingLocationId && capabilities.actions.create) ? (
+          <div className="deferred-action">
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={capabilitiesLoading || createOpening}
+              onClick={(event) => void openCreateForm(event.currentTarget)}
+            >
+              <span aria-hidden="true">+</span> Dodaj surowiec
+            </button>
+          </div>
+        ) : null}
       </header>
 
+      {operatingLocationId && capabilitiesLoading && (
+        <p className="refresh-status" role="status">Sprawdzanie uprawnień katalogu…</p>
+      )}
+      {operatingLocationId && capabilitiesError && catalogState === 'ready' && (
+        <p className="inline-error" role="alert">{capabilitiesError}</p>
+      )}
       <CatalogFilters
         values={filters}
         searchInput={searchText}
@@ -500,6 +712,11 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
 
       {exportError && <p className="inline-error" role="alert">{exportError}</p>}
       {exportMessage && <p className="inline-success" role="status">{exportMessage}</p>}
+      {currentCreatedMaterial && (
+        <p className="inline-success" role="status">
+          Utworzono szkic {currentCreatedMaterial.sku}. Identyfikator: {currentCreatedMaterial.id}. Stan zwrócony przez serwer: {currentCreatedMaterial.lifecycleState}.
+        </p>
+      )}
       {refreshing && catalogState === 'ready' && <p className="refresh-status" role="status">Odświeżanie katalogu…</p>}
 
       {catalogState !== 'forbidden' && catalogState !== 'unavailable' && catalogState !== 'error' && (
@@ -538,6 +755,7 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
             onSort={sortBy}
             onToggle={toggleRow}
             onTogglePage={toggleCurrentPage}
+            onOpenDetail={(id, trigger) => setSelectedDetail({ id, trigger })}
           />
 
           <nav className="pagination" aria-label="Stronicowanie katalogu">
@@ -571,6 +789,43 @@ export default function RawMaterialsCatalogPage({ onSessionExpired }: Props) {
         onExport={() => void runExport([...selectedIds])}
         onClear={clearSelection}
       />
+      {selectedDetail && (
+        <RawMaterialDetailDrawer
+          key={selectedDetail.id}
+          materialId={selectedDetail.id}
+          categories={categories}
+          returnFocus={selectedDetail.trigger}
+          onClose={() => setSelectedDetail(null)}
+          onSessionExpired={handleDetailSessionExpired}
+          onModuleUnavailable={markModuleUnavailable}
+        />
+      )}
+      {createFormLocationId === operatingLocationId
+        && capabilities?.locationId === operatingLocationId
+        && capabilities.actions.create
+        && catalogState === 'ready'
+        && operatingLocationId && (
+        <RawMaterialCreateForm
+          key={createFormLocationId}
+          categories={categories}
+          operatingLocationId={createFormLocationId}
+          returnFocus={createReturnFocus}
+          onClose={() => {
+            setCreateFormLocationId(null)
+          }}
+          onCreated={handleCreated}
+          onOpenCreated={(material) => {
+            setCreateFormLocationId(null)
+            setSelectedDetail({ id: material.id, trigger: null })
+          }}
+          onSessionExpired={handleCreateSessionExpired}
+          onAuthorizationDenied={() => {
+            setCapabilities(null)
+            setCapabilitiesError('Uprawnienie do tworzenia wygasło lub zostało cofnięte.')
+          }}
+          onModuleUnavailable={markModuleUnavailable}
+        />
+      )}
     </section>
   )
 }

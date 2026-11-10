@@ -8,7 +8,7 @@ import {
   type SupplierOption,
 } from './catalog'
 
-export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavailable'
+export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavailable' | 'module-unavailable'
 
 type Props = {
   values: FilterValues

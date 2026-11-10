@@ -11,6 +11,12 @@ const allowedNames = new Set([
   'raw-catalog-session-expired-1025x577.png',
   'raw-catalog-1440x900.png',
   'raw-catalog-1920x1080.png',
+  'raw-catalog-1440.png',
+  'raw-catalog-1920.png',
+  'raw-catalog-selection.png',
+  'raw-catalog-filtered.png',
+  'raw-catalog-restricted.png',
+  'raw-catalog-not-ready.png',
 ])
 const outputDirectory = resolve('artifacts/stage4a1')
 

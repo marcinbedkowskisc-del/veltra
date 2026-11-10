@@ -48,6 +48,7 @@ const products = names.map((name, index) => ({
   usable_cost_basis: 'PLN/100g',
   revision: { name, base_unit_code: index % 4 === 0 ? 'kg' : 'g' },
   category_id: [6, 7, 31].includes(index) ? 'CAT-OIL' : 'CAT-FOOD',
+  supplier_id: index % 2 === 0 ? 'SUP-1' : 'SUP-2',
 }))
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -78,9 +79,11 @@ function catalogResponse(url: URL, mode: PreviewMode): Response {
       || `${product.revision.name} ${product.sku}`.toLocaleLowerCase('pl').includes(search)
     const matchesCategory = !url.searchParams.has('category_id')
       || product.category_id === url.searchParams.get('category_id')
+    const matchesSupplier = !url.searchParams.has('supplier_id')
+      || product.supplier_id === url.searchParams.get('supplier_id')
     const matchesUnit = !url.searchParams.has('unit')
       || product.revision.base_unit_code === url.searchParams.get('unit')
-    return matchesSearch && matchesCategory && matchesUnit
+    return matchesSearch && matchesCategory && matchesSupplier && matchesUnit
   })
   if (mode === 'compact') data = data.slice(0, 8)
 
@@ -103,24 +106,24 @@ function catalogResponse(url: URL, mode: PreviewMode): Response {
   const lastPage = Math.max(1, Math.ceil(total / perPage))
   const from = total ? (currentPage - 1) * perPage + 1 : null
   const to = total ? Math.min(currentPage * perPage, total) : null
-  data = data.slice((currentPage - 1) * perPage, currentPage * perPage)
+  const rows = data.slice((currentPage - 1) * perPage, currentPage * perPage)
     .map((product, index) => {
-      const { category_id: _categoryId, ...row } = product
+      const { category_id: _categoryId, supplier_id: _supplierId, ...row } = product
       return { ...row, ordinal: (from ?? 0) + index }
     })
 
-  if (mode === 'restricted') {
-    data = data.map(({
+  const responseData = mode === 'restricted'
+    ? rows.map(({
       reference_net_price: _referencePrice,
       currency_code: _currency,
       usable_unit_cost: _unitCost,
       usable_cost_basis: _basis,
       ...row
     }) => row)
-  }
+    : rows
 
   return jsonResponse({
-    data,
+    data: responseData,
     meta: { current_page: currentPage, per_page: perPage, total, last_page: lastPage, from, to },
   })
 }

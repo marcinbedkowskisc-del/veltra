@@ -13,6 +13,7 @@ export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavail
 type Props = {
   values: FilterValues
   searchInput: string
+  searchLoading: boolean
   categories: CategoryOption[]
   categoriesAvailable: boolean
   supplierState: SupplierFilterState
@@ -24,6 +25,7 @@ type Props = {
   onSupplierInput: (value: string) => void
   onSupplierSelect: (supplier: SupplierOption) => void
   onSupplierClear: () => void
+  onReset: () => void
   onExport: () => void
   exportDisabled: boolean
 }
@@ -31,6 +33,7 @@ type Props = {
 export default function CatalogFilters({
   values,
   searchInput,
+  searchLoading,
   categories,
   categoriesAvailable,
   supplierState,
@@ -40,6 +43,7 @@ export default function CatalogFilters({
   onSupplierInput,
   onSupplierSelect,
   onSupplierClear,
+  onReset,
   onExport,
   exportDisabled,
   supplierSearching,
@@ -49,14 +53,22 @@ export default function CatalogFilters({
     <div className="catalog-toolbar">
       <label className="filter-field search-field">
         <span>Szukaj</span>
-        <input
-          type="search"
-          value={searchInput}
-          onChange={(event) => onChange('search', event.target.value)}
-          placeholder="Nazwa surowca lub SKU"
-          aria-label="Szukaj surowca po nazwie lub SKU"
-          disabled={disabled}
-        />
+        <div className="search-input-wrap">
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(event) => onChange('search', event.target.value)}
+            placeholder="Nazwa surowca lub SKU"
+            aria-label="Szukaj surowca po nazwie lub SKU"
+            disabled={disabled}
+          />
+          {searchLoading && <span className="search-loading-spinner" aria-hidden="true" />}
+          <span className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+            {searchLoading
+              ? values.search ? 'Aktualizowanie wyników wyszukiwania…' : 'Aktualizowanie katalogu…'
+              : ''}
+          </span>
+        </div>
       </label>
 
       <label className="filter-field">
@@ -140,6 +152,14 @@ export default function CatalogFilters({
         </select>
       </label>
 
+      <button
+        type="button"
+        className="button button-secondary reset-filters-button"
+        onClick={onReset}
+        disabled={disabled}
+      >
+        Wyczyść filtry
+      </button>
       <button type="button" className="button button-secondary export-button" onClick={onExport} disabled={disabled || exportDisabled}>
         Eksport CSV
       </button>

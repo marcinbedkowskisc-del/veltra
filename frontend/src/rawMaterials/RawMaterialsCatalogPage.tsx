@@ -45,6 +45,7 @@ type PreviousPage = {
 type SelectedDetail = {
   id: string
   trigger: HTMLButtonElement | null
+  locationId: string | null
 }
 
 function isSessionExpired(cause: unknown): boolean {
@@ -84,9 +85,9 @@ export default function RawMaterialsCatalogPage({
   const [canReadReferencePrice, setCanReadReferencePrice] = useState<boolean | null>(null)
   const [canReadUsableCost, setCanReadUsableCost] = useState<boolean | null>(null)
   const [catalogState, setCatalogState] = useState<CatalogState>('loading')
-  const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null)
+  const [settledCatalogRequestKey, setSettledCatalogRequestKey] = useState<string | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
+  const [catalogRequestRevision, setCatalogRequestRevision] = useState(0)
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [categoriesAvailable, setCategoriesAvailable] = useState(false)
   const [supplierState, setSupplierState] = useState<SupplierFilterState>('checking')
@@ -94,7 +95,10 @@ export default function RawMaterialsCatalogPage({
   const [supplierSuggestions, setSupplierSuggestions] = useState<SupplierOption[]>([])
   const [supplierSearching, setSupplierSearching] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
-  const [selectedDetail, setSelectedDetail] = useState<SelectedDetail | null>(null)
+  const [selectedDetail, setSelectedDetail] = useState<SelectedDetail | null>(() => previewDetailId
+    ? { id: previewDetailId, trigger: null, locationId: operatingLocationId ?? null }
+    : null)
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0)
   const [exporting, setExporting] = useState(false)
   const [exportMessage, setExportMessage] = useState<string | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
@@ -111,17 +115,25 @@ export default function RawMaterialsCatalogPage({
   const moduleUnavailable = useRef(false)
   const capabilitiesGeneration = useRef(0)
   const capabilitiesController = useRef<AbortController | null>(null)
-  const previewDetailOpened = useRef(false)
   const operatingLocationRef = useRef(operatingLocationId)
   const previousOperatingLocation = useRef(operatingLocationId)
   const locationGeneration = useRef(0)
+  const catalogRequestGeneration = useRef(0)
   useLayoutEffect(() => {
     operatingLocationRef.current = operatingLocationId
     if (previousOperatingLocation.current !== operatingLocationId) {
       previousOperatingLocation.current = operatingLocationId
       locationGeneration.current += 1
+      setSelectedDetail(null)
+      setDetailRefreshKey(0)
     }
   }, [operatingLocationId])
+  const currentSelectedDetail = selectedDetail?.locationId === (operatingLocationId ?? null) ? selectedDetail : null
+  const globalEditAllowed = Boolean(capabilities
+    && capabilities.locationId === operatingLocationId
+    && capabilities.readiness === 'READY'
+    && capabilities.available
+    && capabilities.actions.edit)
   const createOpening = createOpeningLocationId === operatingLocationId && createOpeningLocationId !== null
   const currentCreatedMaterial = createdMaterialLocationId === operatingLocationId ? createdMaterial : null
   const searchPending = searchText !== filters.search
@@ -182,13 +194,6 @@ export default function RawMaterialsCatalogPage({
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [refreshCapabilities])
-
-  useEffect(() => {
-    if (!previewDetailId || previewDetailOpened.current || catalogState !== 'ready'
-      || !rows.some((row) => row.id === previewDetailId)) return
-    previewDetailOpened.current = true
-    setSelectedDetail({ id: previewDetailId, trigger: null })
-  }, [catalogState, previewDetailId, rows])
 
   const handleDetailSessionExpired = useCallback(() => {
     setSelectedDetail(null)
@@ -280,7 +285,12 @@ export default function RawMaterialsCatalogPage({
     setCreatedMaterialLocationId(operatingLocationId ?? null)
     setSelectedIds(new Set())
     exportKey.current = null
-    setRetryCount((count) => count + 1)
+    setCatalogRequestRevision((revision) => revision + 1)
+  }
+
+  function handleEdited() {
+    setCatalogRequestRevision((revision) => revision + 1)
+    setDetailRefreshKey((count) => count + 1)
   }
 
   function handleCreateSessionExpired() {
@@ -298,10 +308,12 @@ export default function RawMaterialsCatalogPage({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      if (filters.search === searchText) return
       setFilters((current) => current.search === searchText ? current : { ...current, search: searchText })
+      setCatalogRequestRevision((revision) => revision + 1)
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [searchText])
+  }, [filters.search, searchText])
 
   useEffect(() => {
     if (catalogState !== 'ready') return
@@ -389,9 +401,11 @@ export default function RawMaterialsCatalogPage({
     perPage,
   }), [direction, filters, page, perPage, sort])
   const queryKey = JSON.stringify(query)
+  const catalogRequestKey = JSON.stringify([queryKey, catalogRequestRevision])
 
   useEffect(() => {
     const controller = new AbortController()
+    const requestGeneration = ++catalogRequestGeneration.current
 
     void fetchCatalog(query, controller.signal).then((result) => {
       if (controller.signal.aborted || moduleUnavailable.current) return
@@ -411,7 +425,6 @@ export default function RawMaterialsCatalogPage({
       setMeta(result.meta)
       setCanReadReferencePrice(result.canReadReferencePrice)
       setCanReadUsableCost(result.canReadUsableCost)
-      setLoadedQueryKey(queryKey)
       setCatalogState('ready')
       setCatalogError(null)
     }).catch((cause: unknown) => {
@@ -466,9 +479,13 @@ export default function RawMaterialsCatalogPage({
 
       setCatalogError(cause instanceof Error ? cause.message : 'Nie udało się pobrać katalogu RAW.')
       setCatalogState('error')
+    }).finally(() => {
+      if (!controller.signal.aborted && requestGeneration === catalogRequestGeneration.current) {
+        setSettledCatalogRequestKey(catalogRequestKey)
+      }
     })
     return () => controller.abort()
-  }, [markModuleUnavailable, onSessionExpired, query, queryKey, retryCount])
+  }, [catalogRequestKey, markModuleUnavailable, onSessionExpired, query])
 
   function clearSelection() {
     exportKey.current = null
@@ -490,6 +507,25 @@ export default function RawMaterialsCatalogPage({
     clearSelection()
     setPage(1)
     setFilters((current) => ({ ...current, [field]: value }))
+    setCatalogRequestRevision((revision) => revision + 1)
+  }
+
+  function resetFilters() {
+    const hasCatalogCriteria = Object.values(filters).some(Boolean) || page !== 1
+    const hasActiveCriteria = Object.values(filters).some(Boolean)
+      || searchText !== ''
+      || supplierInput !== ''
+      || page !== 1
+    if (!hasActiveCriteria) return
+
+    clearSelection()
+    setFilters(EMPTY_FILTERS)
+    setSearchText('')
+    setSupplierInput('')
+    setSupplierSearching(false)
+    setSupplierSuggestions([])
+    setPage(1)
+    if (hasCatalogCriteria) setCatalogRequestRevision((revision) => revision + 1)
   }
 
   function setSupplierSearch(value: string) {
@@ -511,6 +547,7 @@ export default function RawMaterialsCatalogPage({
     setSort(key)
     setDirection(nextDirection)
     setPage(1)
+    setCatalogRequestRevision((revision) => revision + 1)
   }
 
   function toggleRow(id: string) {
@@ -616,7 +653,8 @@ export default function RawMaterialsCatalogPage({
   }
 
   const hasFilters = Object.values(filters).some(Boolean)
-  const refreshing = catalogState === 'ready' && loadedQueryKey !== queryKey
+  const refreshing = catalogState === 'ready'
+    && settledCatalogRequestKey !== catalogRequestKey
   const tableLoading = catalogState === 'loading' || refreshing || searchPending
   const emptyMessage = searchPending
     ? 'Aktualizowanie wyników…'
@@ -658,6 +696,7 @@ export default function RawMaterialsCatalogPage({
       <CatalogFilters
         values={filters}
         searchInput={searchText}
+        searchLoading={refreshing}
         categories={categories}
         categoriesAvailable={categoriesAvailable}
         supplierState={supplierState}
@@ -673,6 +712,7 @@ export default function RawMaterialsCatalogPage({
           setSupplierSearching(false)
           updateFilter('supplierId', '')
         }}
+        onReset={resetFilters}
         onExport={() => void runExport()}
         exportDisabled={exportDisabled}
       />
@@ -695,7 +735,7 @@ export default function RawMaterialsCatalogPage({
           <p>{catalogError}</p>
           <button type="button" className="button button-secondary" onClick={() => {
             setCatalogState('loading')
-            setRetryCount((count) => count + 1)
+            setCatalogRequestRevision((revision) => revision + 1)
           }}>
             Spróbuj ponownie
           </button>
@@ -706,10 +746,6 @@ export default function RawMaterialsCatalogPage({
           Nie udało się odświeżyć katalogu. {catalogError}
         </p>
       )}
-      {searchPending && catalogState === 'ready' && (
-        <p className="refresh-status" role="status">Aktualizowanie wyników wyszukiwania…</p>
-      )}
-
       {exportError && <p className="inline-error" role="alert">{exportError}</p>}
       {exportMessage && <p className="inline-success" role="status">{exportMessage}</p>}
       {currentCreatedMaterial && (
@@ -717,8 +753,6 @@ export default function RawMaterialsCatalogPage({
           Utworzono szkic {currentCreatedMaterial.sku}. Identyfikator: {currentCreatedMaterial.id}. Stan zwrócony przez serwer: {currentCreatedMaterial.lifecycleState}.
         </p>
       )}
-      {refreshing && catalogState === 'ready' && <p className="refresh-status" role="status">Odświeżanie katalogu…</p>}
-
       {catalogState !== 'forbidden' && catalogState !== 'unavailable' && catalogState !== 'error' && (
         <>
           <div className="catalog-summary" aria-live="polite">
@@ -734,6 +768,7 @@ export default function RawMaterialsCatalogPage({
                 onChange={(event) => {
                   setPerPage(Number(event.target.value) as (typeof PAGE_SIZES)[number])
                   setPage(1)
+                  setCatalogRequestRevision((revision) => revision + 1)
                 }}
                 aria-label="Liczba wierszy na stronę"
               >
@@ -755,7 +790,7 @@ export default function RawMaterialsCatalogPage({
             onSort={sortBy}
             onToggle={toggleRow}
             onTogglePage={toggleCurrentPage}
-            onOpenDetail={(id, trigger) => setSelectedDetail({ id, trigger })}
+            onOpenDetail={(id, trigger) => setSelectedDetail({ id, trigger, locationId: operatingLocationId ?? null })}
           />
 
           <nav className="pagination" aria-label="Stronicowanie katalogu">
@@ -764,7 +799,10 @@ export default function RawMaterialsCatalogPage({
               <button
                 type="button"
                 className="button button-secondary"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                onClick={() => {
+                  setPage((current) => Math.max(1, current - 1))
+                  setCatalogRequestRevision((revision) => revision + 1)
+                }}
                 disabled={tableLoading || page <= 1}
               >
                 Poprzednia
@@ -772,7 +810,10 @@ export default function RawMaterialsCatalogPage({
               <button
                 type="button"
                 className="button button-secondary"
-                onClick={() => setPage((current) => Math.min(meta.lastPage, current + 1))}
+                onClick={() => {
+                  setPage((current) => Math.min(meta.lastPage, current + 1))
+                  setCatalogRequestRevision((revision) => revision + 1)
+                }}
                 disabled={tableLoading || page >= meta.lastPage}
               >
                 Następna
@@ -789,15 +830,23 @@ export default function RawMaterialsCatalogPage({
         onExport={() => void runExport([...selectedIds])}
         onClear={clearSelection}
       />
-      {selectedDetail && (
+      {currentSelectedDetail && (
         <RawMaterialDetailDrawer
-          key={selectedDetail.id}
-          materialId={selectedDetail.id}
+          key={`${currentSelectedDetail.id}:${currentSelectedDetail.locationId ?? ''}`}
+          materialId={currentSelectedDetail.id}
+          operatingLocationId={currentSelectedDetail.locationId ?? ''}
+          globalEditAllowed={globalEditAllowed}
+          refreshKey={detailRefreshKey}
           categories={categories}
-          returnFocus={selectedDetail.trigger}
+          returnFocus={currentSelectedDetail.trigger}
           onClose={() => setSelectedDetail(null)}
           onSessionExpired={handleDetailSessionExpired}
           onModuleUnavailable={markModuleUnavailable}
+          onEditAuthorizationDenied={() => {
+            setCapabilities(null)
+            setCapabilitiesError('Nie można potwierdzić uprawnień do edycji. Akcja pozostaje ukryta.')
+          }}
+          onEditSaved={handleEdited}
         />
       )}
       {createFormLocationId === operatingLocationId
@@ -816,7 +865,7 @@ export default function RawMaterialsCatalogPage({
           onCreated={handleCreated}
           onOpenCreated={(material) => {
             setCreateFormLocationId(null)
-            setSelectedDetail({ id: material.id, trigger: null })
+            setSelectedDetail({ id: material.id, trigger: null, locationId: operatingLocationId ?? null })
           }}
           onSessionExpired={handleCreateSessionExpired}
           onAuthorizationDenied={() => {

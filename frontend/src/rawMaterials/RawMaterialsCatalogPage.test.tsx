@@ -8,12 +8,17 @@ import {
   fetchCatalog,
   fetchCategories,
   fetchRawMaterialCapabilities,
+  fetchRawMaterialCompletion,
   fetchRawMaterialDetail,
+  fetchRawMaterialEditor,
   fetchRawMaterialRevisions,
   fetchSuppliers,
   reserveRawMaterialSku,
   createRawMaterial,
+  reviseRawMaterial,
   type RawMaterialCapabilities,
+  type RawMaterialEditor,
+  type RevisedRawMaterial,
 } from './api'
 import type { CatalogPage, CatalogQuery } from './catalog'
 import type { RawMaterialDetail, RawMaterialRevision } from './detail'
@@ -24,11 +29,14 @@ vi.mock('./api', () => ({
   fetchCatalog: vi.fn(),
   fetchCategories: vi.fn(),
   fetchRawMaterialDetail: vi.fn(),
+  fetchRawMaterialCompletion: vi.fn(),
+  fetchRawMaterialEditor: vi.fn(),
   fetchRawMaterialRevisions: vi.fn(),
   fetchRawMaterialCapabilities: vi.fn(),
   fetchSuppliers: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
   createRawMaterial: vi.fn(),
+  reviseRawMaterial: vi.fn(),
 }))
 
 const materialA = '00000000-0000-4000-8000-000000000001'
@@ -76,6 +84,33 @@ const revisionHistory: RawMaterialRevision[] = [{
   approvals: [{ outcome: 'APPROVED', occurredAt: '2024-12-10T09:00:00Z', reason: 'Weryfikacja' }],
 }]
 
+const editableEditor = (id = materialA): RawMaterialEditor => ({
+  id,
+  sku: id === materialA ? 'RM-00001' : 'RM-00002',
+  lifecycleState: 'ACTIVE',
+  revisionId: `revision-${id}`,
+  revisionNo: 3,
+  version: `version-${id}`,
+  values: {
+    categoryId: 'category-1',
+    name: id === materialA ? 'Mąka pszenna' : 'Ryż basmati',
+    description: 'Opis roboczy.',
+    baseUnitCode: 'kg',
+    nominalQuantity: '10.000000',
+    usableQuantity: '8.000000',
+    aliases: ['alias'],
+    conversions: [],
+  },
+})
+
+const revisedMaterial: RevisedRawMaterial = {
+  id: materialA,
+  sku: 'RM-00001',
+  lifecycleState: 'ACTIVE',
+  version: 'next-version',
+  revision: { id: 'revision-next', revisionNo: 4 },
+}
+
 function row(id: string, ordinal: number, extra: Partial<CatalogPage['rows'][number]> = {}): CatalogPage['rows'][number] {
   return {
     id,
@@ -116,11 +151,14 @@ function page(
 const fetchCatalogMock = vi.mocked(fetchCatalog)
 const fetchCategoriesMock = vi.mocked(fetchCategories)
 const fetchRawMaterialDetailMock = vi.mocked(fetchRawMaterialDetail)
+const fetchRawMaterialCompletionMock = vi.mocked(fetchRawMaterialCompletion)
+const fetchRawMaterialEditorMock = vi.mocked(fetchRawMaterialEditor)
 const fetchRawMaterialRevisionsMock = vi.mocked(fetchRawMaterialRevisions)
 const fetchRawMaterialCapabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
 const fetchSuppliersMock = vi.mocked(fetchSuppliers)
 const reserveRawMaterialSkuMock = vi.mocked(reserveRawMaterialSku)
 const createRawMaterialMock = vi.mocked(createRawMaterial)
+const reviseRawMaterialMock = vi.mocked(reviseRawMaterial)
 const exportCatalogMock = vi.mocked(exportCatalog)
 const downloadCatalogExportMock = vi.mocked(downloadCatalogExport)
 let originalVisibilityDescriptor: PropertyDescriptor | undefined
@@ -129,6 +167,13 @@ beforeEach(() => {
   fetchCatalogMock.mockResolvedValue(page())
   fetchCategoriesMock.mockResolvedValue([{ id: 'category-1', name: 'Mąki' }])
   fetchRawMaterialDetailMock.mockImplementation(async (id) => detail(id))
+  fetchRawMaterialCompletionMock.mockResolvedValue({
+    lifecycleState: 'ACTIVE',
+    revisionId: '00000000-0000-4000-8000-000000000301',
+    version: null,
+    availableActions: [],
+  })
+  fetchRawMaterialEditorMock.mockRejectedValue(new Error('Brak domyślnej rewizji edytora.'))
   fetchRawMaterialRevisionsMock.mockResolvedValue(revisionHistory)
   fetchRawMaterialCapabilitiesMock.mockImplementation(async (locationId) => ({
     module: 'RAW_MATERIALS',
@@ -138,6 +183,7 @@ beforeEach(() => {
     permissions: { create: false, edit: false },
     actions: { create: false, edit: false },
   }))
+  reviseRawMaterialMock.mockRejectedValue(new Error('Brak domyślnej odpowiedzi PATCH.'))
   fetchSuppliersMock.mockResolvedValue([{ id: 'supplier-1', code: 'SUP-01', name: 'Dostawca A' }])
   exportCatalogMock.mockResolvedValue({
     exportId: 'export-1',
@@ -276,6 +322,109 @@ describe('katalog surowców', () => {
     expect(createRawMaterialMock).not.toHaveBeenCalled()
   })
 
+  it('pokazuje akcję dopiero po capabilities i completion oraz odświeża ten sam rekord po zapisie', async () => {
+    let resolveCatalogRefresh: ((value: CatalogPage) => void) | undefined
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS',
+      locationId: locationA,
+      readiness: 'READY',
+      available: true,
+      permissions: { create: false, edit: true },
+      actions: { create: false, edit: true },
+    })
+    fetchRawMaterialCompletionMock.mockResolvedValue({
+      lifecycleState: 'ACTIVE',
+      revisionId: `revision-${materialA}`,
+      version: `version-${materialA}`,
+      availableActions: ['edit'],
+    })
+    fetchRawMaterialEditorMock.mockImplementation(async (id) => editableEditor(id))
+    reviseRawMaterialMock.mockResolvedValue(revisedMaterial)
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    await screen.findByText('Surowiec 1')
+    fetchCatalogMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveCatalogRefresh = resolve
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+    const detailDialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    const editAction = await within(detailDialog).findByRole('button', { name: 'Edytuj surowiec' })
+    fireEvent.click(editAction)
+    const editDialog = await screen.findByRole('dialog', { name: 'Edytuj surowiec' })
+    expect(await within(editDialog).findByLabelText(/Nazwa/)).toBeTruthy()
+    fireEvent.click(within(editDialog).getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+
+    expect(await screen.findByText('Zapisano nową rewizję roboczą v4')).toBeTruthy()
+    await waitFor(() => expect(fetchCatalogMock.mock.calls.length).toBeGreaterThan(1))
+    expect(screen.getByText('Aktualizowanie katalogu…').closest('[role="status"]')).toBeTruthy()
+    expect(document.querySelector('.search-loading-spinner')).toBeTruthy()
+    await act(async () => { resolveCatalogRefresh?.(page()) })
+    await waitFor(() => expect(document.querySelector('.search-loading-spinner')).toBeNull())
+    await waitFor(() => expect(fetchRawMaterialDetailMock.mock.calls.length).toBeGreaterThan(1))
+    expect(screen.getByRole('dialog', { name: 'Edytuj surowiec' })).toBeTruthy()
+    expect(fetchRawMaterialCompletionMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal))
+    expect(reserveRawMaterialSkuMock).not.toHaveBeenCalled()
+    expect(createRawMaterialMock).not.toHaveBeenCalled()
+  })
+
+  it('nie pokazuje akcji edycji bez rekordu edit nawet przy globalnym EDIT', async () => {
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS',
+      locationId: locationA,
+      readiness: 'READY',
+      available: true,
+      permissions: { create: false, edit: true },
+      actions: { create: false, edit: true },
+    })
+    fetchRawMaterialCompletionMock.mockResolvedValue({
+      lifecycleState: 'ACTIVE',
+      revisionId: `revision-${materialA}`,
+      version: null,
+      availableActions: [],
+    })
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+    await screen.findByText('Surowiec 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+    await screen.findByText('Opis zatwierdzonego snapshotu.')
+
+    expect(screen.queryByRole('button', { name: 'Edytuj surowiec' })).toBeNull()
+    expect(fetchRawMaterialEditorMock).not.toHaveBeenCalled()
+    expect(reviseRawMaterialMock).not.toHaveBeenCalled()
+  })
+
+  it('zamyka edytor i odrzuca jego kontekst po zmianie lokalizacji', async () => {
+    fetchRawMaterialCapabilitiesMock.mockImplementation(async (locationId) => ({
+      module: 'RAW_MATERIALS',
+      locationId,
+      readiness: 'READY',
+      available: true,
+      permissions: { create: false, edit: locationId === locationA },
+      actions: { create: false, edit: locationId === locationA },
+    }))
+    fetchRawMaterialCompletionMock.mockResolvedValue({
+      lifecycleState: 'ACTIVE',
+      revisionId: `revision-${materialA}`,
+      version: `version-${materialA}`,
+      availableActions: ['edit'],
+    })
+    fetchRawMaterialEditorMock.mockImplementation(async (id) => editableEditor(id))
+    const onSessionExpired = vi.fn()
+    const { rerender } = render(
+      <RawMaterialsCatalogPage onSessionExpired={onSessionExpired} operatingLocationId={locationA} />,
+    )
+    await screen.findByText('Surowiec 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+    const detailDialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    fireEvent.click(await within(detailDialog).findByRole('button', { name: 'Edytuj surowiec' }))
+    await screen.findByRole('dialog', { name: 'Edytuj surowiec' })
+
+    rerender(<RawMaterialsCatalogPage onSessionExpired={onSessionExpired} operatingLocationId={locationB} />)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edytuj surowiec' })).toBeNull())
+    expect(screen.queryByRole('dialog', { name: 'Szczegóły surowca' })).toBeNull()
+    expect(reviseRawMaterialMock).not.toHaveBeenCalled()
+    expect(onSessionExpired).not.toHaveBeenCalled()
+  })
+
   it('fail-closed po błędzie capabilities i odświeża wynik po powrocie karty do aktywnego stanu', async () => {
     fetchRawMaterialCapabilitiesMock.mockRejectedValueOnce(new Error('Brak połączenia.'))
     fetchRawMaterialCapabilitiesMock.mockResolvedValueOnce({
@@ -383,6 +532,97 @@ describe('katalog surowców', () => {
     )
   })
 
+  it('pokazuje dostępny wskaźnik podczas bieżącego wyszukiwania bez komunikatu nad tabelą', async () => {
+    let resolveSearch: ((result: CatalogPage) => void) | undefined
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    fetchCatalogMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSearch = resolve
+    }))
+    vi.useFakeTimers()
+
+    const search = screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' })
+    fireEvent.change(search, { target: { value: 'mąka' } })
+    expect((search as HTMLInputElement).disabled).toBe(false)
+    expect(screen.queryByText('Aktualizowanie wyników wyszukiwania…')).toBeNull()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+
+    expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: 'mąka' }),
+      expect.any(AbortSignal),
+    )
+    expect(screen.getByText('Aktualizowanie wyników wyszukiwania…').closest('[role="status"]')).toBeTruthy()
+    expect(document.querySelector('.search-loading-spinner')).toBeTruthy()
+    expect(document.querySelector('.refresh-status')).toBeNull()
+    expect((search as HTMLInputElement).disabled).toBe(false)
+    expect((search as HTMLInputElement).value).toBe('mąka')
+
+    await act(async () => { resolveSearch?.(page([row(materialB, 2, { name: 'Mąka znaleziona' })])) })
+
+    expect(screen.getByText('Mąka znaleziona')).toBeTruthy()
+    expect(document.querySelector('.search-loading-spinner')).toBeNull()
+    expect(screen.queryByText('Aktualizowanie wyników wyszukiwania…')).toBeNull()
+  })
+
+  it('utrzymuje wskaźnik resetu przy bieżącym żądaniu i ignoruje spóźnioną odpowiedź wyszukiwania', async () => {
+    let resolveStale: ((result: CatalogPage) => void) | undefined
+    let resolveReset: ((result: CatalogPage) => void) | undefined
+    let staleSignal: AbortSignal | undefined
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    fetchCatalogMock
+      .mockImplementationOnce((_query, signal) => {
+        staleSignal = signal
+        return new Promise((resolve) => { resolveStale = resolve })
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveReset = resolve }))
+    vi.useFakeTimers()
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' }), {
+      target: { value: 'stare zapytanie' },
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(screen.getByText('Aktualizowanie wyników wyszukiwania…')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wyczyść filtry' }))
+    expect(staleSignal?.aborted).toBe(true)
+    expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: '' }),
+      expect.any(AbortSignal),
+    )
+    expect(screen.getByText('Aktualizowanie katalogu…')).toBeTruthy()
+
+    await act(async () => { resolveStale?.(page([row(materialB, 2, { name: 'Nieaktualny wynik' })])) })
+    expect(screen.queryByText('Nieaktualny wynik')).toBeNull()
+    expect(screen.getByText('Aktualizowanie katalogu…')).toBeTruthy()
+
+    await act(async () => { resolveReset?.(page([row(materialA, 1, { name: 'Wynik po resecie' })])) })
+    expect(screen.getByText('Wynik po resecie')).toBeTruthy()
+    expect(screen.queryByText('Aktualizowanie katalogu…')).toBeNull()
+    expect(document.querySelector('.search-loading-spinner')).toBeNull()
+  })
+
+  it('czyści wskaźnik i zachowuje stan błędu po nieudanym żądaniu wyszukiwania', async () => {
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    fetchCatalogMock.mockRejectedValueOnce(new Error('Błąd wyszukiwania testowego.'))
+    vi.useFakeTimers()
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' }), {
+      target: { value: 'błąd' },
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('Nie udało się wczytać katalogu')).toBeTruthy()
+    expect(document.querySelector('.search-loading-spinner')).toBeNull()
+    expect(screen.queryByText('Aktualizowanie wyników wyszukiwania…')).toBeNull()
+  })
+
   it('mapuje kategorię i dostawcę na filtrowanie po stronie serwera', async () => {
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
     await screen.findByText('Surowiec 1')
@@ -410,6 +650,141 @@ describe('katalog surowców', () => {
       expect.objectContaining({ supplierId: 'supplier-1', page: 1 }),
       expect.any(AbortSignal),
     )
+  })
+
+  it('resetuje pojedynczy filtr i nie wysyła żądania, gdy filtry są już domyślne', async () => {
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await screen.findByRole('option', { name: 'Mąki' })
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ categoryId: 'category-1' }),
+      expect.any(AbortSignal),
+    ))
+
+    const resetButton = screen.getByRole('button', { name: 'Wyczyść filtry' })
+    expect(resetButton.tagName).toBe('BUTTON')
+    expect(resetButton.getAttribute('type')).toBe('button')
+    fireEvent.click(resetButton)
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ categoryId: '', page: 1 }),
+      expect.any(AbortSignal),
+    ))
+    expect((screen.getByRole('combobox', {
+      name: 'Filtruj według kategorii',
+    }) as HTMLSelectElement).value).toBe('')
+
+    const requestCount = fetchCatalogMock.mock.calls.length
+    fireEvent.click(resetButton)
+    expect(fetchCatalogMock).toHaveBeenCalledTimes(requestCount)
+  })
+
+  it('czyści jednocześnie wyszukiwanie i wszystkie filtry, wraca na stronę 1 i zachowuje sortowanie', async () => {
+    fetchCatalogMock.mockImplementation(async (query: CatalogQuery) =>
+      page([row(materialA, query.page)], query.page, 51))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await screen.findByRole('option', { name: 'Mąki' })
+    await screen.findByRole('searchbox', { name: 'Dostawca' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sortuj według: SKU' }))
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'sku', direction: 'asc' }),
+      expect.any(AbortSignal),
+    ))
+    fireEvent.click(screen.getByRole('button', { name: 'Sortuj według: SKU' }))
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'sku', direction: 'desc' }),
+      expect.any(AbortSignal),
+    ))
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    const supplierInput = screen.getByRole('searchbox', { name: 'Dostawca' })
+    fireEvent.change(supplierInput, { target: { value: 'Dostawca A' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Dostawca A (SUP-01)' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według statusu' }), {
+      target: { value: 'DRAFT' },
+    })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według jednostki' }), {
+      target: { value: 'kg' },
+    })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' }), {
+      target: { value: 'mąka' },
+    })
+
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        search: 'mąka',
+        categoryId: 'category-1',
+        supplierId: 'supplier-1',
+        lifecycleState: 'DRAFT',
+        unit: 'kg',
+        sort: 'sku',
+        direction: 'desc',
+        page: 1,
+      }),
+      expect.any(AbortSignal),
+    ))
+    fireEvent.click(screen.getByRole('button', { name: 'Następna' }))
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2, sort: 'sku', direction: 'desc' }),
+      expect.any(AbortSignal),
+    ))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wyczyść filtry' }))
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        search: '',
+        categoryId: '',
+        supplierId: '',
+        lifecycleState: '',
+        unit: '',
+        sort: 'sku',
+        direction: 'desc',
+        page: 1,
+      }),
+      expect.any(AbortSignal),
+    ))
+    expect((screen.getByRole('searchbox', {
+      name: 'Szukaj surowca po nazwie lub SKU',
+    }) as HTMLInputElement).value).toBe('')
+    expect((screen.getByRole('searchbox', { name: 'Dostawca' }) as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('Strona 1 z 3')).toBeTruthy()
+  })
+
+  it('anuluje stare żądanie katalogu, aby jego odpowiedź nie nadpisała wyników po resecie', async () => {
+    let resolveStale: ((result: CatalogPage) => void) | undefined
+    let staleSignal: AbortSignal | undefined
+    fetchCatalogMock
+      .mockResolvedValueOnce(page())
+      .mockImplementationOnce((_query, signal) => {
+        staleSignal = signal
+        return new Promise((resolve) => { resolveStale = resolve })
+      })
+      .mockResolvedValueOnce(page([row(materialB, 2, { name: 'Nowy wynik' })]))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await screen.findByRole('option', { name: 'Mąki' })
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenCalledTimes(2))
+    expect(staleSignal?.aborted).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wyczyść filtry' }))
+    expect(await screen.findByText('Nowy wynik')).toBeTruthy()
+    expect(staleSignal?.aborted).toBe(true)
+    await act(async () => {
+      resolveStale?.(page([row(materialA, 1, { name: 'Stary wynik' })]))
+    })
+    expect(screen.queryByText('Stary wynik')).toBeNull()
+    expect(screen.getByText('Nowy wynik')).toBeTruthy()
   })
 
   it('sortuje przez nowe żądania serwerowe, bez lokalnego sortowania strony', async () => {
@@ -609,7 +984,7 @@ describe('katalog surowców', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
     expect(await within(dialog).findByText('Opis zatwierdzonego snapshotu.')).toBeTruthy()
-    expect(within(dialog).getByText('v3')).toBeTruthy()
+    expect(within(dialog).getByText('v3 · zatwierdzona, obowiązująca')).toBeTruthy()
     expect(within(dialog).getByText('Mąki')).toBeTruthy()
     expect(within(dialog).getByText('123,45 PLN')).toBeTruthy()
     expect(within(dialog).getByText('15,43 PLN/100g')).toBeTruthy()

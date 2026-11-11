@@ -92,10 +92,21 @@ describe('formularz tworzenia surowca RAW', () => {
     fireEvent.change(screen.getByLabelText('Nominalna'), { target: { value: '12,5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
     fireEvent.click(screen.getByText('Aliasy i przeliczniki', { exact: false }))
+    expect(screen.getByText(/Alternatywne nazwy tego samego surowca/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj alias' }))
     fireEvent.change(screen.getByLabelText('Alias 1'), { target: { value: '  Mąka uniwersalna  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj jednostkę' }))
     fireEvent.change(screen.getByLabelText('Jednostka przeliczeniowa 1'), { target: { value: 'kg' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj jednostkę' }))
+    fireEvent.change(screen.getByLabelText('Jednostka przeliczeniowa 2'), { target: { value: 'pc' } })
+    fireEvent.change(screen.getByLabelText(/Współczynnik — jednostki bazowe na 1 jednostkę dodatkową/), {
+      target: { value: '2500' },
+    })
+    fireEvent.change(screen.getByLabelText('Opis podstawy przeliczenia'), {
+      target: { value: '1 sztuka o masie 2500 g' },
+    })
+    expect(screen.getByText(/1 pc = 2500 g/)).toBeTruthy()
+    expect(screen.getByText(/„pc” oznacza sztukę, nie opakowanie/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
     expect(await screen.findByRole('heading', { name: 'Surowiec utworzony' })).toBeTruthy()
@@ -108,7 +119,10 @@ describe('formularz tworzenia surowca RAW', () => {
       nominal_quantity: '12.5',
       usable_quantity: '10.25',
       aliases: ['Mąka uniwersalna'],
-      conversions: [{ unit_code: 'kg' }],
+      conversions: [
+        { unit_code: 'kg' },
+        { unit_code: 'pc', to_base_factor: '2500', basis: '1 sztuka o masie 2500 g' },
+      ],
     }, reservationId)
     expect(screen.getByText(/RAW-000042/)).toBeTruthy()
     expect(screen.getByText(/DRAFT/)).toBeTruthy()

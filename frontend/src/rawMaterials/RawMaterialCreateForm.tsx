@@ -512,6 +512,7 @@ export default function RawMaterialCreateForm({
                   >
                     {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
                   </select>
+                  <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „pc” oznacza sztukę, nie rodzaj opakowania.</span>
                   {getError('baseUnitCode') && <span id="baseUnitCode-error" className="field-error">{getError('baseUnitCode')}</span>}
                 </label>
 
@@ -555,7 +556,7 @@ export default function RawMaterialCreateForm({
                   <div className="create-subsection-heading">
                     <div>
                       <h3 id="create-aliases-title">Aliasy</h3>
-                      <p>Alternatywne nazwy ułatwiają wyszukiwanie surowca.</p>
+                      <p>Alternatywne nazwy tego samego surowca, używane w wyszukiwaniu. Nie tworzą osobnego surowca ani SKU.</p>
                     </div>
                     <button
                       type="button"
@@ -603,7 +604,11 @@ export default function RawMaterialCreateForm({
                   <div className="create-subsection-heading">
                     <div>
                       <h3 id="create-conversions-title">Jednostki przeliczeniowe</h3>
-                      <p>Przeliczenia metryczne oblicza serwer. Dla innych wymiarów podaj współczynnik i podstawę.</p>
+                      <p>
+                        Jednostka bazowa: {UNIT_LABELS[values.baseUnitCode]}. Współczynnik oznacza liczbę jednostek bazowych
+                        przypadającą na 1 jednostkę dodatkową. Przeliczenia metryczne w tym samym wymiarze oblicza serwer;
+                        między wymiarami podaj współczynnik i opis podstawy.
+                      </p>
                     </div>
                     <button
                       type="button"
@@ -645,8 +650,16 @@ export default function RawMaterialCreateForm({
                         </label>
                         {conversion.unitCode && !sameDimension && (
                           <>
+                            <p className="field-hint create-form-field-wide">
+                              {conversion.toBaseFactor
+                                ? `1 ${conversion.unitCode} = ${conversion.toBaseFactor} ${values.baseUnitCode}.`
+                                : `Podaj, ile ${values.baseUnitCode} przypada na 1 ${conversion.unitCode}.`}
+                              {conversion.unitCode === 'pc' || values.baseUnitCode === 'pc'
+                                ? ' „pc” oznacza sztukę, nie opakowanie. Opisz w podstawie, co dokładnie oznacza jedna sztuka dla tego surowca.'
+                                : ' Opisz w podstawie, co oznacza jedna jednostka dla tego surowca.'}
+                            </p>
                             <label className="create-form-field" htmlFor={`create-conversion-factor-${index}`}>
-                              Współczynnik do jednostki bazowej
+                              Współczynnik — jednostki bazowe na 1 jednostkę dodatkową
                               <input
                                 id={`create-conversion-factor-${index}`}
                                 type="text"
@@ -660,7 +673,7 @@ export default function RawMaterialCreateForm({
                               {factorError && <span id={`conversion-${index}-factor-error`} className="field-error">{factorError}</span>}
                             </label>
                             <label className="create-form-field" htmlFor={`create-conversion-basis-${index}`}>
-                              Podstawa przeliczenia
+                              Opis podstawy przeliczenia
                               <input
                                 id={`create-conversion-basis-${index}`}
                                 type="text"

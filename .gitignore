@@ -4,6 +4,7 @@
 **/vendor/
 **/node_modules/
 **/dist/
+frontend/interactive-preview-dist/
 *.log
 .DS_Store
 .idea/

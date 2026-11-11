@@ -1,0 +1,777 @@
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ApiError } from '../api'
+import { lifecycleLabel, RAW_UNITS } from './catalog'
+import type { CategoryOption } from './catalog'
+import {
+  normalizeDecimalInput,
+  UNIT_DIMENSIONS,
+  UNIT_LABELS,
+  validateRawMaterialCreate,
+  type RawMaterialConversionInput,
+  type RawMaterialCreateValues,
+} from './create'
+import {
+  fetchRawMaterialCapabilities,
+  fetchRawMaterialCompletion,
+  fetchRawMaterialEditor,
+  reviseRawMaterial,
+  type RawMaterialEditPayload,
+  type RawMaterialEditor,
+  type RevisedRawMaterial,
+} from './api'
+
+type Props = {
+  materialId: string
+  operatingLocationId: string
+  categories: CategoryOption[]
+  returnFocus: HTMLElement | null
+  onClose: () => void
+  onSaved: (material: RevisedRawMaterial) => void
+  onSessionExpired: () => void
+  onAuthorizationDenied: () => void
+  onModuleUnavailable: () => void
+}
+
+type Phase = 'loading' | 'editing' | 'authorizing' | 'saving' | 'conflict'
+  | 'uncertain' | 'saved' | 'forbidden' | 'not-found' | 'unavailable' | 'error'
+
+type EditorSnapshot = RawMaterialEditor
+
+function isSessionExpired(cause: unknown): boolean {
+  return cause instanceof ApiError && (cause.status === 401 || cause.status === 419)
+}
+
+function serverFieldName(field: string): string {
+  const fields: Record<string, string> = {
+    category_id: 'categoryId',
+    base_unit_code: 'baseUnitCode',
+    nominal_quantity: 'nominalQuantity',
+    usable_quantity: 'usableQuantity',
+    'conversions.*.unit_code': 'conversions',
+    'conversions.*.to_base_factor': 'conversions',
+    'conversions.*.basis': 'conversions',
+    'aliases.*': 'aliases',
+  }
+  const conversionField = field.match(/^conversions\.(\d+)\.(unit_code|to_base_factor|basis)$/)
+  const aliasField = field.match(/^aliases\.(\d+)$/)
+  if (conversionField) {
+    const key = conversionField[2] === 'unit_code'
+      ? 'unitCode'
+      : conversionField[2] === 'to_base_factor' ? 'toBaseFactor' : 'basis'
+    return `conversions.${conversionField[1]}.${key}`
+  }
+  if (aliasField) return `aliases.${aliasField[1]}`
+  return fields[field] ?? field
+}
+
+function serverFieldErrors(errors: Record<string, string[]>): Record<string, string> {
+  return Object.fromEntries(Object.entries(errors).map(([field, messages]) => [
+    serverFieldName(field),
+    messages.join(' '),
+  ]))
+}
+
+function buildEditPayload(values: RawMaterialCreateValues, changeReason: string): RawMaterialEditPayload {
+  const nominal = normalizeDecimalInput(values.nominalQuantity)
+  const usable = normalizeDecimalInput(values.usableQuantity)
+  const conversions: RawMaterialEditPayload['conversions'] = values.conversions.map((conversion) => {
+    const unitCode = RAW_UNITS.find((unit) => unit === conversion.unitCode)
+    if (!unitCode) throw new Error('Wybierz prawidłową jednostkę przeliczeniową.')
+    if (UNIT_DIMENSIONS[unitCode] === UNIT_DIMENSIONS[values.baseUnitCode]) {
+      return { unit_code: unitCode }
+    }
+    return {
+      unit_code: unitCode,
+      to_base_factor: normalizeDecimalInput(conversion.toBaseFactor),
+      basis: conversion.basis.trim(),
+    }
+  })
+
+  return {
+    category_id: values.categoryId,
+    name: values.name.trim(),
+    description: values.description.trim() || null,
+    base_unit_code: values.baseUnitCode,
+    ...(nominal && usable ? { nominal_quantity: nominal, usable_quantity: usable } : {}),
+    aliases: values.aliases.map((alias) => alias.trim()).filter(Boolean),
+    conversions,
+    ...(changeReason.trim() ? { change_reason: changeReason.trim() } : {}),
+  }
+}
+
+function isBusy(phase: Phase): boolean {
+  return phase === 'loading' || phase === 'authorizing' || phase === 'saving'
+}
+
+export default function RawMaterialEditForm({
+  materialId,
+  operatingLocationId,
+  categories,
+  returnFocus,
+  onClose,
+  onSaved,
+  onSessionExpired,
+  onAuthorizationDenied,
+  onModuleUnavailable,
+}: Props) {
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [snapshot, setSnapshot] = useState<EditorSnapshot | null>(null)
+  const [values, setValues] = useState<RawMaterialCreateValues | null>(null)
+  const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
+  const [changeReason, setChangeReason] = useState('')
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
+  const [formError, setFormError] = useState<string | null>(null)
+  const [attempted, setAttempted] = useState(false)
+  const [saved, setSaved] = useState<RevisedRawMaterial | null>(null)
+  const [uncertainRevision, setUncertainRevision] = useState<number | null>(null)
+  const dialogRef = useRef<HTMLElement>(null)
+  const locationRef = useRef(operatingLocationId)
+  const categoriesRef = useRef(categories)
+  const callbacksRef = useRef({ onAuthorizationDenied, onModuleUnavailable, onSessionExpired })
+  const active = useRef(true)
+  const operationLocked = useRef(false)
+  const dirty = values !== null && initialValues !== null
+    && JSON.stringify(values) !== JSON.stringify(initialValues)
+  useLayoutEffect(() => {
+    locationRef.current = operatingLocationId
+    categoriesRef.current = categories
+    callbacksRef.current = { onAuthorizationDenied, onModuleUnavailable, onSessionExpired }
+  }, [categories, onAuthorizationDenied, onModuleUnavailable, onSessionExpired, operatingLocationId])
+
+  useEffect(() => {
+    active.current = true
+    const controller = new AbortController()
+    const expectedLocation = operatingLocationId
+    const load = async () => {
+      try {
+        const [capabilities, completion] = await Promise.all([
+          fetchRawMaterialCapabilities(expectedLocation, controller.signal),
+          fetchRawMaterialCompletion(materialId, controller.signal),
+        ])
+        if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
+        if (capabilities.locationId === expectedLocation
+          && (!capabilities.available || capabilities.readiness !== 'READY')) {
+          setFormError('Moduł RAW_MATERIALS nie jest gotowy w tej lokalizacji. Edytor został zamknięty.')
+          setPhase('unavailable')
+          callbacksRef.current.onModuleUnavailable()
+          return
+        }
+        if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
+          || !completion.availableActions.includes('edit') || !completion.version) {
+          setFormError('Brak aktualnego uprawnienia do edycji tego surowca.')
+          setPhase('forbidden')
+          callbacksRef.current.onAuthorizationDenied()
+          return
+        }
+        const editor = await fetchRawMaterialEditor(materialId, controller.signal)
+        if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
+        if (editor.revisionId !== completion.revisionId || editor.version !== completion.version) {
+          setFormError('Dane edytora zmieniły się podczas otwierania. Wczytaj aktualny stan przed edycją.')
+          setPhase('error')
+          return
+        }
+        if (!categoriesRef.current.some((category) => category.id === editor.values.categoryId)) {
+          setFormError('Nie można bezpiecznie potwierdzić kategorii bieżącej rewizji. Edycja pozostaje zablokowana.')
+          setPhase('error')
+          return
+        }
+        setSnapshot(editor)
+        setValues(editor.values)
+        setInitialValues(editor.values)
+        setPhase('editing')
+      } catch (cause) {
+        if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
+        handleFailure(cause, 'Nie udało się bezpiecznie wczytać danych edytora.')
+      }
+    }
+    void load()
+    dialogRef.current?.focus()
+
+    return () => {
+      active.current = false
+      controller.abort()
+      if (returnFocus?.isConnected) returnFocus.focus()
+    }
+  }, [materialId, operatingLocationId, returnFocus])
+
+  useEffect(() => {
+    if (!dirty || phase === 'saved') return
+    const preventNavigation = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', preventNavigation)
+    return () => window.removeEventListener('beforeunload', preventNavigation)
+  }, [dirty, phase])
+
+  useEffect(() => {
+    if (phase === 'editing') {
+      dialogRef.current?.querySelector<HTMLElement>('select, input, textarea')?.focus()
+    }
+  }, [phase])
+
+  function handleFailure(cause: unknown, fallback: string) {
+    if (isSessionExpired(cause)) {
+      setPhase('forbidden')
+      setFormError('Sesja wygasła. Zaloguj się ponownie, aby kontynuować.')
+      callbacksRef.current.onSessionExpired()
+      return
+    }
+    if (cause instanceof ApiError && cause.status === 403) {
+      setPhase('forbidden')
+      setFormError('Brak aktualnego uprawnienia do edycji tego surowca.')
+      callbacksRef.current.onAuthorizationDenied()
+      return
+    }
+    if (cause instanceof ApiError && cause.status === 404) {
+      setPhase('not-found')
+      setFormError('Surowiec jest niedostępny w bieżącym kontekście.')
+      return
+    }
+    if (cause instanceof ApiError && (cause.code === 'RAW_MATERIALS_MODULE_UNAVAILABLE' || cause.status === 503)) {
+      setPhase('unavailable')
+      setFormError('Moduł RAW_MATERIALS jest niedostępny w tej lokalizacji.')
+      callbacksRef.current.onModuleUnavailable()
+      return
+    }
+    setPhase('error')
+    setFormError(cause instanceof Error ? cause.message : fallback)
+  }
+
+  function setField<K extends keyof RawMaterialCreateValues>(
+    key: K,
+    value: RawMaterialCreateValues[K],
+  ) {
+    setValues((current) => current ? { ...current, [key]: value } : current)
+    setValidationErrors((current) => {
+      const next = { ...current }
+      delete next[String(key)]
+      const prefix = key === 'aliases' ? 'aliases.' : key === 'conversions' ? 'conversions.' : null
+      if (prefix) Object.keys(next).filter((field) => field.startsWith(prefix)).forEach((field) => delete next[field])
+      return next
+    })
+    setServerErrors((current) => {
+      const next = { ...current }
+      delete next[String(key)]
+      const prefix = key === 'aliases' ? 'aliases.' : key === 'conversions' ? 'conversions.' : null
+      if (prefix) Object.keys(next).filter((field) => field.startsWith(prefix)).forEach((field) => delete next[field])
+      return next
+    })
+    setFormError(null)
+  }
+
+  function updateAlias(index: number, value: string) {
+    if (!values) return
+    setField('aliases', values.aliases.map((alias, itemIndex) => itemIndex === index ? value : alias))
+  }
+
+  function updateConversion(index: number, patch: Partial<RawMaterialConversionInput>) {
+    if (!values) return
+    setField('conversions', values.conversions.map((conversion, itemIndex) =>
+      itemIndex === index ? { ...conversion, ...patch } : conversion))
+  }
+
+  function closeForm() {
+    if (isBusy(phase)) return
+    if (dirty && !window.confirm('Odrzucić niezapisane zmiany?')) return
+    onClose()
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeForm()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+    )
+    if (!focusable?.length) {
+      event.preventDefault()
+      dialogRef.current?.focus()
+      return
+    }
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  async function loadCurrentEditor(discardLocalChanges: boolean) {
+    if (discardLocalChanges && !window.confirm('Odrzucić lokalne zmiany i wczytać aktualną rewizję z serwera?')) return
+    setPhase('loading')
+    setFormError(null)
+    setUncertainRevision(null)
+    const expectedLocation = operatingLocationId
+    const controller = new AbortController()
+    try {
+      const [capabilities, completion] = await Promise.all([
+        fetchRawMaterialCapabilities(expectedLocation, controller.signal),
+        fetchRawMaterialCompletion(materialId, controller.signal),
+      ])
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (capabilities.locationId === expectedLocation
+        && (!capabilities.available || capabilities.readiness !== 'READY')) {
+        setFormError('Moduł RAW_MATERIALS nie jest gotowy w tej lokalizacji.')
+        setPhase('unavailable')
+        callbacksRef.current.onModuleUnavailable()
+        return
+      }
+      if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
+        || !completion.availableActions.includes('edit') || !completion.version) {
+        setPhase('forbidden')
+        callbacksRef.current.onAuthorizationDenied()
+        return
+      }
+      const editor = await fetchRawMaterialEditor(materialId, controller.signal)
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (editor.revisionId !== completion.revisionId || editor.version !== completion.version) {
+        setFormError('Wersja zmieniła się podczas wczytywania. Spróbuj ponownie.')
+        setPhase('error')
+        return
+      }
+      if (!categoriesRef.current.some((category) => category.id === editor.values.categoryId)) {
+        setFormError('Nie można bezpiecznie potwierdzić kategorii bieżącej rewizji.')
+        setPhase('error')
+        return
+      }
+      setSnapshot(editor)
+      setValues(editor.values)
+      setInitialValues(editor.values)
+      setValidationErrors({})
+      setServerErrors({})
+      setChangeReason('')
+      setAttempted(false)
+      setPhase('editing')
+      setFormError(discardLocalChanges
+        ? 'Wczytano aktualny stan serwera. Sprawdź dane przed rozpoczęciem nowego zapisu.'
+        : null)
+    } catch (cause) {
+      if (!active.current || locationRef.current !== expectedLocation) return
+      handleFailure(cause, 'Nie udało się wczytać aktualnej rewizji.')
+    } finally {
+      controller.abort()
+    }
+  }
+
+  async function readUncertainServerState() {
+    const expectedLocation = operatingLocationId
+    const controller = new AbortController()
+    try {
+      const [capabilities, completion] = await Promise.all([
+        fetchRawMaterialCapabilities(expectedLocation, controller.signal),
+        fetchRawMaterialCompletion(materialId, controller.signal),
+      ])
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (capabilities.locationId === expectedLocation
+        && (!capabilities.available || capabilities.readiness !== 'READY')) {
+        setFormError('Moduł RAW_MATERIALS nie jest gotowy w tej lokalizacji.')
+        setPhase('unavailable')
+        callbacksRef.current.onModuleUnavailable()
+        return
+      }
+      if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
+        || !completion.availableActions.includes('edit') || !completion.version) {
+        setPhase('forbidden')
+        callbacksRef.current.onAuthorizationDenied()
+        return
+      }
+      const editor = await fetchRawMaterialEditor(materialId, controller.signal)
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (editor.revisionId !== completion.revisionId || editor.version !== completion.version) {
+        setFormError('Odczytano niespójny stan serwera. Lokalnych zmian nie zmieniono; użyj jawnego wczytania, aby kontynuować.')
+        return
+      }
+      setUncertainRevision(editor.revisionNo)
+      setFormError('Wynik zapisu nadal jest niepewny. Odczyt serwera nie uruchomił ponownego zapisu; lokalne zmiany zachowano.')
+    } catch (cause) {
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (isSessionExpired(cause) || (cause instanceof ApiError
+        && (cause.status === 403 || cause.status === 404 || cause.status === 503))) {
+        handleFailure(cause, 'Nie udało się odczytać bieżącej wersji serwera.')
+      } else {
+        setFormError(cause instanceof Error
+          ? `Nie udało się odczytać bieżącej wersji serwera: ${cause.message} Lokalnych zmian nie zmieniono.`
+          : 'Nie udało się odczytać bieżącej wersji serwera. Lokalnych zmian nie zmieniono.')
+      }
+    } finally {
+      controller.abort()
+    }
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!values || !snapshot || phase !== 'editing' || operationLocked.current) return
+    setAttempted(true)
+    setFormError(null)
+    setServerErrors({})
+    const errors = validateRawMaterialCreate(values)
+    if (Boolean(values.nominalQuantity.trim()) !== Boolean(values.usableQuantity.trim())) {
+      errors.nominalQuantity = 'Podaj ilość nominalną i użytkową razem albo pozostaw obie puste.'
+    }
+    if (initialValues?.nominalQuantity && !values.nominalQuantity.trim() && !values.usableQuantity.trim()) {
+      errors.nominalQuantity = 'Nie można wyczyścić istniejących ilości w tym kontrakcie. Podaj obie wartości.'
+    }
+    if (Object.keys(errors).length > 0) {
+      setValidationErrors(errors)
+      dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+      return
+    }
+
+    const expectedLocation = operatingLocationId
+    const payload = buildEditPayload(values, changeReason)
+    operationLocked.current = true
+    setPhase('authorizing')
+    const controller = new AbortController()
+    try {
+      const [capabilities, completion] = await Promise.all([
+        fetchRawMaterialCapabilities(expectedLocation, controller.signal),
+        fetchRawMaterialCompletion(materialId, controller.signal),
+      ])
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (capabilities.locationId === expectedLocation
+        && (!capabilities.available || capabilities.readiness !== 'READY')) {
+        setPhase('unavailable')
+        setFormError('Moduł RAW_MATERIALS nie jest gotowy w tej lokalizacji.')
+        callbacksRef.current.onModuleUnavailable()
+        return
+      }
+      if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
+        || !completion.availableActions.includes('edit') || !completion.version
+        || completion.revisionId !== snapshot.revisionId || completion.version !== snapshot.version) {
+        setPhase('conflict')
+        setFormError('Uprawnienie lub wersja edytora zmieniły się. Lokalne zmiany zachowano; wczytaj aktualny stan świadomie.')
+        return
+      }
+      if (locationRef.current !== expectedLocation) return
+      setPhase('saving')
+      const result = await reviseRawMaterial(materialId, payload, snapshot.version)
+      if (!active.current || locationRef.current !== expectedLocation) return
+      setSaved(result)
+      setSnapshot({ ...snapshot, lifecycleState: result.lifecycleState, revisionId: result.revision.id,
+        revisionNo: result.revision.revisionNo, version: result.version })
+      setPhase('saved')
+      onSaved(result)
+    } catch (cause) {
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (cause instanceof ApiError && cause.status === 409
+        && cause.code === 'RAW_MATERIAL_VERSION_CONFLICT') {
+        setPhase('conflict')
+        setFormError('Surowiec został zmieniony przez inną operację. Nie nadpisano nowszych danych; lokalne zmiany zachowano.')
+      } else if (cause instanceof ApiError && (cause.status === 428
+        || (cause.status === 422 && cause.code === 'RAW_MATERIAL_VERSION_INVALID'))) {
+        setPhase('conflict')
+        setFormError('Wersja edycji jest nieprawidłowa lub wymagana. Wczytaj aktualny stan przed dalszą pracą.')
+      } else if (cause instanceof ApiError && cause.status === 422) {
+        setServerErrors(serverFieldErrors(cause.errors))
+        setFormError(cause.message)
+        setPhase('editing')
+      } else if (cause instanceof Error && (!(cause instanceof ApiError) || cause.status >= 500)) {
+        setPhase('uncertain')
+        setFormError('Nie można potwierdzić wyniku zapisu. Nie wysłano ponownego PATCH; lokalne zmiany pozostają zachowane.')
+        void readUncertainServerState()
+      } else {
+        handleFailure(cause, 'Nie udało się zapisać nowej rewizji.')
+      }
+    } finally {
+      controller.abort()
+      operationLocked.current = false
+    }
+  }
+
+  function getError(field: string): string | undefined {
+    return validationErrors[field] ?? serverErrors[field]
+  }
+
+  function fieldProps(field: string) {
+    const message = getError(field)
+    return {
+      'aria-invalid': Boolean(message),
+      ...(message ? { 'aria-describedby': `${field.replaceAll('.', '-')}-error` } : {}),
+    }
+  }
+
+  return (
+    <div className="create-form-backdrop edit-form-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) closeForm()
+    }}>
+      <section
+        ref={dialogRef}
+        className="create-form-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="raw-edit-title"
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <header className="create-form-header">
+          <div>
+            <p className="eyebrow">KATALOG SUROWCÓW</p>
+            <h2 id="raw-edit-title">Edytuj surowiec</h2>
+            <p>Zmiany zostaną zapisane jako nowa rewizja robocza. Rewizja zatwierdzona nie jest nadpisywana.</p>
+          </div>
+          <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>
+            Zamknij
+          </button>
+        </header>
+
+        <p className="create-form-context">Kontekst lokalizacji: <code>{operatingLocationId}</code></p>
+
+        {phase === 'loading' && <p className="create-form-status" role="status">Sprawdzanie uprawnień i wczytywanie rewizji edytora…</p>}
+        {phase === 'authorizing' && <p className="create-form-status" role="status">Ponowne sprawdzanie uprawnień i wersji…</p>}
+        {phase === 'saving' && <p className="create-form-status" role="status">Zapisywanie nowej rewizji…</p>}
+        {formError && (phase === 'conflict' || phase === 'uncertain' || phase === 'error'
+          || phase === 'forbidden' || phase === 'not-found' || phase === 'unavailable') && (
+          <div className="create-form-notice" role="alert">
+            <strong>{phase === 'conflict' ? 'Konflikt wersji' : phase === 'uncertain' ? 'Niepewny wynik zapisu'
+              : phase === 'not-found' ? 'Surowiec niedostępny' : phase === 'forbidden' ? 'Brak dostępu'
+                : phase === 'unavailable' ? 'Moduł niedostępny' : 'Nie można otworzyć edytora'}</strong>
+            <p>{formError}</p>
+            {phase === 'conflict' && (
+              <button type="button" className="button button-primary" onClick={() => void loadCurrentEditor(true)}>
+                Odrzuć lokalne zmiany i wczytaj aktualną wersję
+              </button>
+            )}
+            {phase === 'uncertain' && (
+              <>
+                {uncertainRevision !== null && <p>Serwer zwrócił aktualną rewizję v{uncertainRevision}; sam odczyt nie potwierdza wyniku zapisu.</p>}
+                <button type="button" className="button button-primary" onClick={() => void loadCurrentEditor(true)}>
+                  Świadomie wczytaj aktualny stan
+                </button>
+              </>
+            )}
+            {phase === 'error' && (
+              <button type="button" className="button button-primary" onClick={() => void loadCurrentEditor(false)}>
+                Spróbuj bezpiecznie wczytać edytor ponownie
+              </button>
+            )}
+          </div>
+        )}
+
+        {phase === 'saved' && saved && (
+          <section className="create-success" aria-labelledby="edit-success-title">
+            <h3 id="edit-success-title">Zapisano nową rewizję roboczą v{saved.revision.revisionNo}</h3>
+            <p>
+              Serwer zwrócił stan mastera: <strong>{saved.lifecycleState} — {lifecycleLabel(saved.lifecycleState)}</strong>.
+              Rewizja nie została automatycznie zatwierdzona ani opublikowana.
+            </p>
+            {saved.lifecycleState === 'ACTIVE' && (
+              <p>Dotychczasowa rewizja zatwierdzona pozostaje obowiązująca do czasu osobnego zatwierdzenia nowej rewizji.</p>
+            )}
+            <dl className="detail-grid">
+              <div><dt>SKU</dt><dd>{saved.sku}</dd></div>
+              <div><dt>Identyfikator surowca</dt><dd>{saved.id}</dd></div>
+              <div><dt>Identyfikator nowej rewizji</dt><dd>{saved.revision.id}</dd></div>
+            </dl>
+            <div className="create-form-actions">
+              <button type="button" className="button button-primary" onClick={onClose}>Wróć do szczegółów</button>
+            </div>
+          </section>
+        )}
+
+        {snapshot && values && phase !== 'loading' && phase !== 'saved'
+          && phase !== 'forbidden' && phase !== 'not-found' && phase !== 'unavailable'
+          && phase !== 'error' && (
+          <>
+            <section className="detail-section edit-revision-context" aria-label="Informacje o edytowanej rewizji">
+              <p><strong>Edytowana rewizja:</strong> v{snapshot.revisionNo} · {snapshot.lifecycleState === 'ACTIVE' ? 'rewizja robocza; zatwierdzona pozostaje aktywna' : 'rewizja robocza szkicu'}</p>
+              <dl className="detail-grid">
+                <div><dt>SKU — niezmienne</dt><dd>{snapshot.sku}</dd></div>
+                <div><dt>Identyfikator surowca — niezmienny</dt><dd>{snapshot.id}</dd></div>
+                <div><dt>Identyfikator rewizji — niezmienny</dt><dd>{snapshot.revisionId}</dd></div>
+              </dl>
+            </section>
+
+            {formError && phase === 'editing' && <p className="create-form-notice" role="status">{formError}</p>}
+
+            <form onSubmit={(event) => void handleSubmit(event)} noValidate>
+              {attempted && Object.keys(validationErrors).length > 0 && (
+                <p className="create-form-error" role="alert">Popraw pola oznaczone poniżej.</p>
+              )}
+              <fieldset disabled={phase !== 'editing'} className="create-form-fieldset">
+                <legend>Dane podstawowe</legend>
+                <div className="create-form-grid">
+                  <label className="create-form-field" htmlFor="edit-category">
+                    Kategoria <span className="required-mark">wymagane</span>
+                    <select id="edit-category" value={values.categoryId} {...fieldProps('categoryId')}
+                      onChange={(event) => setField('categoryId', event.target.value)}>
+                      {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                    </select>
+                    {getError('categoryId') && <span className="field-error" id="categoryId-error">{getError('categoryId')}</span>}
+                  </label>
+                  <label className="create-form-field" htmlFor="edit-name">
+                    Nazwa <span className="required-mark">wymagane</span>
+                    <input id="edit-name" value={values.name} maxLength={200} {...fieldProps('name')}
+                      onChange={(event) => setField('name', event.target.value)} />
+                    {getError('name') && <span className="field-error" id="name-error">{getError('name')}</span>}
+                  </label>
+                  <label className="create-form-field create-form-field-wide" htmlFor="edit-description">
+                    Opis
+                    <textarea id="edit-description" value={values.description} rows={3} maxLength={10000}
+                      {...fieldProps('description')}
+                      onChange={(event) => setField('description', event.target.value)} />
+                    {getError('description') && <span className="field-error" id="description-error">{getError('description')}</span>}
+                    <span className="field-hint">Pozostawienie pustego pola jawnie wyczyści opis.</span>
+                  </label>
+                  <label className="create-form-field" htmlFor="edit-base-unit">
+                    Jednostka bazowa <span className="required-mark">wymagane</span>
+                    <select id="edit-base-unit" value={values.baseUnitCode} {...fieldProps('baseUnitCode')}
+                      onChange={(event) => setField('baseUnitCode', event.target.value as RawMaterialCreateValues['baseUnitCode'])}>
+                      {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
+                    </select>
+                    <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „pc” oznacza sztukę, nie rodzaj opakowania.</span>
+                    {getError('baseUnitCode') && <span className="field-error" id="baseUnitCode-error">{getError('baseUnitCode')}</span>}
+                  </label>
+                  <fieldset className="create-form-fieldset create-quantity-group">
+                    <legend>Ilości</legend>
+                    <div className="create-form-grid create-form-grid-inline">
+                      <label htmlFor="edit-nominal-quantity">Nominalna</label>
+                      <input id="edit-nominal-quantity" inputMode="decimal" value={values.nominalQuantity}
+                        {...fieldProps('nominalQuantity')}
+                        onChange={(event) => setField('nominalQuantity', event.target.value)} />
+                      <label htmlFor="edit-usable-quantity">Użytkowa</label>
+                      <input id="edit-usable-quantity" inputMode="decimal" value={values.usableQuantity}
+                        {...fieldProps('usableQuantity')}
+                        onChange={(event) => setField('usableQuantity', event.target.value)} />
+                    </div>
+                    {(getError('nominalQuantity') || getError('usableQuantity')) && (
+                      <span className="field-error" id="nominalQuantity-error">
+                        {getError('nominalQuantity') ?? getError('usableQuantity')}
+                      </span>
+                    )}
+                    <span className="field-hint">Ilości podaj w parze, maksymalnie z 6 miejscami po przecinku.</span>
+                  </fieldset>
+                </div>
+              </fieldset>
+
+              <details className="create-advanced" open>
+                <summary>Aliasy i przeliczniki</summary>
+                <div className="create-advanced-content">
+                  <section aria-labelledby="edit-aliases-title">
+                    <div className="create-subsection-heading">
+                      <div><h3 id="edit-aliases-title">Aliasy</h3><p>Alternatywne nazwy tego samego surowca, używane w wyszukiwaniu. Nie tworzą osobnego surowca ani SKU. Lista zostanie wysłana w całości; pusta lista jawnie usuwa dodatkowe aliasy.</p></div>
+                      <button type="button" className="button button-secondary" disabled={phase !== 'editing' || values.aliases.length >= 50}
+                        onClick={() => setField('aliases', [...values.aliases, ''])}>Dodaj alias</button>
+                    </div>
+                    {values.aliases.map((alias, index) => (
+                      <div className="create-repeat-row" key={`alias-${index}`}>
+                        <label className="create-form-field" htmlFor={`edit-alias-${index}`}>Alias {index + 1}
+                          <input id={`edit-alias-${index}`} value={alias} maxLength={200} {...fieldProps(`aliases.${index}`)}
+                            onChange={(event) => updateAlias(index, event.target.value)} />
+                          {getError(`aliases.${index}`) && <span className="field-error">{getError(`aliases.${index}`)}</span>}
+                        </label>
+                        <button type="button" className="button button-secondary" aria-label={`Usuń alias ${index + 1}`}
+                          disabled={phase !== 'editing'} onClick={() => setField('aliases', values.aliases.filter((_, itemIndex) => itemIndex !== index))}>
+                          Usuń
+                        </button>
+                      </div>
+                    ))}
+                    {getError('aliases') && <p className="field-error">{getError('aliases')}</p>}
+                    {values.aliases.length === 0 && <p className="field-hint">Brak dodatkowych aliasów.</p>}
+                  </section>
+
+                  <section aria-labelledby="edit-conversions-title">
+                    <div className="create-subsection-heading">
+                      <div>
+                        <h3 id="edit-conversions-title">Jednostki przeliczeniowe</h3>
+                        <p>
+                          Jednostka bazowa: {UNIT_LABELS[values.baseUnitCode]}. Współczynnik oznacza liczbę jednostek bazowych
+                          przypadającą na 1 jednostkę dodatkową. Przeliczenia metryczne w tym samym wymiarze oblicza serwer;
+                          między wymiarami podaj współczynnik i opis podstawy. Wszystkie obecne pozycje zostaną zachowane,
+                          chyba że je zmienisz lub usuniesz.
+                        </p>
+                      </div>
+                      <button type="button" className="button button-secondary" disabled={phase !== 'editing' || values.conversions.length >= 20}
+                        onClick={() => setField('conversions', [...values.conversions, { unitCode: '', toBaseFactor: '', basis: '' }])}>
+                        Dodaj jednostkę
+                      </button>
+                    </div>
+                    {values.conversions.map((conversion, index) => {
+                      const unit = conversion.unitCode as RawMaterialCreateValues['baseUnitCode']
+                      const automatic = RAW_UNITS.includes(unit)
+                        && UNIT_DIMENSIONS[unit] === UNIT_DIMENSIONS[values.baseUnitCode]
+                      return (
+                        <div className="create-conversion-row" key={`conversion-${index}`}>
+                          <label className="create-form-field" htmlFor={`edit-conversion-unit-${index}`}>Jednostka {index + 1}
+                            <select id={`edit-conversion-unit-${index}`} value={conversion.unitCode}
+                              {...fieldProps(`conversions.${index}.unitCode`)}
+                              onChange={(event) => updateConversion(index, { unitCode: event.target.value as RawMaterialConversionInput['unitCode'] })}>
+                              <option value="">Wybierz jednostkę</option>
+                              {RAW_UNITS.filter((item) => item !== values.baseUnitCode).map((item) =>
+                                <option key={item} value={item}>{UNIT_LABELS[item]}</option>)}
+                            </select>
+                            {getError(`conversions.${index}.unitCode`) && <span className="field-error">{getError(`conversions.${index}.unitCode`)}</span>}
+                          </label>
+                          {automatic ? (
+                            <p className="field-hint create-conversion-auto">Przeliczenie automatyczne w tym samym wymiarze — współczynnik ustali serwer.</p>
+                          ) : (
+                            <>
+                              <p className="field-hint create-form-field-wide">
+                                {conversion.toBaseFactor
+                                  ? `1 ${conversion.unitCode} = ${conversion.toBaseFactor} ${values.baseUnitCode}.`
+                                  : `Podaj, ile ${values.baseUnitCode} przypada na 1 ${conversion.unitCode}.`}
+                                {conversion.unitCode === 'pc' || values.baseUnitCode === 'pc'
+                                  ? ' „pc” oznacza sztukę, nie opakowanie. Opisz w podstawie, co dokładnie oznacza jedna sztuka dla tego surowca.'
+                                  : ' Opisz w podstawie, co oznacza jedna jednostka dla tego surowca.'}
+                              </p>
+                              <label className="create-form-field" htmlFor={`edit-conversion-factor-${index}`}>Współczynnik — jednostki bazowe na 1 jednostkę dodatkową
+                                <input id={`edit-conversion-factor-${index}`} inputMode="decimal" value={conversion.toBaseFactor}
+                                  {...fieldProps(`conversions.${index}.toBaseFactor`)}
+                                  onChange={(event) => updateConversion(index, { toBaseFactor: event.target.value })} />
+                                {getError(`conversions.${index}.toBaseFactor`) && <span className="field-error">{getError(`conversions.${index}.toBaseFactor`)}</span>}
+                              </label>
+                              <label className="create-form-field create-form-field-wide" htmlFor={`edit-conversion-basis-${index}`}>Opis podstawy przeliczenia
+                                <input id={`edit-conversion-basis-${index}`} value={conversion.basis} maxLength={500}
+                                  {...fieldProps(`conversions.${index}.basis`)}
+                                  onChange={(event) => updateConversion(index, { basis: event.target.value })} />
+                                {getError(`conversions.${index}.basis`) && <span className="field-error">{getError(`conversions.${index}.basis`)}</span>}
+                              </label>
+                            </>
+                          )}
+                          <button type="button" className="button button-secondary" aria-label={`Usuń jednostkę przeliczeniową ${index + 1}`}
+                            disabled={phase !== 'editing'} onClick={() => setField('conversions', values.conversions.filter((_, itemIndex) => itemIndex !== index))}>
+                            Usuń
+                          </button>
+                        </div>
+                      )
+                    })}
+                    {getError('conversions') && <p className="field-error">{getError('conversions')}</p>}
+                    {values.conversions.length === 0 && <p className="field-hint">Brak dodatkowych jednostek.</p>}
+                  </section>
+                </div>
+              </details>
+
+              <label className="create-form-field create-form-field-wide" htmlFor="edit-change-reason">
+                Powód zmiany (opcjonalnie)
+                <textarea id="edit-change-reason" value={changeReason} maxLength={500} rows={2}
+                  onChange={(event) => setChangeReason(event.target.value)} />
+              </label>
+
+              <div className="create-form-footer">
+                <p>Pełny zestaw danych podstawowych i token wersji zostaną przekazane serwerowi. Alergeny, przechowywanie i dokumenty nie są edytowane w tym formularzu.</p>
+                <div className="create-form-actions">
+                  <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>Anuluj</button>
+                  <button type="submit" className="button button-primary" disabled={phase !== 'editing'}>
+                    Zapisz nową rewizję roboczą
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {phase === 'uncertain' && uncertainRevision !== null && (
+              <p className="create-form-status" role="status">Odczytano rewizję v{uncertainRevision}; wynik PATCH pozostaje niepewny.</p>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  )
+}

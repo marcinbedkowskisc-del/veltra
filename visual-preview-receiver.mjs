@@ -30,6 +30,25 @@ const allowedNames = new Set([
   'raw-material-create-not-ready.png',
   'raw-material-create-unauthorized.png',
   'raw-material-create-mobile.png',
+  'raw-material-edit-action.png',
+  'raw-material-edit-loading.png',
+  'raw-material-edit-prefilled.png',
+  'raw-material-edit-unsaved.png',
+  'raw-material-edit-validation.png',
+  'raw-material-edit-saving.png',
+  'raw-material-edit-success.png',
+  'raw-material-edit-conflict.png',
+  'raw-material-edit-not-ready.png',
+  'raw-material-edit-unauthorized.png',
+  'raw-material-edit-noneditable.png',
+  'raw-material-edit-mobile.png',
+  'stage4b3b-catalog-main-scrolling.png',
+  'stage4b3b-catalog-bottom-pagination.png',
+  'stage4b3b-catalog-multiple-filters.png',
+  'stage4b3b-catalog-filters-cleared.png',
+  'stage4b3b-create-conversions.png',
+  'stage4b3b-edit-conversions.png',
+  'stage4b3b-catalog-mobile.png',
 ])
 
 const server = createServer(async (request, response) => {
@@ -65,8 +84,12 @@ const server = createServer(async (request, response) => {
       response.writeHead(400).end('Nieprawidłowy plik PNG.')
       return
     }
-    const outputDirectory = resolve(name.startsWith('raw-material-create-')
-      ? 'artifacts/stage4b2a'
+    const outputDirectory = resolve(name.startsWith('stage4b3b-')
+      ? 'artifacts/stage4b3b'
+      : name.startsWith('raw-material-edit-')
+        ? 'artifacts/stage4b2b'
+      : name.startsWith('raw-material-create-')
+        ? 'artifacts/stage4b2a'
       : name.startsWith('raw-catalog-detail-')
         ? 'artifacts/stage4b1'
         : 'artifacts/stage4a1')

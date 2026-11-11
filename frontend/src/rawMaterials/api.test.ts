@@ -1,8 +1,39 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
-import { fetchRawMaterialCapabilities } from './api'
+import {
+  fetchRawMaterialCapabilities,
+  fetchRawMaterialCompletion,
+  fetchRawMaterialEditor,
+  reviseRawMaterial,
+} from './api'
 
 const locationId = '00000000-0000-4000-8000-000000000101'
+const materialId = '00000000-0000-4000-8000-000000000201'
+const revisionId = '00000000-0000-4000-8000-000000000202'
+const version = 'opaque-editor-version'
+const editorData = {
+  id: materialId,
+  code: 'RAW-000201',
+  sku: 'RAW-000201',
+  lifecycle_state: 'ACTIVE',
+  version,
+  revision: {
+    id: revisionId,
+    revision_no: 4,
+    name: 'Mąka pszenna',
+    description: 'Opis',
+    category_id: '00000000-0000-4000-8000-000000000203',
+    base_unit_code: 'kg',
+    nominal_quantity: '10.000000',
+    usable_quantity: '8.000000',
+    units: [
+      { unit_code: 'kg', dimension: 'MASS', to_base_factor: '1.000000', basis: null },
+      { unit_code: 'g', dimension: 'MASS', to_base_factor: '0.001000', basis: null },
+      { unit_code: 'pc', dimension: 'COUNT', to_base_factor: '2.500000', basis: '1 sztuka' },
+    ],
+    aliases: ['Mąka pszenna', 'mąka do wypieków'],
+  },
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -74,7 +105,6 @@ describe('fetchRawMaterialCapabilities', () => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })))
-
     await expect(fetchRawMaterialCapabilities(locationId)).rejects.toThrow(
       'Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.',
     )
@@ -103,7 +133,6 @@ describe('fetchRawMaterialCapabilities', () => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })))
-
     await expect(fetchRawMaterialCapabilities(locationId)).rejects.toThrow(
       'Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.',
     )
@@ -113,13 +142,121 @@ describe('fetchRawMaterialCapabilities', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       error: { code: 'RAW_MATERIALS_MODULE_UNAVAILABLE', message: 'Moduł RAW_MATERIALS jest niedostępny.' },
     }), { status: 503, headers: { 'Content-Type': 'application/json' } })))
-
     const error = await fetchRawMaterialCapabilities(locationId).catch((cause: unknown) => cause)
-
     expect(error).toBeInstanceOf(ApiError)
-    expect(error).toMatchObject({
-      status: 503,
-      code: 'RAW_MATERIALS_MODULE_UNAVAILABLE',
+    expect(error).toMatchObject({ status: 503, code: 'RAW_MATERIALS_MODULE_UNAVAILABLE' })
+  })
+})
+
+describe('kontrakt edycji surowca', () => {
+  it('parsuje completion per rekord i fail-closed odrzuca błędne akcje', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        lifecycle_state: 'ACTIVE',
+        revision_id: revisionId,
+        version,
+        available_actions: ['edit', 'submit'],
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    await expect(fetchRawMaterialCompletion(materialId)).resolves.toEqual({
+      lifecycleState: 'ACTIVE',
+      revisionId,
+      version,
+      availableActions: ['edit', 'submit'],
     })
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { lifecycle_state: 'ACTIVE', revision_id: revisionId, version, available_actions: 'edit' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    await expect(fetchRawMaterialCompletion(materialId)).rejects.toThrow('nieprawidłową ocenę')
+  })
+
+  it('wczytuje wyłącznie kompletną rewizję edytora, usuwa alias głównej nazwy i zachowuje wersję bez zmian', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: editorData }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toEqual({
+      id: materialId,
+      sku: 'RAW-000201',
+      lifecycleState: 'ACTIVE',
+      revisionId,
+      revisionNo: 4,
+      version,
+      values: {
+        categoryId: '00000000-0000-4000-8000-000000000203',
+        name: 'Mąka pszenna',
+        description: 'Opis',
+        baseUnitCode: 'kg',
+        nominalQuantity: '10.000000',
+        usableQuantity: '8.000000',
+        aliases: ['mąka do wypieków'],
+        conversions: [
+          { unitCode: 'g', toBaseFactor: '0.001000', basis: '' },
+          { unitCode: 'pc', toBaseFactor: '2.500000', basis: '1 sztuka' },
+        ],
+      },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/raw-materials/${materialId}/editor`,
+      expect.objectContaining({ method: 'GET', cache: 'no-store' }),
+    )
+  })
+
+  it.each([
+    ['inna tożsamość materiału', { id: '00000000-0000-4000-8000-000000000299' }],
+    ['brak tokena', { version: '' }],
+    ['brak aliasów', { revision: { ...editorData.revision, aliases: undefined } }],
+    ['brak konwersji', { revision: { ...editorData.revision, units: undefined } }],
+    ['niedozwolona jednostka', {
+      revision: { ...editorData.revision, units: [...editorData.revision.units, {
+        unit_code: 'other', dimension: 'MASS', to_base_factor: '1', basis: null,
+      }] },
+    }],
+  ])('odrzuca niekompletny edytor: %s', async (_label, override) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, ...override },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
+  it('wysyła pełny payload PATCH i nieprzezroczysty token If-Match', async () => {
+    const revised = {
+      id: materialId,
+      sku: 'RAW-000201',
+      lifecycle_state: 'ACTIVE',
+      version: 'next-opaque-version',
+      revision: { id: revisionId, revision_no: 5 },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: revised }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const payload = {
+      category_id: '00000000-0000-4000-8000-000000000203',
+      name: 'Mąka pszenna',
+      description: null,
+      base_unit_code: 'kg' as const,
+      nominal_quantity: '10',
+      usable_quantity: '8',
+      aliases: [],
+      conversions: [],
+    }
+    await expect(reviseRawMaterial(materialId, payload, version)).resolves.toMatchObject({
+      id: materialId,
+      lifecycleState: 'ACTIVE',
+      revision: { revisionNo: 5 },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/raw-materials/${materialId}/draft`,
+      expect.objectContaining({
+        method: 'PATCH',
+        cache: 'no-store',
+        headers: expect.objectContaining({ 'If-Match': version }),
+        body: JSON.stringify(payload),
+      }),
+    )
   })
 })

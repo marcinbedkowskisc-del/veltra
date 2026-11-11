@@ -10,10 +10,17 @@ import {
   type SupplierOption,
 } from './catalog'
 import { parseRawMaterialDetail, parseRawMaterialRevisions, type RawMaterialDetail, type RawMaterialRevision } from './detail'
-import type { RawMaterialCreatePayload } from './create'
+import {
+  UNIT_DIMENSIONS,
+  type RawMaterialCreatePayload,
+  type RawMaterialCreateValues,
+  type RawMaterialUnit,
+} from './create'
 
 const RAW_API = '/api/v1/raw-materials'
 const RAW_CAPABILITIES_API = '/api/v1/security/raw-materials/capabilities'
+const RAW_UNITS = ['mg', 'g', 'kg', 'ml', 'l', 'pc'] as const
+const DECIMAL = /^\d{1,30}(?:\.\d{1,14})?$/
 
 export type RawMaterialCapabilities = {
   module: 'RAW_MATERIALS'
@@ -35,6 +42,47 @@ export type CreatedRawMaterial = {
   id: string
   sku: string
   lifecycleState: 'DRAFT'
+}
+
+export type RawMaterialCompletion = {
+  lifecycleState: string
+  revisionId: string
+  version: string | null
+  availableActions: string[]
+}
+
+export type RawMaterialEditor = {
+  id: string
+  sku: string
+  lifecycleState: 'DRAFT' | 'ACTIVE'
+  revisionId: string
+  revisionNo: number
+  version: string
+  values: RawMaterialCreateValues
+}
+
+export type RawMaterialEditPayload = {
+  category_id: string
+  name: string
+  description: string | null
+  base_unit_code: RawMaterialUnit
+  nominal_quantity?: string
+  usable_quantity?: string
+  aliases: string[]
+  conversions: Array<{
+    unit_code: RawMaterialUnit
+    to_base_factor?: string
+    basis?: string
+  }>
+  change_reason?: string
+}
+
+export type RevisedRawMaterial = {
+  id: string
+  sku: string
+  lifecycleState: 'DRAFT' | 'ACTIVE'
+  version: string
+  revision: { id: string; revisionNo: number }
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -99,12 +147,175 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
   }
 }
 
+function requiredString(value: unknown, message: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(message)
+  return value
+}
+
+function nullableString(value: unknown, message: string): string | null {
+  if (value === null) return null
+  return requiredString(value, message)
+}
+
+function parseRawMaterialCompletion(value: unknown): RawMaterialCompletion {
+  if (!isRecord(value) || typeof value.lifecycle_state !== 'string'
+    || typeof value.revision_id !== 'string' || !UUID.test(value.revision_id)
+    || !(value.version === null || (typeof value.version === 'string' && value.version.length > 0))
+    || !Array.isArray(value.available_actions)
+    || !value.available_actions.every((action) => typeof action === 'string')) {
+    throw new Error('Backend zwrócił nieprawidłową ocenę dostępnych akcji surowca.')
+  }
+  return {
+    lifecycleState: value.lifecycle_state,
+    revisionId: value.revision_id,
+    version: value.version,
+    availableActions: value.available_actions,
+  }
+}
+
+function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterialEditor {
+  const invalid = () => new Error('Backend zwrócił niepełne lub nieprawidłowe dane edytora surowca.')
+  if (!isRecord(value) || value.id !== expectedId
+    || typeof value.sku !== 'string' || value.sku.length === 0
+    || (value.lifecycle_state !== 'DRAFT' && value.lifecycle_state !== 'ACTIVE')
+    || typeof value.version !== 'string' || value.version.length === 0
+    || !isRecord(value.revision) || !UUID.test(String(value.revision.id ?? ''))
+    || !Number.isInteger(value.revision.revision_no) || Number(value.revision.revision_no) < 1
+    || !Array.isArray(value.revision.units) || !Array.isArray(value.revision.aliases)
+    || !value.revision.aliases.every((alias) => typeof alias === 'string')) {
+    throw invalid()
+  }
+
+  const revisionValue = value.revision
+  if (!isRecord(revisionValue)) throw invalid()
+  const revision = revisionValue
+  const categoryId = revision.category_id
+  const baseUnitCode = revision.base_unit_code
+  const name = revision.name
+  if (typeof categoryId !== 'string' || !UUID.test(categoryId)
+    || typeof baseUnitCode !== 'string' || !RAW_UNITS.includes(baseUnitCode as RawMaterialUnit)
+    || typeof name !== 'string' || name.trim().length === 0
+    || typeof revision.nominal_quantity !== 'string' && revision.nominal_quantity !== null
+    || typeof revision.usable_quantity !== 'string' && revision.usable_quantity !== null
+    || typeof revision.nominal_quantity === 'string' && !DECIMAL.test(revision.nominal_quantity)
+    || typeof revision.usable_quantity === 'string' && !DECIMAL.test(revision.usable_quantity)
+    || (revision.nominal_quantity === null) !== (revision.usable_quantity === null)) {
+    throw invalid()
+  }
+
+  const description = nullableString(revision.description, invalid().message)
+  const unitsValue = revision.units
+  if (!Array.isArray(unitsValue)) throw invalid()
+  const units = unitsValue
+  const unitCodes = new Set<string>()
+  let baseUnitCount = 0
+  const conversions = units.flatMap((unit) => {
+    if (!isRecord(unit)) throw invalid()
+    if (typeof unit.unit_code !== 'string' || !RAW_UNITS.includes(unit.unit_code as RawMaterialUnit)
+      || typeof unit.dimension !== 'string'
+      || unit.dimension !== UNIT_DIMENSIONS[unit.unit_code as RawMaterialUnit]
+      || unitCodes.has(unit.unit_code)) throw invalid()
+    unitCodes.add(unit.unit_code)
+    if (unit.unit_code === baseUnitCode) {
+      baseUnitCount += 1
+      return []
+    }
+    const factor = nullableString(unit.to_base_factor, invalid().message)
+    const basis = nullableString(unit.basis, invalid().message)
+    if (UNIT_DIMENSIONS[unit.unit_code as RawMaterialUnit] !== UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit]
+      && (!factor || !basis)) throw invalid()
+    return [{
+      unitCode: unit.unit_code as RawMaterialUnit,
+      toBaseFactor: factor ?? '',
+      basis: basis ?? '',
+    }]
+  })
+  if (baseUnitCount !== 1) throw invalid()
+
+  return {
+    id: value.id,
+    sku: value.sku,
+    lifecycleState: value.lifecycle_state,
+    revisionId: revision.id as string,
+    revisionNo: revision.revision_no as number,
+    version: value.version,
+    values: {
+      categoryId,
+      name,
+      description: description ?? '',
+      baseUnitCode: baseUnitCode as RawMaterialUnit,
+      nominalQuantity: revision.nominal_quantity ?? '',
+      usableQuantity: revision.usable_quantity ?? '',
+      aliases: (revision.aliases as string[]).filter((alias) =>
+        alias.trim().normalize('NFKC').toLocaleLowerCase('pl-PL')
+        !== name.trim().normalize('NFKC').toLocaleLowerCase('pl-PL')),
+      conversions,
+    },
+  }
+}
+
+function parseRevisedRawMaterial(value: unknown, expectedId: string): RevisedRawMaterial {
+  if (!isRecord(value) || value.id !== expectedId
+    || typeof value.sku !== 'string' || value.sku.length === 0
+    || (value.lifecycle_state !== 'DRAFT' && value.lifecycle_state !== 'ACTIVE')
+    || typeof value.version !== 'string' || value.version.length === 0
+    || !isRecord(value.revision) || typeof value.revision.id !== 'string'
+    || !UUID.test(value.revision.id) || !Number.isInteger(value.revision.revision_no)
+    || Number(value.revision.revision_no) < 1) {
+    throw new Error('Backend zwrócił nieprawidłowe potwierdzenie nowej rewizji surowca.')
+  }
+  return {
+    id: value.id,
+    sku: value.sku,
+    lifecycleState: value.lifecycle_state,
+    version: value.version,
+    revision: { id: value.revision.id, revisionNo: value.revision.revision_no as number },
+  }
+}
+
 export async function fetchRawMaterialCapabilities(
   expectedLocationId: string,
   signal?: AbortSignal,
 ): Promise<RawMaterialCapabilities> {
   const value = await request(RAW_CAPABILITIES_API, 'GET', undefined, { signal })
   return parseRawMaterialCapabilities(value, expectedLocationId)
+}
+
+export async function fetchRawMaterialCompletion(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RawMaterialCompletion> {
+  return parseRawMaterialCompletion(await request(
+    `${RAW_API}/${encodeURIComponent(id)}/completion`,
+    'GET',
+    undefined,
+    { signal },
+  ))
+}
+
+export async function fetchRawMaterialEditor(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RawMaterialEditor> {
+  return parseRawMaterialEditor(await request(
+    `${RAW_API}/${encodeURIComponent(id)}/editor`,
+    'GET',
+    undefined,
+    { signal },
+  ), id)
+}
+
+export async function reviseRawMaterial(
+  id: string,
+  payload: RawMaterialEditPayload,
+  version: string,
+): Promise<RevisedRawMaterial> {
+  return parseRevisedRawMaterial(await request(
+    `${RAW_API}/${encodeURIComponent(id)}/draft`,
+    'PATCH',
+    payload,
+    { headers: { 'If-Match': version } },
+  ), id)
 }
 
 export async function fetchCatalog(query: CatalogQuery, signal?: AbortSignal): Promise<CatalogPage> {

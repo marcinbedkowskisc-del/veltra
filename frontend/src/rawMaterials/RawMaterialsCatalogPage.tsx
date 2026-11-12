@@ -3,6 +3,7 @@ import { ApiError } from '../api'
 import CatalogFilters, { type SupplierFilterState } from './CatalogFilters'
 import CatalogTable from './CatalogTable'
 import Pagination from '../design-system/Pagination'
+import Tabs from '../design-system/Tabs'
 import RawMaterialCreateForm from './RawMaterialCreateForm'
 import RawMaterialDetailDrawer from './RawMaterialDetailDrawer'
 import SelectionActionBar from './SelectionActionBar'
@@ -77,6 +78,7 @@ export default function RawMaterialsCatalogPage({
   operatingLocationId,
   syntheticPreview = false,
 }: Props) {
+  const [view, setView] = useState('approved')
   const [filters, setFilters] = useState<FilterValues>(EMPTY_FILTERS)
   const [searchText, setSearchText] = useState('')
   const [sort, setSort] = useState<SortKey>('name')
@@ -293,6 +295,8 @@ export default function RawMaterialsCatalogPage({
   }
 
   function handleEdited() {
+    setCreatedMaterial(null)
+    setCreatedMaterialLocationId(null)
     setCatalogRequestRevision((revision) => revision + 1)
     setDetailRefreshKey((count) => count + 1)
   }
@@ -341,7 +345,7 @@ export default function RawMaterialsCatalogPage({
   }, [catalogState, markModuleUnavailable, onSessionExpired])
 
   useEffect(() => {
-    if (catalogState !== 'ready') return
+    if (catalogState !== 'ready' || view === 'workbench') return
     const controller = new AbortController()
     void fetchSuppliers('', controller.signal).then((result) => {
       if (controller.signal.aborted || moduleUnavailable.current) return
@@ -361,7 +365,7 @@ export default function RawMaterialsCatalogPage({
       setSupplierSuggestions([])
     })
     return () => controller.abort()
-  }, [catalogState, markModuleUnavailable, onSessionExpired])
+  }, [catalogState, markModuleUnavailable, onSessionExpired, view])
 
   useEffect(() => {
     if (supplierState !== 'available' || !supplierInput.trim() || filters.supplierId) return
@@ -399,12 +403,13 @@ export default function RawMaterialsCatalogPage({
   }, [filters.supplierId, markModuleUnavailable, onSessionExpired, supplierInput, supplierState])
 
   const query = useMemo<CatalogQuery>(() => ({
+    ...(view === 'workbench' ? { view: 'workbench' as const } : {}),
     ...filters,
     sort,
     direction,
     page,
     perPage,
-  }), [direction, filters, page, perPage, sort])
+  }), [direction, filters, page, perPage, sort, view])
   const queryKey = JSON.stringify(query)
   const catalogRequestKey = JSON.stringify([queryKey, catalogRequestRevision])
 
@@ -597,6 +602,10 @@ export default function RawMaterialsCatalogPage({
   }
 
   async function runExport(materialIds?: string[]) {
+    if (view === 'workbench') {
+      setExportError('Eksport jest dostępny wyłącznie w widoku zatwierdzonych rewizji.')
+      return
+    }
     if (searchPending || refreshing || catalogState !== 'ready') return
     const payload = catalogExportPayload(query, materialIds)
     const fingerprint = JSON.stringify(payload)
@@ -670,16 +679,18 @@ export default function RawMaterialsCatalogPage({
       ? 'Brak surowców spełniających wybrane kryteria.'
       : 'Katalog nie zawiera jeszcze surowców.'
   const filterControlsDisabled = catalogState === 'forbidden' || catalogState === 'unavailable'
-  const exportDisabled = filterControlsDisabled || catalogState !== 'ready'
+  const exportDisabled = view === 'workbench' || filterControlsDisabled || catalogState !== 'ready'
     || refreshing || searchPending || meta.total === 0 || exporting
 
-  return (
-    <section className="catalog-page" aria-labelledby="catalog-title" aria-busy={tableLoading}>
+  const catalogContent = (
+    <>
       <header className="catalog-heading">
         <div>
           <p className="eyebrow">BAZA OPERACYJNA</p>
           <h1 id="catalog-title">Katalog surowców</h1>
-          <p className="catalog-subtitle">Zatwierdzone surowce dostępne w bieżącym kontekście.</p>
+          <p className="catalog-subtitle">{view === 'workbench'
+            ? 'Rewizje robocze i oczekujące na zatwierdzenie w lokalizacji głównej.'
+            : 'Zatwierdzone surowce dostępne w bieżącym kontekście.'}</p>
         </div>
         {createOpening || (capabilities && capabilities.locationId === operatingLocationId && capabilities.actions.create) ? (
           <div className="deferred-action">
@@ -702,12 +713,13 @@ export default function RawMaterialsCatalogPage({
         <p className="inline-error" role="alert">{capabilitiesError}</p>
       )}
       <CatalogFilters
+        working={view === 'workbench'}
         values={filters}
         searchInput={searchText}
         searchLoading={tableLoading}
         categories={categories}
         categoriesAvailable={categoriesAvailable}
-        supplierState={supplierState}
+        supplierState={view === 'workbench' ? 'denied' : supplierState}
         supplierInput={supplierInput}
         supplierSuggestions={supplierSuggestions}
         supplierSearching={supplierSearching}
@@ -789,6 +801,7 @@ export default function RawMaterialsCatalogPage({
           </div>
 
           <CatalogTable
+            working={view === 'workbench'}
             rows={rows}
             selectedIds={selectedIds}
             selectionDisabled={tableLoading || catalogState !== 'ready'}
@@ -818,12 +831,40 @@ export default function RawMaterialsCatalogPage({
         </>
       )}
 
-      <SelectionActionBar
+      {view !== 'workbench' && <SelectionActionBar
         count={selectedIds.size}
         exporting={exporting}
         disabled={refreshing || searchPending || catalogState !== 'ready'}
         onExport={() => void runExport([...selectedIds])}
         onClear={clearSelection}
+      />}
+    </>
+  )
+
+  return (
+    <section className="catalog-page" aria-labelledby="catalog-title" aria-busy={tableLoading}>
+      <Tabs
+        label="Widok katalogu RAW"
+        value={view}
+        onChange={(next) => {
+          if (next === view) return
+          catalogRequestGeneration.current += 1
+          setSelectedDetail(null)
+          setRows([])
+          setMeta(EMPTY_META)
+          setSelectedIds(new Set())
+          previousPage.current = null
+          setCanReadReferencePrice(false)
+          setCanReadUsableCost(false)
+          setCatalogState('loading')
+          setCatalogError(null)
+          resetFilters()
+          setView(next)
+        }}
+        tabs={[
+          { id: 'approved', label: 'Zatwierdzone', content: catalogContent },
+          { id: 'workbench', label: 'Szkice i oczekujące', content: catalogContent },
+        ]}
       />
       {currentSelectedDetail && (
         <RawMaterialDetailDrawer
@@ -844,6 +885,8 @@ export default function RawMaterialsCatalogPage({
             setCapabilitiesError('Nie można potwierdzić uprawnień do edycji. Akcja pozostaje ukryta.')
           }}
           onEditSaved={handleEdited}
+          onWorkflowSaved={handleEdited}
+          working={view === 'workbench'}
         />
       )}
       {createFormLocationId === operatingLocationId

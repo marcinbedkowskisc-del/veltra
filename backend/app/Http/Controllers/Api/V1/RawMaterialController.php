@@ -49,6 +49,15 @@ use Symfony\Component\HttpFoundation\Response;
 
 class RawMaterialController extends Controller
 {
+    public function workbench(ListRawMaterialsRequest $request, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(
+            $service->workbench($request->user(), $request->attributes->get('operating_location'), $request->validated()),
+            200,
+            ['Cache-Control' => 'private, no-store'],
+        );
+    }
+
     public function validateBulkArchive(Request $request, RawMaterialService $service): JsonResponse
     {
         $input = $request->validate(['items' => ['required', 'array']]);

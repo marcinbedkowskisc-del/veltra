@@ -28,16 +28,6 @@ final class ModuleCatalogFixtures
 
     public static function readyWithRawMaterials(): DefinedModuleCatalog
     {
-        $definitions = self::ready()->all();
-        $types = [LocationType::CentralKitchen, LocationType::Restaurant];
-        $definitions['RAW_MATERIALS'] = new ModuleDefinition(
-            'RAW_MATERIALS',
-            'Surowce',
-            'RAW_MATERIALS_VIEW',
-            $types,
-            ready: true,
-        );
-
-        return new DefinedModuleCatalog(array_values($definitions));
+        return self::ready()->withReadyRawMaterials();
     }
 }

@@ -56,6 +56,7 @@ export type RawMaterialCompletion = {
   revisionId: string
   version: string | null
   availableActions: string[]
+  missingRequirements?: Array<{ code: string; message: string; section: string }>
 }
 
 export type RawMaterialEditor = {
@@ -172,11 +173,23 @@ function parseRawMaterialCompletion(value: unknown): RawMaterialCompletion {
     || !value.available_actions.every((action) => typeof action === 'string')) {
     throw new Error('Backend zwrócił nieprawidłową ocenę dostępnych akcji surowca.')
   }
+  let missingRequirements: RawMaterialCompletion['missingRequirements']
+  if (Object.hasOwn(value, 'missing_requirements')) {
+    if (!Array.isArray(value.missing_requirements)) throw new Error('Nieprawidłowa lista braków zatwierdzania.')
+    missingRequirements = value.missing_requirements.map((problem) => {
+      if (!isRecord(problem) || typeof problem.code !== 'string'
+        || typeof problem.message !== 'string' || typeof problem.section !== 'string') {
+        throw new Error('Nieprawidłowa lista braków zatwierdzania.')
+      }
+      return { code: problem.code, message: problem.message, section: problem.section }
+    })
+  }
   return {
     lifecycleState: value.lifecycle_state,
     revisionId: value.revision_id,
     version: value.version,
     availableActions: value.available_actions,
+    ...(missingRequirements ? { missingRequirements } : {}),
   }
 }
 
@@ -327,8 +340,84 @@ export async function reviseRawMaterial(
 
 export async function fetchCatalog(query: CatalogQuery, signal?: AbortSignal): Promise<CatalogPage> {
   const params = catalogSearchParams(query)
-  const envelope = await requestEnvelope(`${RAW_API}?${params}`, 'GET', undefined, { signal })
-  return parseCatalogEnvelope(envelope)
+  const path = query.view === 'workbench' ? `${RAW_API}/workbench` : RAW_API
+  const envelope = await requestEnvelope(`${path}?${params}`, 'GET', undefined, { signal })
+  const result = parseCatalogEnvelope(envelope)
+  if (query.view === 'workbench' && result.rows.some((row) => !row.workflowState)) {
+    throw new Error('Backend nie potwierdził statusu rewizji roboczej.')
+  }
+  return result
+}
+
+export async function changeRawMaterialLifecycle(id: string, action: 'submit' | 'approve', version: string, reason: string): Promise<void> {
+  const value = await request(`${RAW_API}/${encodeURIComponent(id)}/${action}`, 'POST',
+    action === 'approve' ? { reason } : {}, { headers: { 'If-Match': version } })
+  if (!isRecord(value) || value.id !== id || typeof value.sku !== 'string'
+    || (value.lifecycle_state !== (action === 'submit' ? 'VERIFICATION' : 'ACTIVE') && value.lifecycle_state !== 'ACTIVE')
+    || typeof value.version !== 'string' || value.version.length === 0) {
+    throw new Error('Nie można potwierdzić wyniku zmiany statusu. Wczytaj aktualne dane przed ponowieniem.')
+  }
+}
+
+export type AllergenCatalog = { id: string; versionNumber: number; definitions: Array<{ code: string; name: string }> }
+export type AllergenDeclaration = {
+  status: 'UNKNOWN' | 'DECLARED' | 'NO_KNOWN_ALLERGENS'
+  catalog_version_id: string | null
+  items: Array<{ allergen_code: string; exposure_kind: 'DIRECT' | 'CROSS_CONTACT_POTENTIAL' }>
+}
+
+export async function fetchAllergenCatalogs(signal?: AbortSignal): Promise<AllergenCatalog[]> {
+  const value = await request(`${RAW_API}/allergen-catalog`, 'GET', undefined, { signal })
+  if (!Array.isArray(value)) throw new Error('Nieprawidłowy katalog alergenów.')
+  return value.map((catalog) => {
+    if (!isRecord(catalog) || typeof catalog.id !== 'string' || !UUID.test(catalog.id)
+      || typeof catalog.version_number !== 'number' || !Number.isInteger(catalog.version_number) || catalog.version_number < 1
+      || !Array.isArray(catalog.definitions)) {
+      throw new Error('Nieprawidłowy katalog alergenów.')
+    }
+    return { id: catalog.id, versionNumber: catalog.version_number, definitions: catalog.definitions.map((definition) => {
+      if (!isRecord(definition) || typeof definition.allergen_code !== 'string' || typeof definition.name_pl !== 'string') {
+        throw new Error('Nieprawidłowy katalog alergenów.')
+      }
+      return { code: definition.allergen_code, name: definition.name_pl }
+    }) }
+  })
+}
+
+export async function saveAllergenDeclaration(id: string, input: AllergenDeclaration, version: string): Promise<void> {
+  const result = await request(`${RAW_API}/${encodeURIComponent(id)}/draft/allergen-declaration`, 'PUT', input,
+    { headers: { 'If-Match': version } })
+  if (!isRecord(result) || result.id !== id || typeof result.version !== 'string' || result.version.length === 0) {
+    throw new Error('Nie można potwierdzić zapisu deklaracji. Wczytaj aktualne dane przed ponowieniem.')
+  }
+}
+
+export async function fetchAllergenDeclaration(id: string, signal?: AbortSignal): Promise<{ version: string; declaration: AllergenDeclaration }> {
+  const value = await request(`${RAW_API}/${encodeURIComponent(id)}/editor`, 'GET', undefined, { signal })
+  if (!isRecord(value) || value.id !== id || typeof value.version !== 'string' || value.version.length === 0) {
+    throw new Error('Nieprawidłowa wersja deklaracji alergenów.')
+  }
+  const declaration = value.allergen_declaration
+  if (declaration === null) {
+    return { version: value.version, declaration: { status: 'UNKNOWN', catalog_version_id: null, items: [] } }
+  }
+  if (!isRecord(declaration)
+    || !(declaration.catalog_version_id === null || typeof declaration.catalog_version_id === 'string' && UUID.test(declaration.catalog_version_id))
+    || !Array.isArray(declaration.items)) {
+    throw new Error('Nieprawidłowa deklaracja alergenów.')
+  }
+  const status = declaration.status
+  if (status !== 'UNKNOWN' && status !== 'DECLARED' && status !== 'NO_KNOWN_ALLERGENS') {
+    throw new Error('Nieprawidłowy status deklaracji alergenów.')
+  }
+  const items = declaration.items.map((item): AllergenDeclaration['items'][number] => {
+    if (!isRecord(item) || typeof item.allergen_code !== 'string'
+      || item.exposure_kind !== 'DIRECT' && item.exposure_kind !== 'CROSS_CONTACT_POTENTIAL') {
+      throw new Error('Nieprawidłowa pozycja deklaracji alergenów.')
+    }
+    return { allergen_code: item.allergen_code, exposure_kind: item.exposure_kind }
+  })
+  return { version: value.version, declaration: { status, catalog_version_id: declaration.catalog_version_id, items } }
 }
 
 export async function fetchCategories(signal?: AbortSignal): Promise<CategoryOption[]> {
@@ -362,8 +451,9 @@ export async function fetchSuppliers(search: string, signal?: AbortSignal): Prom
   return parseSuppliers(envelope.data)
 }
 
-export async function fetchRawMaterialDetail(id: string, signal?: AbortSignal): Promise<RawMaterialDetail> {
-  return parseRawMaterialDetail(await request(`${RAW_API}/${encodeURIComponent(id)}`, 'GET', undefined, { signal }))
+export async function fetchRawMaterialDetail(id: string, signal?: AbortSignal, working = false): Promise<RawMaterialDetail> {
+  const path = `${RAW_API}/${encodeURIComponent(id)}${working ? '/editor' : ''}`
+  return parseRawMaterialDetail(await request(path, 'GET', undefined, { signal }))
 }
 
 export async function fetchRawMaterialRevisions(id: string, signal?: AbortSignal): Promise<RawMaterialRevision[]> {

@@ -36,6 +36,7 @@ export type CatalogFilters = {
 }
 
 export type CatalogQuery = CatalogFilters & {
+  view?: 'workbench'
   sort: SortKey
   direction: SortDirection
   page: number
@@ -43,6 +44,7 @@ export type CatalogQuery = CatalogFilters & {
 }
 
 export type CatalogRow = {
+  workflowState?: 'DRAFT' | 'VERIFICATION'
   id: string
   ordinal: number
   sku: string
@@ -148,6 +150,12 @@ function parseRow(value: unknown): ParsedRow {
     usableQuantity: nullableDecimal(row.usable_quantity, 'usable_quantity'),
     lifecycleState: requiredString(row.lifecycle_state, 'lifecycle_state'),
   }
+  if (Object.hasOwn(row, 'workflow_state')) {
+    if (row.workflow_state !== 'DRAFT' && row.workflow_state !== 'VERIFICATION') {
+      throw new Error('Backend zwrócił nieprawidłowy status rewizji roboczej.')
+    }
+    parsed.workflowState = row.workflow_state
+  }
 
   if (hasReferencePrice) {
     parsed.referencePrice = nullableDecimal(row.reference_net_price, 'reference_net_price')
@@ -182,6 +190,7 @@ export function parseCatalogEnvelope(value: unknown): CatalogPage {
       nominalQuantity: row.nominalQuantity,
       usableQuantity: row.usableQuantity,
       lifecycleState: row.lifecycleState,
+      ...(row.workflowState ? { workflowState: row.workflowState } : {}),
       ...(canReadReferencePrice && hasReferencePrice ? { referencePrice: row.referencePrice } : {}),
       ...(canReadUsableCost && hasUsableCost
         ? { usableUnitCost: row.usableUnitCost, usableCostBasis: row.usableCostBasis }

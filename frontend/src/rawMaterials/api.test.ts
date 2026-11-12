@@ -5,6 +5,11 @@ import {
   fetchRawMaterialCompletion,
   fetchRawMaterialEditor,
   reviseRawMaterial,
+  changeRawMaterialLifecycle,
+  fetchAllergenCatalogs,
+  fetchAllergenDeclaration,
+  saveAllergenDeclaration,
+  fetchCatalog,
 } from './api'
 
 const locationId = '00000000-0000-4000-8000-000000000101'
@@ -37,6 +42,69 @@ const editorData = {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('kontrakt cyklu zatwierdzania i alergenów', () => {
+  it('pobiera workbench niezależnie od zatwierdzonego katalogu i sprawdza status rewizji', async () => {
+    const data = {
+      id: materialId, sku: 'RAW-000201', ordinal: 1, lifecycle_state: 'ACTIVE', workflow_state: 'VERIFICATION',
+      nominal_quantity: '10', usable_quantity: '8',
+      revision: { name: 'Oczekująca rewizja', base_unit_code: 'kg' },
+    }
+    const envelope = {
+      data: [data],
+      meta: { current_page: 1, per_page: 25, total: 1, last_page: 1, from: 1, to: 1 },
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify(envelope)))
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      view: 'workbench' as const, search: 'Oczekująca', categoryId: '', supplierId: '', lifecycleState: 'VERIFICATION',
+      unit: '', sort: 'name' as const, direction: 'asc' as const, page: 1, perPage: 25 as const,
+    }
+    await expect(fetchCatalog(query)).resolves.toMatchObject({
+      rows: [{ lifecycleState: 'ACTIVE', workflowState: 'VERIFICATION' }],
+      canReadReferencePrice: false, canReadUsableCost: false,
+    })
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/v1/raw-materials/workbench?')
+    Reflect.deleteProperty(data, 'workflow_state')
+    await expect(fetchCatalog(query)).rejects.toThrow('Backend nie potwierdził statusu')
+  })
+  it.each(['submit', 'approve'] as const)('wysyła %s z If-Match, bez generowania wersji po stronie klienta', async (action) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { id: materialId, sku: 'RAW-000201', lifecycle_state: action === 'submit' ? 'VERIFICATION' : 'ACTIVE', version: 'next-version' },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+    await changeRawMaterialLifecycle(materialId, action, version, 'Jawna akceptacja')
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/raw-materials/${materialId}/${action}`, expect.objectContaining({
+      method: 'POST', headers: expect.objectContaining({ 'If-Match': version }),
+      body: JSON.stringify(action === 'approve' ? { reason: 'Jawna akceptacja' } : {}),
+    }))
+  })
+
+  it('odrzuca nieprawidłowe potwierdzenie zapisu zamiast zgłaszać sukces', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { id: materialId } }))))
+    await expect(changeRawMaterialLifecycle(materialId, 'submit', version, '')).rejects.toThrow('Nie można potwierdzić')
+  })
+
+  it('odczytuje opublikowany katalog i aktualną deklarację, zapisując ją z If-Match', async () => {
+    const catalogId = '00000000-0000-4000-8000-000000000209'
+    const declaration = { status: 'NO_KNOWN_ALLERGENS' as const, catalog_version_id: catalogId, items: [] }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{
+        id: catalogId, version_number: 1, definitions: [{ allergen_code: 'TEST_WHEAT', name_pl: 'TEST — Pszenica' }],
+      }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: materialId, version, allergen_declaration: declaration } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: materialId, version: 'next-version' } })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchAllergenCatalogs()).resolves.toEqual([{
+      id: catalogId, versionNumber: 1, definitions: [{ code: 'TEST_WHEAT', name: 'TEST — Pszenica' }],
+    }])
+    await expect(fetchAllergenDeclaration(materialId)).resolves.toEqual({ version, declaration })
+    await saveAllergenDeclaration(materialId, declaration, version)
+    expect(fetchMock).toHaveBeenLastCalledWith(`/api/v1/raw-materials/${materialId}/draft/allergen-declaration`, expect.objectContaining({
+      method: 'PUT', body: JSON.stringify(declaration), headers: expect.objectContaining({ 'If-Match': version }),
+    }))
+  })
 })
 
 describe('fetchRawMaterialCapabilities', () => {

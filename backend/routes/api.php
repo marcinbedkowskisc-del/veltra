@@ -150,6 +150,7 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::delete('/{material}/shares/{location}', [RawMaterialController::class, 'revokeShare'])
         ->whereUuid('material')->whereUuid('location');
     Route::get('/', [RawMaterialController::class, 'index']);
+    Route::get('/workbench', [RawMaterialController::class, 'workbench']);
     Route::post('/sku-reservations', [RawMaterialController::class, 'reserveSku'])->middleware('throttle:raw-sku');
     Route::post('/', [RawMaterialController::class, 'store']);
     Route::get('/categories', [RawMaterialController::class, 'categories']);

@@ -16,6 +16,7 @@ import {
 import type { CategoryOption } from './catalog'
 import type { RawMaterialDetail, RawMaterialReferencePrice, RawMaterialRevision } from './detail'
 import RawMaterialEditForm from './RawMaterialEditForm'
+import RawMaterialWorkflow from './RawMaterialWorkflow'
 
 type Props = {
   materialId: string
@@ -26,11 +27,13 @@ type Props = {
   returnFocus: HTMLElement | null
   canReadReferencePrice: boolean | null
   syntheticPreview?: boolean
+  working?: boolean
   onClose: () => void
   onSessionExpired: () => void
   onModuleUnavailable: () => void
   onEditAuthorizationDenied: () => void
   onEditSaved: (material: RevisedRawMaterial) => void
+  onWorkflowSaved: () => void
 }
 
 type DetailState = 'loading' | 'ready' | 'not-found' | 'forbidden' | 'session-expired' | 'error'
@@ -165,11 +168,13 @@ export default function RawMaterialDetailDrawer({
   returnFocus,
   canReadReferencePrice,
   syntheticPreview = false,
+  working = false,
   onClose,
   onSessionExpired,
   onModuleUnavailable,
   onEditAuthorizationDenied,
   onEditSaved,
+  onWorkflowSaved,
 }: Props) {
   const [detail, setDetail] = useState<RawMaterialDetail | null>(null)
   const [detailState, setDetailState] = useState<DetailState>('loading')
@@ -218,7 +223,10 @@ export default function RawMaterialDetailDrawer({
   useEffect(() => {
     const controller = new AbortController()
 
-    void fetchRawMaterialDetail(materialId, controller.signal).then((result) => {
+    const request = working
+      ? fetchRawMaterialDetail(materialId, controller.signal, true)
+      : fetchRawMaterialDetail(materialId, controller.signal)
+    void request.then((result) => {
       if (controller.signal.aborted) return
       setDetail(result)
       setDetailState('ready')
@@ -248,7 +256,7 @@ export default function RawMaterialDetailDrawer({
       setDetailState('error')
     })
     return () => controller.abort()
-  }, [canReadReferencePrice, materialId, refreshKey])
+  }, [canReadReferencePrice, materialId, refreshKey, working])
 
   useEffect(() => {
     if (!globalEditAllowed) return
@@ -506,6 +514,16 @@ export default function RawMaterialDetailDrawer({
               <h3>Nie udało się wczytać szczegółów</h3>
               <p>{detailError}</p>
             </div>
+          )}
+          {detailState === 'ready' && detail && detailLoadedRefreshKey === refreshKey && !syntheticPreview && !editOpen && (
+            <RawMaterialWorkflow
+              key={`${materialId}:${operatingLocationId}:${refreshKey}`}
+              materialId={materialId}
+              refreshKey={refreshKey}
+              onSaved={onWorkflowSaved}
+              onSessionExpired={onSessionExpired}
+              onModuleUnavailable={onModuleUnavailable}
+            />
           )}
           {detailState === 'ready' && detail && detailLoadedRefreshKey === refreshKey && (
             <Tabs

@@ -17,6 +17,7 @@ import {
   reserveRawMaterialSku,
   createRawMaterial,
   reviseRawMaterial,
+  changeRawMaterialLifecycle,
   type RawMaterialCapabilities,
   type RawMaterialEditor,
   type RevisedRawMaterial,
@@ -39,6 +40,7 @@ vi.mock('./api', () => ({
   reserveRawMaterialSku: vi.fn(),
   createRawMaterial: vi.fn(),
   reviseRawMaterial: vi.fn(),
+  changeRawMaterialLifecycle: vi.fn(),
 }))
 
 const materialA = '00000000-0000-4000-8000-000000000001'
@@ -208,6 +210,58 @@ afterEach(() => {
 })
 
 describe('katalog surowców', () => {
+  it('odświeża szkice, szczegóły i zatwierdzony katalog po SUBMIT i APPROVE bez przeładowania aplikacji', async () => {
+    let state: 'DRAFT' | 'VERIFICATION' | 'ACTIVE' = 'DRAFT'
+    fetchCatalogMock.mockImplementation(async (query) => query.view === 'workbench'
+      ? page(state === 'ACTIVE' ? [] : [row(materialA, 1, { lifecycleState: state, workflowState: state })])
+      : page(state === 'ACTIVE' ? [row(materialA, 1)] : []))
+    fetchRawMaterialDetailMock.mockImplementation(async (id) => detail(id, { lifecycleState: state }))
+    fetchRawMaterialCompletionMock.mockImplementation(async () => ({
+      lifecycleState: state, revisionId: 'revision-test', version: `version-${state}`,
+      availableActions: state === 'DRAFT' ? ['submit'] : state === 'VERIFICATION' ? ['approve'] : [],
+      missingRequirements: [],
+    }))
+    vi.mocked(changeRawMaterialLifecycle).mockImplementation(async (_id, action) => {
+      state = action === 'submit' ? 'VERIFICATION' : 'ACTIVE'
+    })
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Szkice i oczekujące' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Przekaż do zatwierdzenia' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź przekazanie' }))
+    expect(await screen.findByText('· Weryfikacja')).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'Zatwierdź rewizję' }))
+    fireEvent.change(screen.getByLabelText('Uzasadnienie zatwierdzenia'), { target: { value: 'Akceptacja' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Potwierdź zatwierdzenie' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij szczegóły surowca' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Zatwierdzone' }))
+    expect(await screen.findByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })).toBeTruthy()
+    expect(changeRawMaterialLifecycle).toHaveBeenNthCalledWith(1, materialA, 'submit', 'version-DRAFT', '')
+    expect(changeRawMaterialLifecycle).toHaveBeenNthCalledWith(2, materialA, 'approve', 'version-VERIFICATION', 'Akceptacja')
+  })
+  it('pobiera szkice osobnym kontraktem, odróżnia status i resetuje filtry przy zmianie zakładki', async () => {
+    fetchCatalogMock.mockImplementation(async (query) => query.view === 'workbench'
+      ? page([row(materialB, 1, { name: 'Szkic testowy', lifecycleState: 'DRAFT', workflowState: 'DRAFT' })])
+      : page())
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+    await screen.findByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })
+    fireEvent.click(screen.getByRole('tab', { name: 'Szkice i oczekujące' }))
+    await screen.findByRole('button', { name: 'Pokaż szczegóły: Szkic testowy' })
+    expect(screen.getByRole('button', { name: 'Pokaż szczegóły: Szkic testowy' }).hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })).toBeNull()
+    expect(screen.getByText('· Szkic')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Eksport CSV' }).hasAttribute('disabled')).toBe(true)
+    expect(screen.queryByLabelText('Dostawca')).toBeNull()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' }), { target: { value: 'testowy' } })
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      view: 'workbench', search: 'testowy', page: 1,
+    }), expect.any(AbortSignal)))
+    fireEvent.click(screen.getByRole('tab', { name: 'Zatwierdzone' }))
+    await screen.findByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })
+    expect(fetchCatalogMock.mock.calls.at(-1)?.[0].view).toBeUndefined()
+    expect(fetchCatalogMock.mock.calls.at(-1)?.[0].search).toBe('')
+  })
   it('pokazuje stan sprawdzania capabilities do czasu odpowiedzi API', async () => {
     let resolveCapabilities: ((value: RawMaterialCapabilities) => void) | undefined
     fetchRawMaterialCapabilitiesMock.mockImplementation(() => new Promise((resolve) => {

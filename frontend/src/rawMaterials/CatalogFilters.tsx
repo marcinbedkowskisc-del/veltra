@@ -13,6 +13,7 @@ import SearchField from '../design-system/SearchField'
 export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavailable' | 'module-unavailable'
 
 type Props = {
+  working?: boolean
   values: FilterValues
   searchInput: string
   searchLoading: boolean
@@ -33,6 +34,7 @@ type Props = {
 }
 
 export default function CatalogFilters({
+  working = false,
   values,
   searchInput,
   searchLoading,
@@ -143,7 +145,8 @@ export default function CatalogFilters({
           disabled={disabled}
         >
           <option value="">Wszystkie statusy</option>
-          {LIFECYCLE_STATES.map((state) => <option key={state} value={state}>{lifecycleLabel(state)}</option>)}
+          {LIFECYCLE_STATES.filter((state) => !working || state === 'DRAFT' || state === 'VERIFICATION')
+            .map((state) => <option key={state} value={state}>{lifecycleLabel(state)}</option>)}
         </select>
       </label>
 

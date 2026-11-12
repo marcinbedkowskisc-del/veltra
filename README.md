@@ -120,6 +120,10 @@ go w logach ani repozytorium:
 openssl rand -hex 32
 ```
 
+Skrypt `scripts/init-env.php` wypełnia tę zmienną niezależnym losowym kluczem
+podczas tworzenia nowego pliku `.env`; powyższe polecenie służy do ręcznego
+uzupełnienia istniejącej konfiguracji lub rotacji klucza.
+
 Przed pierwsza migracja chroniona zmienna musi byc ustawiona we wszystkich
 procesach backendu/workerow i w procesie migracji. Rotacja wymaga okna serwisowego:
 wstrzymaj zapisy backendu i kolejki, wygeneruj nowy klucz i ustaw go w `.env`.
@@ -634,6 +638,121 @@ z historii po odczycie. Odswiezenie formularza wymaga ponownego otwarcia linku.
 Wspolne limity: 3 wiadomosci/konto/60 minut, minimum 60 sekund odstepu
 i 20/IP/godzine. Rezerwacja jest atomowa z blokada organizacji; awaria SMTP
 zuzywa rezerwacje i wymaga nowego linku po cooldownie.
+
+### Stage 6A.2-FIX: odzyskanie lokalnej aktywacji Stage 6A.1
+
+`veltra:recover-stage6a1-identity` jest jednorazowa sciezka operacyjna dla
+utraconego hasla **nieaktywowanej** poczatkowej tozsamosci Stage 6A.1.
+Nie jest endpointem HTTP ani uniwersalnym resetem; normalny bootstrap pozostaje
+bez zmian. Komenda nie ustawia hasla, nie zmienia RBAC ani `NOT_READY`.
+
+Domyslnie odmawia dzialania. Administrator hosta musi najpierw sprawdzic
+projekt Compose `veltra-stage6a1`, jego wylaczna siec i wolumen
+`veltra-stage6a1_postgres-data`, brak portu PostgreSQL na hoscie oraz
+publikowanie API/Mailpit wylacznie na loopback. Dopiero wtedy przygotowuje
+w kontenerze backendu plik `/run/veltra-stage6a1-recovery.json`, nalezacy
+do root, bez praw zapisu (`0444`), z nastepujacymi niesekretnymi polami:
+`compose_project`, `postgres_volume`, `container_hostname`, `database_oid`,
+`server_address`, `mailpit_address`, `organization_id`, `user_id`, `expires_at`
+(czas Unix; najwyzej 24 godziny). Wartosc kazdego identyfikatora musi pochodzic
+z weryfikacji biezacych kontenerow i odczytu konkretnej bazy, nie z domyslow.
+To poswiadczenie administratora hosta, nie kryptograficzny dowod izolacji.
+Nie montuj Docker socket do aplikacji. Nie przygotowuj pliku dla innych instalacji.
+
+Komenda sprawdza `local`, kontener, hostname, rzeczywista nazwe/OID/adres/role
+polaczenia PostgreSQL, identyfikatory instalacji i konta, lokalny SMTP bez
+alternatywnego URL oraz dokladnie jeden oczekujacy bootstrap bez danych
+operacyjnych, dodatkowych kont, lokalizacji, uprawnien i wlaczonych modulow.
+Zmiana kontenera lub adresow wymaga ponownego sprawdzenia izolacji i nowego pliku.
+Samo ustawienie `APP_ENV` lub nazwy bazy nie wystarcza.
+
+Po udostepnieniu biezacego kodu komendy w tym lokalnym kontenerze:
+
+```bash
+# Tylko kontrola; bez zapisu, wysylki i bez wymaganego TTY.
+docker exec veltra-stage6a1-backend-1 php artisan veltra:recover-stage6a1-identity --check
+# Wlasciciel samodzielnie wpisuje potwierdzenie; bez -T, -n i automatyzacji.
+docker exec -it veltra-stage6a1-backend-1 php artisan veltra:recover-stage6a1-identity
+```
+
+Wymagana fraza: `ODZYSKAJ STAGE6A1`. Po potwierdzeniu stan jest ponownie
+sprawdzany pod blokada organizacji. Istniejacy `AccountLinks` zastepuje token
+i wysyla wiadomosc, a `SecurityMutation` zapisuje `initial_identity.local_recovery`.
+Zachowane sa limity wysylek. W tej komendzie zewnetrzna transakcja obejmuje
+zastapienie linku i audyt: blad SMTP wycofuje te zmiany, zachowujac poprzedni
+stan, i zapisuje odrzucenie osobno. Nie uzywaj poprzedniego ujawnionego linku.
+SMTP nie jest transakcyjny: przy utracie potwierdzenia lub bledzie commit
+wiadomosc moze dotrzec z niewaznym linkiem. Nie oznacza to sukcesu; po
+sprawdzeniu stanu ponow procedure i uzyj najnowszej skutecznie wyslanej wiadomosci.
+
+Otworz samodzielnie `http://localhost:8026/`, wybierz najnowsza wiadomosc
+i ustaw wlasne haslo w istniejacym formularzu aktywacji. Nie udostepniaj linku
+narzedziom przegladarki, zrzutom ani raportom. Zaloguj sie przez
+`http://localhost:5174/`. Po aktywacji komenda odmawia dalszego dzialania.
+Usun tylko plik poswiadczenia z tego kontenera po zakonczeniu odzyskania.
+
+### Stage 6A.3: lokalne testy RAW bez globalnego READY
+
+Domyslnie wylaczone. `LocalRawMaterialCatalog` korzysta z tego samego katalogu
+i przeksztalcenia co fixture `readyWithRawMaterials()`, ale zmienia tylko RAW.
+Produkcyjne definicje pozostaja `NOT_READY`; zadne inne moduly nie sa wlaczane.
+
+Opt-in wymaga `/run/veltra-stage6a1-raw.json`: zwyklego pliku root, bez praw
+zapisu i dowiazan, maksymalnie 4096 bajtow. Administrator hosta przygotowuje
+go dopiero po sprawdzeniu izolacji projektu Docker `veltra-stage6a1`, sieci,
+wylacznego lokalnego wolumenu `veltra-stage6a1_postgres-data` i portow
+opublikowanych tylko na loopback. Nie kopiowac do innych instalacji.
+Pola: `compose_project`, `postgres_volume`, `container_hostname`, `expires_at`
+(Unix, najwyzej 24 godziny), `organization_id`, `user_id` pierwszej tozsamosci,
+`database_oid`, `server_address`, `mailpit_address`, `raw_integration_enabled: true`.
+Backend sprawdza `local`, kontener, hostname, rzeczywiste PostgreSQL
+`veltra_stage6a1`/OID/adres/role `veltra_app`, DNS, lokalne URL i SMTP Mailpit
+oraz aktywna, zainicjowana organizacje i pierwsza aktywowana tozsamosc.
+Bledne lub wygasle poswiadczenie powoduje jawna odmowe, nie fallback.
+
+Po aktywacji odrebnego opiekuna administrator wykonuje interaktywnie:
+`docker exec -it veltra-stage6a1-backend-1 php artisan veltra:configure-stage6a1-raw`
+oraz istniejace `veltra:bootstrap-raw-material-permissions`. Pierwsza komenda
+wywoluje standardowy `ModuleConfigurationService`, wymaga hasla administratora
+i zapisuje audyt. Druga nadaje jawnie wybrane granty odrebnemu uzytkownikowi.
+Nie przyznaje sie automatycznych praw administratorowi ani praw finansowych.
+Sesje, CSRF, RBAC, stany lokalizacji i guard dostepnosci pozostaja obowiazkowe.
+Normalna aplikacja: <http://localhost:5174/>. Katalog zawiera zatwierdzone
+rewizje; CREATE tworzy szkic i nie publikuje go automatycznie.
+
+Usuniecie wylacznie `/run/veltra-stage6a1-raw.json` natychmiast przywraca
+`NOT_READY` przy nastepnym odczycie katalogu, bez restartu i usuwania danych.
+Wygasniecie lub odtworzenie kontenera rowniez nie pozwala kontynuowac testow
+bez ponownej weryfikacji instancji. Trwajaca transakcja nie jest anulowana
+przez usuniecie pliku. Odnowienie wymaga nowej kontroli izolacji przez hosta.
+
+### Stage 6A.4: szkice i zatwierdzanie RAW
+
+Normalny katalog zachowuje zatwierdzone snapshoty. Zakladka
+**Szkice i oczekujace** korzysta z osobnego `GET /api/v1/raw-materials/workbench`.
+Wymaga standardowego VIEW oraz EDIT lub AUDIT_VIEW, dostepnosci modulu
+i kontekstu lokalizacji glownej. Wyszukiwanie, filtry i paginacja sa serwerowe;
+`workflow_state` opisuje robocza lub oczekujaca rewizje, takze dla aktywnego
+surowca majacego nowsza rewizje. Ten widok nie udostepnia danych finansowych,
+filtra dostawcow ani eksportu zatwierdzonego katalogu.
+
+Drawer pobiera rewizje robocza/oczekujaca przez istniejacy `/editor`, ktory
+udostepnia rowniez ilosci, wydajnosc oraz autoryzowane metadane historii.
+SUBMIT i APPROVE wymagaja jawnego potwierdzenia i `If-Match`; widocznosc
+przyciskow wynika z `/completion.available_actions`, a backend ponownie
+sprawdza uprawnienia i wersje. Konflikt nie powoduje automatycznego ponowienia.
+
+Przed przekazaniem uzupelnij **Deklaracje alergenow**, korzystajac z
+opublikowanego katalogu i istniejacego PUT `/draft/allergen-declaration`.
+Wybor deklaracji jest jawny; aplikacja nie zaznacza automatycznie braku
+alergenow. Brak opublikowanego katalogu blokuje zatwierdzenie.
+Powrot niekompletnej oczekujacej rewizji wymaga odrebnego prawa REVIEW.
+Self-approval pozostaje dozwolone przez istniejacy kontrakt.
+
+Stage 6A.4 nie zmienia grantow, modelu rewizji ani globalnego NOT_READY.
+Wylacznie po osobnym zatwierdzeniu wlasciciela przygotowano w bazie
+`veltra_stage6a1` jeden opublikowany katalog **TEST Stage 6A.4**, z definicjami
+`TEST_WHEAT` i `TEST_MILK`. To dane testowe, nie katalog do eksploatacji.
 
 ## Stage 1D: zakresy i macierz rol
 

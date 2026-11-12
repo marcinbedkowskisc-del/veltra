@@ -103,7 +103,27 @@ final class RawMaterialService
 
     public function list(User $actor, Location $context, array $filters): array
     {
-        $query = $this->catalogQuery($actor, $context, $filters);
+        return $this->paginateCatalog($this->catalogQuery($actor, $context, $filters), $filters);
+    }
+
+    public function workbench(User $actor, Location $context, array $filters): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        if (! $this->sharePolicy->isPrimaryContext($context) || ! $this->canInspectWorkingRevision($actor)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        if (isset($filters['supplier_id'])
+            || in_array($filters['sort'] ?? 'name', ['reference_net_price', 'usable_unit_cost'], true)) {
+            throw ValidationException::withMessages([
+                'filters' => ['Widok szkiców nie udostępnia filtrów dostawców ani sortowania finansowego.'],
+            ]);
+        }
+
+        return $this->paginateCatalog($this->buildCatalogQuery($actor, $context, $filters, working: true), $filters);
+    }
+
+    private function paginateCatalog(Builder $query, array $filters): array
+    {
         $paginator = $query->paginate($filters['per_page'] ?? 50, ['*'], 'page', $filters['page'] ?? 1);
         $data = $paginator->getCollection()->map(fn (object $row, int $index): array => [
             'id' => $row->id,
@@ -112,6 +132,7 @@ final class RawMaterialService
             'ordinal' => ($paginator->currentPage() - 1) * $paginator->perPage() + $index + 1,
             ...RawMaterialCatalogValues::present($row),
             'lifecycle_state' => $row->lifecycle_state,
+            ...(property_exists($row, 'workflow_state') ? ['workflow_state' => $row->workflow_state] : []),
             'revision' => $row->revision_id === null ? null : [
                 'id' => $row->revision_id,
                 'revision_no' => $row->revision_no,
@@ -137,16 +158,24 @@ final class RawMaterialService
 
     public function catalogQuery(User $actor, Location $context, array $filters, bool $withOrdinal = false): Builder
     {
+        return $this->buildCatalogQuery($actor, $context, $filters, $withOrdinal);
+    }
+
+    private function buildCatalogQuery(User $actor, Location $context, array $filters, bool $withOrdinal = false, bool $working = false): Builder
+    {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $query = DB::table('raw_materials as materials')
-            ->leftJoin('raw_material_revisions as revisions', function ($join): void {
-                $join->on('revisions.id', '=', 'materials.approved_revision_id')
-                    ->on('revisions.organization_id', '=', 'materials.organization_id');
+            ->leftJoin('raw_material_revisions as revisions', function ($join) use ($working): void {
+                if ($working) {
+                    $join->whereRaw('revisions.id = COALESCE(materials.working_revision_id, materials.pending_revision_id)');
+                } else {
+                    $join->on('revisions.id', '=', 'materials.approved_revision_id');
+                }
+                $join->on('revisions.organization_id', '=', 'materials.organization_id');
             })
             ->leftJoin('raw_material_categories as categories', 'categories.id', '=', 'revisions.category_id')
             ->where('materials.organization_id', $actor->organization_id)
             ->whereNull('materials.deleted_at')
-            ->whereNotNull('materials.approved_revision_id')
             ->where('materials.lifecycle_state', '<>', 'ARCHIVED')
             ->select([
                 'materials.id', 'materials.code', 'materials.lifecycle_state',
@@ -154,8 +183,16 @@ final class RawMaterialService
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
-        $this->catalogValues->select($query, $actor, $context);
-        $this->sharePolicy->constrainVisibleMaterials($query, $actor, $context);
+        if ($working) {
+            $query->whereNotNull('revisions.id')
+                ->addSelect('revisions.nominal_quantity', 'revisions.usable_quantity')
+                ->selectRaw('raw_materials_round_half_even_v1(revisions.usable_quantity * 100 / NULLIF(revisions.nominal_quantity, 0), 6)::text AS yield_percent')
+                ->selectRaw("CASE WHEN materials.working_revision_id IS NOT NULL THEN 'DRAFT' ELSE 'VERIFICATION' END AS workflow_state");
+        } else {
+            $query->whereNotNull('materials.approved_revision_id');
+            $this->catalogValues->select($query, $actor, $context);
+            $this->sharePolicy->constrainVisibleMaterials($query, $actor, $context);
+        }
 
         if (isset($filters['search'])) {
             $search = self::normalizeTerm($filters['search']);
@@ -165,7 +202,7 @@ final class RawMaterialService
                     ->orWhereExists(fn ($aliases) => $aliases->selectRaw('1')->from('raw_material_aliases as aliases')
                         ->whereColumn('aliases.raw_material_id', 'materials.id')
                         ->where('aliases.organization_id', DB::raw('materials.organization_id'))
-                        ->whereColumn('aliases.revision_id', 'materials.approved_revision_id')
+                        ->whereColumn('aliases.revision_id', 'revisions.id')
                         ->where('aliases.normalized_alias', 'like', '%'.addcslashes($search, '%_\\').'%'));
             });
         }
@@ -173,7 +210,11 @@ final class RawMaterialService
             $query->where('revisions.category_id', $filters['category_id']);
         }
         if (isset($filters['lifecycle_state'])) {
-            $query->where('materials.lifecycle_state', $filters['lifecycle_state']);
+            if ($working) {
+                $query->whereRaw("CASE WHEN materials.working_revision_id IS NOT NULL THEN 'DRAFT' ELSE 'VERIFICATION' END = ?", [$filters['lifecycle_state']]);
+            } else {
+                $query->where('materials.lifecycle_state', $filters['lifecycle_state']);
+            }
         }
         if (isset($filters['unit'])) {
             $query->where('revisions.base_unit_code', $filters['unit']);
@@ -278,10 +319,17 @@ final class RawMaterialService
             unset($declaration['attested_by'], $declaration['attested_at']);
         }
 
-        return $this->presentMaterial($material, $revision) + [
-            'allergen_declaration' => $declaration,
-            'storage_variants' => $this->storageVariantsForRevision($revision->id),
-        ];
+        $quantities = DB::table('raw_material_revisions')->where('id', $revisionId)
+            ->select('nominal_quantity', 'usable_quantity')
+            ->selectRaw('raw_materials_round_half_even_v1(usable_quantity * 100 / NULLIF(nominal_quantity, 0), 6)::text AS yield_percent')
+            ->first();
+
+        return $this->presentMaterial($material, $revision)
+            + RawMaterialCatalogValues::present($quantities)
+            + app(RawMaterialHistoryService::class)->metadata($actor, $context, $material) + [
+                'allergen_declaration' => $declaration,
+                'storage_variants' => $this->storageVariantsForRevision($revision->id),
+            ];
     }
 
     public function completion(User $actor, Location $context, string $materialId): array

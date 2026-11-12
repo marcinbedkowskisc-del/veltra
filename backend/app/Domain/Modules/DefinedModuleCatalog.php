@@ -54,6 +54,17 @@ final class DefinedModuleCatalog implements ModuleCatalog
         return $this->modules[$key] ?? null;
     }
 
+    public function withReadyRawMaterials(): self
+    {
+        $definitions = $this->all();
+        $raw = $definitions['RAW_MATERIALS'];
+        $definitions['RAW_MATERIALS'] = new ModuleDefinition(
+            $raw->key, $raw->name, $raw->permission, $raw->locationTypes, $raw->dependencies, ready: true,
+        );
+
+        return new self(array_values($definitions));
+    }
+
     /**
      * @return list<ModuleDefinition>
      */

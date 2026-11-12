@@ -3,6 +3,7 @@ import {
   CATALOG_COLUMNS,
   formatDecimal,
   formatMoney,
+  lifecycleLabel,
   type CatalogRow,
   type SortDirection,
   type SortKey,
@@ -10,6 +11,7 @@ import {
 import { unitLabel } from './create'
 
 type Props = {
+  working?: boolean
   rows: CatalogRow[]
   selectedIds: Set<string>
   selectionDisabled: boolean
@@ -41,6 +43,7 @@ const SORTABLE_COLUMNS: SortableColumn[] = [
 ]
 
 export default function CatalogTable({
+  working = false,
   rows,
   selectedIds,
   selectionDisabled,
@@ -72,7 +75,9 @@ export default function CatalogTable({
     )
   }
 
-  const columns: Array<DataTableColumn<CatalogRow>> = SORTABLE_COLUMNS.map((column) => {
+  const visibleColumns = SORTABLE_COLUMNS.filter((column) =>
+    !working || column.key !== 'reference_net_price' && column.key !== 'usable_unit_cost')
+  const columns: Array<DataTableColumn<CatalogRow>> = visibleColumns.map((column) => {
     const permitted = column.key === 'reference_net_price'
       ? canReadReferencePrice === true
       : column.key === 'usable_unit_cost'
@@ -93,15 +98,18 @@ export default function CatalogTable({
             return <span className="sku-cell">{row.sku}</span>
           case 'name':
             return (
-              <button
-                type="button"
-                className="detail-link name-cell"
-                onClick={(event) => onOpenDetail(row.id, event.currentTarget)}
-                disabled={selectionDisabled}
-                aria-label={`Pokaż szczegóły: ${row.name}`}
-              >
-                {row.name}
-              </button>
+              <span>
+                <button
+                  type="button"
+                  className="detail-link name-cell"
+                  onClick={(event) => onOpenDetail(row.id, event.currentTarget)}
+                  disabled={selectionDisabled}
+                  aria-label={`Pokaż szczegóły: ${row.name}`}
+                >
+                  {row.name}
+                </button>
+                {row.workflowState && <small className="detail-muted"> · {lifecycleLabel(row.workflowState)}</small>}
+              </span>
             )
           case 'unit':
             return unitLabel(row.unit)
@@ -118,6 +126,8 @@ export default function CatalogTable({
     }
   })
 
+  if (working) columns.unshift({ id: 'ordinal', header: CATALOG_COLUMNS[0], cell: (row) => row.ordinal })
+
   return (
     <DataTable
       rows={rows}
@@ -131,7 +141,7 @@ export default function CatalogTable({
       updating={loading}
       wrapperClassName="table-scroll"
       tableClassName="catalog-table"
-      selection={{
+      selection={working ? undefined : {
         selectedIds,
         disabled: selectionDisabled,
         headerLabel: 'Zaznacz wszystkie widoczne na tej stronie',

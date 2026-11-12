@@ -49,10 +49,27 @@ const allowedNames = new Set([
   'stage4b3b-create-conversions.png',
   'stage4b3b-edit-conversions.png',
   'stage4b3b-catalog-mobile.png',
+  'raw-visual-catalog-desktop.png',
+  'raw-visual-catalog-mobile.png',
+  'raw-visual-detail-drawer.png',
+  'raw-visual-create-form.png',
+  'raw-visual-edit-form.png',
+  'raw-visual-not-ready.png',
+  'raw-visual-forbidden.png',
+  'raw-visual-no-results.png',
+  'raw-visual-searching.png',
+])
+const allowedOrigins = new Set([
+  'http://127.0.0.1:4178',
+  'http://127.0.0.1:4179',
 ])
 
 const server = createServer(async (request, response) => {
-  response.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:4179')
+  const origin = request.headers.origin
+  if (origin && allowedOrigins.has(origin)) {
+    response.setHeader('Access-Control-Allow-Origin', origin)
+    response.setHeader('Vary', 'Origin')
+  }
   response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type')
   if (request.method === 'OPTIONS') {
@@ -86,6 +103,8 @@ const server = createServer(async (request, response) => {
     }
     const outputDirectory = resolve(name.startsWith('stage4b3b-')
       ? 'artifacts/stage4b3b'
+      : name.startsWith('raw-visual-')
+        ? 'artifacts/stage5b1'
       : name.startsWith('raw-material-edit-')
         ? 'artifacts/stage4b2b'
       : name.startsWith('raw-material-create-')

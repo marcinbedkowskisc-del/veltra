@@ -4,6 +4,8 @@ import { RAW_UNITS, type CategoryOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
   emptyRawMaterialCreateValues,
+  conversionBasisHint,
+  conversionFactorHint,
   UNIT_DIMENSIONS,
   UNIT_LABELS,
   validateRawMaterialCreate,
@@ -234,17 +236,17 @@ export default function RawMaterialCreateForm({
           attemptPayload.current = null
           setPhase('editing')
           operationLocked.current = false
-          setFormError('Rezerwacja SKU wygasła. Po ponownej walidacji formularza zostanie pobrany nowy numer.')
+          setFormError('Czas na wykorzystanie numeru SKU minął. Sprawdź formularz i spróbuj ponownie.')
           return
         }
         setPhase('conflict')
-        setFormError(`${cause.message} Nie ponawiaj zapisu z innymi danymi w tej samej rezerwacji.`)
+        setFormError(`${cause.message} Nie zmieniaj danych przy ponawianiu tej próby.`)
         operationLocked.current = false
         return
       }
       if (cause.status >= 500) {
         setPhase(stage === 'reservation' ? 'reservation-uncertain' : 'creation-uncertain')
-        setFormError('Nie można potwierdzić wyniku żądania. Bezpieczne ponowienie użyje tego samego klucza i nie utworzy drugiej rezerwacji.')
+        setFormError('Nie można potwierdzić wyniku operacji. Ponowienie tej samej próby pozwoli bezpiecznie sprawdzić jej rezultat.')
         return
       }
       setFormError(cause.message)
@@ -254,7 +256,7 @@ export default function RawMaterialCreateForm({
     }
 
     setPhase(stage === 'reservation' ? 'reservation-uncertain' : 'creation-uncertain')
-    setFormError('Nie można potwierdzić wyniku żądania. Ponów wyłącznie tę samą operację, aby bezpiecznie sprawdzić jej wynik.')
+    setFormError('Nie można potwierdzić wyniku operacji. Ponów wyłącznie tę samą próbę, aby bezpiecznie sprawdzić jej rezultat.')
   }
 
   async function submitCreation(payload: RawMaterialCreatePayload, currentReservation: RawMaterialSkuReservation) {
@@ -290,12 +292,12 @@ export default function RawMaterialCreateForm({
           attemptPayload.current = null
           operationLocked.current = false
           setPhase('editing')
-          setFormError('Rezerwacja SKU wygasła. Spróbuj ponownie, aby bezpiecznie pobrać nowy numer.')
+          setFormError('Czas na wykorzystanie numeru SKU minął. Spróbuj ponownie, aby otrzymać nowy numer.')
           return
         }
         operationLocked.current = false
         setPhase('conflict')
-        setFormError('Ta rezerwacja SKU została już wykorzystana. Nie utworzono kolejnego surowca.')
+        setFormError('Ten numer SKU został już wykorzystany. Nie utworzono kolejnego surowca.')
         return
       }
       reservation.current = result
@@ -343,7 +345,7 @@ export default function RawMaterialCreateForm({
       return
     }
     const reservationNotice = reservation.current
-      ? '\n\nNiewykorzystana rezerwacja SKU nie wróci do puli numerów.'
+      ? '\n\nNiewykorzystany numer SKU nie będzie ponownie przydzielony.'
       : ''
     if (dirty && !window.confirm(`Odrzucić niezapisane zmiany?${reservationNotice}`)) return
     onClose()
@@ -402,7 +404,7 @@ export default function RawMaterialCreateForm({
           <div>
             <p className="eyebrow">KATALOG SUROWCÓW</p>
             <h2 id="raw-create-title">Dodaj surowiec</h2>
-            <p>Nowy rekord rozpocznie jako szkic. Numer SKU przydzieli serwer po sprawdzeniu formularza.</p>
+            <p>Surowiec zostanie zapisany jako szkic. Numer SKU zostanie nadany automatycznie.</p>
           </div>
           <button
             type="button"
@@ -419,19 +421,19 @@ export default function RawMaterialCreateForm({
 
         {phase === 'reservation-uncertain' && (
           <div className="create-form-notice" role="alert">
-            <strong>Niepewny wynik rezerwacji.</strong>
-            <p>Ponowienie użyje tego samego klucza idempotencji. Formularz pozostaje zablokowany do potwierdzenia wyniku.</p>
+            <strong>Nie udało się potwierdzić nadania numeru.</strong>
+            <p>Ponowienie użyje tej samej próby. Formularz pozostaje zablokowany do potwierdzenia wyniku.</p>
             <button type="button" className="button button-primary" onClick={retrySameAttempt}>Ponów bezpiecznie</button>
           </div>
         )}
         {phase === 'creation-uncertain' && (
           <div className="create-form-notice" role="alert">
-            <strong>Niepewny wynik zapisu.</strong>
-            <p>Nie zamykaj formularza ani nie zmieniaj danych. Ponowienie użyje tej samej rezerwacji i identycznego payloadu.</p>
+            <strong>Nie udało się potwierdzić zapisu.</strong>
+            <p>Nie zamykaj formularza ani nie zmieniaj danych. Ponowienie użyje tych samych danych, aby uniknąć utworzenia duplikatu.</p>
             <button type="button" className="button button-primary" onClick={retrySameAttempt}>Ponów bezpiecznie</button>
           </div>
         )}
-        {phase === 'reserving' && <p className="create-form-status" role="status">Przydzielanie numeru SKU…</p>}
+        {phase === 'reserving' && <p className="create-form-status" role="status">Przygotowywanie numeru SKU…</p>}
         {phase === 'creating' && <p className="create-form-status" role="status">Zapisywanie szkicu surowca…</p>}
         {formError && phase !== 'reservation-uncertain' && phase !== 'creation-uncertain' && (
           <p className="create-form-error" role="alert">{formError}</p>
@@ -441,8 +443,8 @@ export default function RawMaterialCreateForm({
           <section className="create-success" aria-labelledby="create-success-title">
             <p className="create-success-mark" aria-hidden="true">✓</p>
             <h3 id="create-success-title">Surowiec utworzony</h3>
-            <p>Serwer utworzył szkic <strong>{created.sku}</strong> o identyfikatorze <code>{created.id}</code>.</p>
-            <p>Stan cyklu życia zwrócony przez serwer: <strong>{created.lifecycleState} — szkic</strong>. Rekord nie został zatwierdzony ani opublikowany.</p>
+            <p>Surowiec <strong>{created.sku}</strong> został zapisany jako szkic. Identyfikator: <code>{created.id}</code>.</p>
+            <p>Surowiec nie został zatwierdzony ani opublikowany.</p>
             <div className="create-form-actions">
               <button type="button" className="button button-secondary" onClick={requestClose}>Wróć do katalogu</button>
               <button type="button" className="button button-primary" onClick={() => onOpenCreated(created)}>Otwórz szczegóły</button>
@@ -502,7 +504,7 @@ export default function RawMaterialCreateForm({
                 </label>
 
                 <label className="create-form-field" htmlFor="create-base-unit">
-                  Jednostka bazowa <span className="required-mark">(wymagane)</span>
+                  Jednostka podstawowa <span className="required-mark">(wymagane)</span>
                   <select
                     id="create-base-unit"
                     value={values.baseUnitCode}
@@ -512,7 +514,7 @@ export default function RawMaterialCreateForm({
                   >
                     {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
                   </select>
-                  <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „pc” oznacza sztukę, nie rodzaj opakowania.</span>
+                  <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „szt.” oznacza jedną sztukę, nie opakowanie.</span>
                   {getError('baseUnitCode') && <span id="baseUnitCode-error" className="field-error">{getError('baseUnitCode')}</span>}
                 </label>
 
@@ -543,20 +545,20 @@ export default function RawMaterialCreateForm({
                     />
                   </div>
                   <span id={firstQuantityError ? 'quantity-error' : 'quantity-hint'} className={firstQuantityError ? 'field-error' : 'field-hint'}>
-                    {firstQuantityError ?? 'Jeśli podasz tylko ilość nominalną, ilość użytkowa przyjmie tę samą wartość. Dozwolone jest 6 miejsc po przecinku; dla pc wartości muszą być całkowite.'}
+                    {firstQuantityError ?? 'Jeśli podasz tylko ilość nominalną, ilość użytkowa przyjmie tę samą wartość. Dozwolone jest 6 miejsc po przecinku; ilość w sztukach musi być całkowita.'}
                   </span>
                 </div>
               </div>
             </fieldset>
 
             <details className="create-advanced">
-              <summary>Aliasy i przeliczniki <span>(opcjonalnie)</span></summary>
+              <summary>Inne nazwy i dodatkowe jednostki miary <span>(opcjonalnie)</span></summary>
               <div className="create-advanced-content">
                 <section aria-labelledby="create-aliases-title">
                   <div className="create-subsection-heading">
                     <div>
-                      <h3 id="create-aliases-title">Aliasy</h3>
-                      <p>Alternatywne nazwy tego samego surowca, używane w wyszukiwaniu. Nie tworzą osobnego surowca ani SKU.</p>
+                      <h3 id="create-aliases-title">Inne nazwy surowca</h3>
+                      <p>Dodaj nazwy, pod którymi pracownicy mogą szukać tego samego surowca. Nie utworzą one osobnego surowca.</p>
                     </div>
                     <button
                       type="button"
@@ -564,7 +566,7 @@ export default function RawMaterialCreateForm({
                       disabled={locked || values.aliases.length >= 50}
                       onClick={() => setField('aliases', [...values.aliases, ''])}
                     >
-                      Dodaj alias
+                      Dodaj nazwę
                     </button>
                   </div>
                   {values.aliases.map((alias, index) => {
@@ -572,7 +574,7 @@ export default function RawMaterialCreateForm({
                     return (
                       <div className="create-repeat-row" key={`alias-${index}`}>
                         <label className="create-form-field" htmlFor={`create-alias-${index}`}>
-                          Alias {index + 1}
+                          Inna nazwa {index + 1}
                           <input
                             id={`create-alias-${index}`}
                             type="text"
@@ -590,7 +592,7 @@ export default function RawMaterialCreateForm({
                           className="button button-secondary"
                           disabled={locked}
                           onClick={() => setField('aliases', values.aliases.filter((_, itemIndex) => itemIndex !== index))}
-                          aria-label={`Usuń alias ${index + 1}`}
+                          aria-label={`Usuń nazwę ${index + 1}`}
                         >
                           Usuń
                         </button>
@@ -603,11 +605,12 @@ export default function RawMaterialCreateForm({
                 <section aria-labelledby="create-conversions-title">
                   <div className="create-subsection-heading">
                     <div>
-                      <h3 id="create-conversions-title">Jednostki przeliczeniowe</h3>
+                      <h3 id="create-conversions-title">Dodatkowe jednostki miary</h3>
                       <p>
-                        Jednostka bazowa: {UNIT_LABELS[values.baseUnitCode]}. Współczynnik oznacza liczbę jednostek bazowych
-                        przypadającą na 1 jednostkę dodatkową. Przeliczenia metryczne w tym samym wymiarze oblicza serwer;
-                        między wymiarami podaj współczynnik i opis podstawy.
+                        Jednostka podstawowa: {UNIT_LABELS[values.baseUnitCode]}. Przelicznik mówi, ile jednostek podstawowych
+                        odpowiada jednej dodatkowej jednostce, np. 1 opakowanie = 250 g. Dla jednostek tego samego rodzaju
+                        przeliczenie jest ustawiane automatycznie. Przy przeliczaniu między masą, objętością i sztukami podaj
+                        przelicznik oraz opisz, czego dotyczy.
                       </p>
                     </div>
                     <button
@@ -629,10 +632,14 @@ export default function RawMaterialCreateForm({
                     const unitError = getError(`conversions.${index}.unitCode`)
                     const factorError = getError(`conversions.${index}.toBaseFactor`)
                     const basisError = getError(`conversions.${index}.basis`)
+                    const factorHintId = `conversion-${index}-factor-hint`
+                    const basisHintId = `conversion-${index}-basis-hint`
+                    const factorErrorId = `conversion-${index}-factor-error`
+                    const basisErrorId = `conversion-${index}-basis-error`
                     return (
-                      <div className="create-conversion-row" key={`conversion-${index}`}>
-                        <label className="create-form-field" htmlFor={`create-conversion-unit-${index}`}>
-                          Jednostka przeliczeniowa {index + 1}
+                      <div className={`create-conversion-row${conversion.unitCode && sameDimension ? ' is-automatic' : ''}`} key={`conversion-${index}`}>
+                        <label className="create-form-field create-conversion-unit" htmlFor={`create-conversion-unit-${index}`}>
+                          Dodatkowa jednostka miary {index + 1}
                           <select
                             id={`create-conversion-unit-${index}`}
                             value={conversion.unitCode}
@@ -650,16 +657,8 @@ export default function RawMaterialCreateForm({
                         </label>
                         {conversion.unitCode && !sameDimension && (
                           <>
-                            <p className="field-hint create-form-field-wide">
-                              {conversion.toBaseFactor
-                                ? `1 ${conversion.unitCode} = ${conversion.toBaseFactor} ${values.baseUnitCode}.`
-                                : `Podaj, ile ${values.baseUnitCode} przypada na 1 ${conversion.unitCode}.`}
-                              {conversion.unitCode === 'pc' || values.baseUnitCode === 'pc'
-                                ? ' „pc” oznacza sztukę, nie opakowanie. Opisz w podstawie, co dokładnie oznacza jedna sztuka dla tego surowca.'
-                                : ' Opisz w podstawie, co oznacza jedna jednostka dla tego surowca.'}
-                            </p>
-                            <label className="create-form-field" htmlFor={`create-conversion-factor-${index}`}>
-                              Współczynnik — jednostki bazowe na 1 jednostkę dodatkową
+                            <div className="create-form-field create-conversion-factor">
+                              <label htmlFor={`create-conversion-factor-${index}`}>Przelicznik</label>
                               <input
                                 id={`create-conversion-factor-${index}`}
                                 type="text"
@@ -668,12 +667,15 @@ export default function RawMaterialCreateForm({
                                 disabled={locked}
                                 onChange={(event) => setConversion(index, { toBaseFactor: event.target.value })}
                                 aria-invalid={Boolean(factorError)}
-                                aria-describedby={factorError ? `conversion-${index}-factor-error` : undefined}
+                                aria-describedby={[factorHintId, factorError ? factorErrorId : null].filter(Boolean).join(' ')}
                               />
-                              {factorError && <span id={`conversion-${index}-factor-error`} className="field-error">{factorError}</span>}
-                            </label>
-                            <label className="create-form-field" htmlFor={`create-conversion-basis-${index}`}>
-                              Opis podstawy przeliczenia
+                              <span id={factorHintId} className="field-hint">
+                                {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                              </span>
+                              {factorError && <span id={factorErrorId} className="field-error">{factorError}</span>}
+                            </div>
+                            <div className="create-form-field create-conversion-basis">
+                              <label htmlFor={`create-conversion-basis-${index}`}>Opis przeliczenia</label>
                               <input
                                 id={`create-conversion-basis-${index}`}
                                 type="text"
@@ -682,14 +684,17 @@ export default function RawMaterialCreateForm({
                                 disabled={locked}
                                 onChange={(event) => setConversion(index, { basis: event.target.value })}
                                 aria-invalid={Boolean(basisError)}
-                                aria-describedby={basisError ? `conversion-${index}-basis-error` : undefined}
+                                aria-describedby={[basisHintId, basisError ? basisErrorId : null].filter(Boolean).join(' ')}
                               />
-                              {basisError && <span id={`conversion-${index}-basis-error`} className="field-error">{basisError}</span>}
-                            </label>
+                              <span id={basisHintId} className="field-hint">
+                                {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                              </span>
+                              {basisError && <span id={basisErrorId} className="field-error">{basisError}</span>}
+                            </div>
                           </>
                         )}
                         {conversion.unitCode && sameDimension && (
-                          <p className="field-hint create-conversion-auto">Współczynnik metryczny ustali serwer.</p>
+                          <p className="field-hint create-conversion-auto">Przeliczenie jednostek tego samego rodzaju jest ustawiane automatycznie.</p>
                         )}
                         <button
                           type="button"
@@ -709,7 +714,7 @@ export default function RawMaterialCreateForm({
             </details>
 
             <div className="create-form-footer">
-              <p>SKU i identyfikator zostaną wygenerowane przez serwer. Zapis utworzy szkic, bez zatwierdzenia.</p>
+              <p>Numer SKU zostanie nadany automatycznie. Surowiec zostanie zapisany jako szkic.</p>
               <div className="create-form-actions">
                 <button type="button" className="button button-secondary" onClick={requestClose} disabled={isBusy(phase)}>
                   Anuluj

@@ -87,6 +87,10 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
     }
   }
 
+  const initials = user
+    ? `${user.first_name.charAt(0)}${user.last_name.charAt(0)}`.toLocaleUpperCase('pl')
+    : 'V'
+
   function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void act(async () => {
@@ -97,47 +101,61 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
   }
 
   return (
-    <section className="auth-panel" aria-label="Konto i lokalizacja" aria-busy={busy}>
-      <h2>Konto i lokalizacja</h2>
-      {error && <p role="alert" className="error">{error}</p>}
-      {!user ? (
-        <form onSubmit={login}>
-          <p>Nie jesteś zalogowany. Konta nie można zarejestrować publicznie.</p>
-          <label>Adres e-mail<input type="email" name="email" autoComplete="username" required maxLength={254}
-            value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} /></label>
-          <label>Hasło<input type="password" name="password" autoComplete="current-password" required
-            value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} /></label>
-          <button type="submit" disabled={busy}>{busy ? 'Sprawdzanie sesji...' : 'Zaloguj się'}</button>
-        </form>
-      ) : (
-        <>
-          <p>Zalogowano: {user.first_name} {user.last_name}</p>
-          <p>{user.email}</p>
-          <p aria-live="polite">Bieżąca lokalizacja: {current ? `${current.name} (${current.code})` : 'Nie wybrano'}</p>
-          {locations.length === 0 && <p>Brak przypisanych aktywnych lokalizacji.</p>}
-          <label>Lokalizacja operacyjna
-            <select value={selected} onChange={(event) => setSelected(event.target.value)} disabled={busy}>
-              <option value="">Wybierz lokalizację</option>
-              {locations.map((location) => <option key={location.id} value={location.id}>
-                {location.name} ({location.code}) — {location.type === 'CENTRAL_KITCHEN' ? 'Kuchnia centralna' : 'Restauracja'}
-              </option>)}
-            </select>
-          </label>
-          <button disabled={busy || selected === ''} onClick={() => void act(async () => {
-            const result = await request('/api/v1/auth/operating-location', 'PUT', { location_id: selected })
-            if (!isLocation(result)) throw new Error('Nieprawidłowy kontekst lokalizacji.')
-            setCurrent(result)
-            if (user) onContextChange({ user, location: result })
-          })}>Wybierz lokalizację</button>
-          <button disabled={busy} onClick={() => void act(loadProfile)}>Odśwież przypisania</button>
-          <button disabled={busy} onClick={() => void act(async () => {
-            await request('/sanctum/csrf-cookie')
-            await request('/api/v1/auth/logout', 'POST')
-            reset()
-          })}>Wyloguj się</button>
-          <p className="notice">Przypisanie nie nadaje uprawnień administracyjnych ani biznesowych.</p>
-        </>
-      )}
-    </section>
+    <details className="account-menu">
+      <summary className="account-menu-trigger" aria-label={user ? `Konto: ${user.first_name} ${user.last_name}` : 'Otwórz konto i zaloguj się'}>
+        <span className="account-avatar" aria-hidden="true">{initials}</span>
+        <span className="account-trigger-copy">
+          <strong>{user ? `${user.first_name} ${user.last_name}` : 'Konto i lokalizacja'}</strong>
+          <small>{user?.email ?? (busy ? 'Sprawdzanie sesji…' : 'Zaloguj się')}</small>
+        </span>
+        <span className="account-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <section className="auth-panel account-menu-panel" aria-label="Konto i lokalizacja" aria-busy={busy}>
+        <h2>Konto i lokalizacja</h2>
+        {error && <p role="alert" className="error">{error}</p>}
+        {!user ? (
+          <form onSubmit={login}>
+            <p>Nie jesteś zalogowany. Konta nie można zarejestrować publicznie.</p>
+            <label>Adres e-mail<input type="email" name="email" autoComplete="username" required maxLength={254}
+              value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} /></label>
+            <label>Hasło<input type="password" name="password" autoComplete="current-password" required
+              value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} /></label>
+            <div className="auth-panel-actions">
+              <button type="submit" className="button button-primary" disabled={busy}>{busy ? 'Sprawdzanie sesji...' : 'Zaloguj się'}</button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <p>Zalogowano: {user.first_name} {user.last_name}</p>
+            <p>{user.email}</p>
+            <p aria-live="polite">Bieżąca lokalizacja: {current ? `${current.name} (${current.code})` : 'Nie wybrano'}</p>
+            {locations.length === 0 && <p>Brak przypisanych aktywnych lokalizacji.</p>}
+            <label>Lokalizacja operacyjna
+              <select value={selected} onChange={(event) => setSelected(event.target.value)} disabled={busy}>
+                <option value="">Wybierz lokalizację</option>
+                {locations.map((location) => <option key={location.id} value={location.id}>
+                  {location.name} ({location.code}) — {location.type === 'CENTRAL_KITCHEN' ? 'Kuchnia centralna' : 'Restauracja'}
+                </option>)}
+              </select>
+            </label>
+            <div className="auth-panel-actions">
+              <button className="button button-primary" disabled={busy || selected === ''} onClick={() => void act(async () => {
+                const result = await request('/api/v1/auth/operating-location', 'PUT', { location_id: selected })
+                if (!isLocation(result)) throw new Error('Nieprawidłowy kontekst lokalizacji.')
+                setCurrent(result)
+                if (user) onContextChange({ user, location: result })
+              })}>Wybierz lokalizację</button>
+              <button className="button button-secondary" disabled={busy} onClick={() => void act(loadProfile)}>Odśwież przypisania</button>
+              <button className="button button-secondary" disabled={busy} onClick={() => void act(async () => {
+                await request('/sanctum/csrf-cookie')
+                await request('/api/v1/auth/logout', 'POST')
+                reset()
+              })}>Wyloguj się</button>
+            </div>
+            <p className="notice">Przypisanie nie nadaje uprawnień administracyjnych ani biznesowych.</p>
+          </>
+        )}
+      </section>
+    </details>
   )
 }

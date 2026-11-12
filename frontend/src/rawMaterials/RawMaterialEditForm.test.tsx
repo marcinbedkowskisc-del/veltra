@@ -112,14 +112,17 @@ describe('formularz edycji surowca', () => {
     expect(screen.queryByLabelText('SKU')).toBeNull()
     expect(screen.queryByLabelText('Identyfikator surowca')).toBeNull()
     expect(editorMock).toHaveBeenCalledWith(materialId, expect.any(AbortSignal))
-    expect(screen.getByText(/Alternatywne nazwy tego samego surowca/)).toBeTruthy()
-    expect(screen.getByText(/1 pc = 2\.500000 kg/)).toBeTruthy()
-    expect(screen.getByText(/„pc” oznacza sztukę, nie opakowanie/)).toBeTruthy()
+    expect(screen.getByText(/nazwy, pod którymi pracownicy mogą szukać/)).toBeTruthy()
+    expect(screen.getByText(/jeśli 1 sztuka waży 2\.500000 kg/)).toBeTruthy()
+    expect(screen.getByLabelText('Przelicznik').getAttribute('aria-describedby'))
+      .toBe('edit-conversion-0-factor-hint')
+    expect(screen.getByLabelText('Opis przeliczenia').getAttribute('aria-describedby'))
+      .toBe('edit-conversion-0-basis-hint')
 
     fireEvent.change(screen.getByLabelText(/Opis.*Pozostawienie pustego pola jawnie wyczyści opis/), {
       target: { value: '' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Usuń alias 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Usuń nazwę 1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Usuń jednostkę przeliczeniową 1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
 
@@ -202,7 +205,7 @@ describe('formularz edycji surowca', () => {
   it('waliduje precyzję i całkowitą ilość dla jednostki pc przed żądaniem', async () => {
     renderForm()
     await screen.findByLabelText(/^Nazwa/)
-    fireEvent.change(screen.getByLabelText(/^Jednostka bazowa/), { target: { value: 'pc' } })
+    fireEvent.change(screen.getByLabelText(/^Jednostka podstawowa/), { target: { value: 'pc' } })
     fireEvent.change(screen.getByLabelText('Nominalna'), { target: { value: '1.5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '1.5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))

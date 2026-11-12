@@ -9,7 +9,14 @@ import {
   type CategoryOption,
   type SupplierOption,
 } from './catalog'
-import { parseRawMaterialDetail, parseRawMaterialRevisions, type RawMaterialDetail, type RawMaterialRevision } from './detail'
+import {
+  parseRawMaterialDetail,
+  parseRawMaterialReferencePrices,
+  parseRawMaterialRevisions,
+  type RawMaterialDetail,
+  type RawMaterialReferencePrice,
+  type RawMaterialRevision,
+} from './detail'
 import {
   UNIT_DIMENSIONS,
   type RawMaterialCreatePayload,
@@ -361,6 +368,19 @@ export async function fetchRawMaterialDetail(id: string, signal?: AbortSignal): 
 
 export async function fetchRawMaterialRevisions(id: string, signal?: AbortSignal): Promise<RawMaterialRevision[]> {
   return parseRawMaterialRevisions(await request(`${RAW_API}/${encodeURIComponent(id)}/revisions`, 'GET', undefined, { signal }))
+}
+
+export async function fetchRawMaterialReferencePrices(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RawMaterialReferencePrice[]> {
+  const response = await requestEnvelope(
+    `${RAW_API}/${encodeURIComponent(id)}/reference-prices`,
+    'GET',
+    undefined,
+    { signal },
+  )
+  return parseRawMaterialReferencePrices(response.data)
 }
 
 export async function exportCatalog(

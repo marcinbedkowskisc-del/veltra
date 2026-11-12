@@ -49,7 +49,82 @@ export const UNIT_LABELS: Record<RawMaterialUnit, string> = {
   kg: 'kg — kilogram',
   ml: 'ml — mililitr',
   l: 'l — litr',
-  pc: 'pc — sztuka',
+  pc: 'szt. — sztuka',
+}
+
+const UNIT_NOUNS: Record<RawMaterialUnit, string> = {
+  mg: 'miligram',
+  g: 'gram',
+  kg: 'kilogram',
+  ml: 'mililitr',
+  l: 'litr',
+  pc: 'sztuka',
+}
+
+export function unitLabel(unitCode: string): string {
+  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
+  return unit ? UNIT_LABELS[unit] : unitCode
+}
+
+export function unitShortLabel(unitCode: string): string {
+  return unitLabel(unitCode).split(' — ')[0]
+}
+
+function unitNoun(unitCode: string): string {
+  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
+  return unit ? UNIT_NOUNS[unit] : unitCode
+}
+
+function unitDimension(unitCode: string) {
+  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
+  return unit ? UNIT_DIMENSIONS[unit] : undefined
+}
+
+function conversionExampleParts(unitCode: string, baseUnitCode: string, factor: string) {
+  const unit = unitNoun(unitCode)
+  const baseUnit = unitShortLabel(baseUnitCode)
+  const baseDimension = unitDimension(baseUnitCode)
+  const unitDimensionValue = unitDimension(unitCode)
+  const examples: Record<string, string> = {
+    'ml:g': '1,05',
+    'ml:kg': '0,00105',
+    'l:g': '1050',
+    'l:kg': '1,05',
+    'g:ml': '0,95',
+    'g:l': '0,00095',
+    'kg:ml': '950',
+    'kg:l': '0,95',
+    'pc:mg': '180000',
+    'pc:g': '180',
+    'pc:kg': '0,18',
+    'pc:ml': '250',
+    'pc:l': '0,25',
+  }
+  const sampleFactor = factor || examples[`${unitCode}:${baseUnitCode}`] || '250'
+  const verb = unitCode === 'pc' && baseDimension === 'MASS'
+    || unitCode === 'ml' && baseDimension === 'MASS'
+    || unitCode === 'l' && baseDimension === 'MASS'
+    ? 'waży'
+    : unitCode === 'pc' && baseDimension === 'VOLUME'
+      ? 'zawiera'
+      : unitDimensionValue === 'MASS' && baseDimension === 'VOLUME'
+        ? 'zajmuje'
+        : 'odpowiada'
+  const subject = (unitCode === 'ml' || unitCode === 'l') && baseDimension === 'MASS'
+    ? `${unit} tego surowca`
+    : unit
+
+  return { subject, verb, sampleFactor, baseUnit }
+}
+
+export function conversionFactorHint(unitCode: string, baseUnitCode: string, factor: string): string {
+  const example = conversionExampleParts(unitCode, baseUnitCode, factor)
+  return `Wpisz, ile jednostek podstawowych odpowiada jednej wybranej jednostce. Przykład: jeśli 1 ${example.subject} ${example.verb} ${example.sampleFactor} ${example.baseUnit}, wpisz ${example.sampleFactor}.`
+}
+
+export function conversionBasisHint(unitCode: string, baseUnitCode: string, factor: string): string {
+  const example = conversionExampleParts(unitCode, baseUnitCode, factor)
+  return `Wyjaśnij, czego dotyczy przeliczenie, np. „1 ${example.subject} ${example.verb} ${example.sampleFactor} ${example.baseUnit}” dla tego surowca.`
 }
 
 export function emptyRawMaterialCreateValues(): RawMaterialCreateValues {
@@ -106,20 +181,20 @@ export function validateRawMaterialCreate(values: RawMaterialCreateValues): Reco
     errors.usableQuantity = 'Ilość w sztukach musi być liczbą całkowitą.'
   }
 
-  if (values.aliases.length > 50) errors.aliases = 'Możesz dodać maksymalnie 50 aliasów.'
+  if (values.aliases.length > 50) errors.aliases = 'Możesz dodać maksymalnie 50 innych nazw surowca.'
   const seenAliases = new Set<string>()
   values.aliases.forEach((alias, index) => {
     const trimmed = alias.trim()
-    if (!trimmed) errors[`aliases.${index}`] = 'Alias nie może być pusty.'
-    else if ([...trimmed].length > 200) errors[`aliases.${index}`] = 'Alias może mieć maksymalnie 200 znaków.'
+    if (!trimmed) errors[`aliases.${index}`] = 'Nazwa nie może być pusta.'
+    else if ([...trimmed].length > 200) errors[`aliases.${index}`] = 'Nazwa może mieć maksymalnie 200 znaków.'
     const normalized = normalizedTerm(trimmed)
     if (normalized && seenAliases.has(normalized)) {
-      errors[`aliases.${index}`] = 'Aliasy muszą być unikalne.'
+      errors[`aliases.${index}`] = 'Inne nazwy surowca muszą być unikalne.'
     }
     if (normalized) seenAliases.add(normalized)
   })
 
-  if (values.conversions.length > 20) errors.conversions = 'Możesz dodać maksymalnie 20 przeliczników.'
+  if (values.conversions.length > 20) errors.conversions = 'Możesz dodać maksymalnie 20 dodatkowych jednostek miary.'
   const seenUnits = new Set<string>([values.baseUnitCode])
   values.conversions.forEach((conversion, index) => {
     if (!RAW_UNITS.includes(conversion.unitCode as RawMaterialUnit)) {
@@ -127,7 +202,7 @@ export function validateRawMaterialCreate(values: RawMaterialCreateValues): Reco
       return
     }
     if (seenUnits.has(conversion.unitCode)) {
-      errors[`conversions.${index}.unitCode`] = 'Jednostka bazowa i przeliczniki muszą być unikalne.'
+      errors[`conversions.${index}.unitCode`] = 'Jednostka podstawowa i dodatkowe jednostki miary muszą być różne.'
     }
     seenUnits.add(conversion.unitCode)
 
@@ -137,12 +212,12 @@ export function validateRawMaterialCreate(values: RawMaterialCreateValues): Reco
       const factor = normalizeDecimalInput(conversion.toBaseFactor)
       const basis = conversion.basis.trim()
       if (!factor || !validFactor(factor)) {
-        errors[`conversions.${index}.toBaseFactor`] = 'Podaj dodatni współczynnik z maksymalnie 12 miejscami po przecinku.'
+        errors[`conversions.${index}.toBaseFactor`] = 'Podaj dodatni przelicznik z maksymalnie 12 miejscami po przecinku.'
       }
-      if (!basis) errors[`conversions.${index}.basis`] = 'Opisz podstawę przeliczenia dla tej jednostki.'
-      else if ([...basis].length > 500) errors[`conversions.${index}.basis`] = 'Podstawa może mieć maksymalnie 500 znaków.'
+      if (!basis) errors[`conversions.${index}.basis`] = 'Opisz, czego dotyczy przeliczenie dla tej jednostki.'
+      else if ([...basis].length > 500) errors[`conversions.${index}.basis`] = 'Opis przeliczenia może mieć maksymalnie 500 znaków.'
     } else if (conversion.toBaseFactor.trim() && !validFactor(normalizeDecimalInput(conversion.toBaseFactor))) {
-      errors[`conversions.${index}.toBaseFactor`] = 'Współczynnik musi być dodatnią liczbą z maksymalnie 12 miejscami po przecinku.'
+      errors[`conversions.${index}.toBaseFactor`] = 'Przelicznik musi być dodatnią liczbą z maksymalnie 12 miejscami po przecinku.'
     }
   })
 

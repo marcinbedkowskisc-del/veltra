@@ -54,6 +54,16 @@ export type RawMaterialRevision = {
   }>
 }
 
+export type RawMaterialReferencePrice = {
+  id: string
+  eventNo: number
+  eventType: string
+  effectiveFrom: string
+  netPlnPerBaseUnit: string | null
+  netPlnPerPackage: string | null
+  currencyCode: 'PLN'
+}
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Backend zwrócił nieprawidłowe szczegóły surowca: ${field}.`)
@@ -180,6 +190,38 @@ export function parseRawMaterialRevisions(value: unknown): RawMaterialRevision[]
       criticalChange: revision.critical_change,
       createdAt: requiredString(revision.created_at, 'created_at'),
       approvals,
+    }
+  })
+}
+
+export function parseRawMaterialReferencePrices(value: unknown): RawMaterialReferencePrice[] {
+  if (!Array.isArray(value)) throw new Error('Backend zwrócił nieprawidłową historię cen surowca.')
+  return value.map((event): RawMaterialReferencePrice => {
+    if (!isRecord(event) || !Number.isInteger(event.event_no) || event.currency_code !== 'PLN') {
+      throw new Error('Backend zwrócił nieprawidłową historię cen surowca.')
+    }
+    const invalidPriceHistory = () => new Error('Backend zwrócił nieprawidłową historię cen surowca.')
+    const priceString = (item: unknown) => {
+      if (typeof item !== 'string' || item.length === 0) throw invalidPriceHistory()
+      return item
+    }
+    const priceDecimal = (item: unknown) => {
+      if (item === null) return null
+      if (typeof item !== 'string' || !DECIMAL.test(item)) throw invalidPriceHistory()
+      return item
+    }
+    const effectiveFrom = priceString(event.effective_from)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+      throw new Error('Backend zwrócił nieprawidłową datę obowiązywania ceny.')
+    }
+    return {
+      id: priceString(event.id),
+      eventNo: event.event_no as number,
+      eventType: priceString(event.event_type),
+      effectiveFrom,
+      netPlnPerBaseUnit: priceDecimal(event.net_pln_per_base_unit),
+      netPlnPerPackage: priceDecimal(event.net_pln_per_package),
+      currencyCode: 'PLN',
     }
   })
 }

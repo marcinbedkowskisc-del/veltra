@@ -4,6 +4,8 @@ import { lifecycleLabel, RAW_UNITS } from './catalog'
 import type { CategoryOption } from './catalog'
 import {
   normalizeDecimalInput,
+  conversionBasisHint,
+  conversionFactorHint,
   UNIT_DIMENSIONS,
   UNIT_LABELS,
   validateRawMaterialCreate,
@@ -306,7 +308,7 @@ export default function RawMaterialEditForm({
   }
 
   async function loadCurrentEditor(discardLocalChanges: boolean) {
-    if (discardLocalChanges && !window.confirm('Odrzucić lokalne zmiany i wczytać aktualną rewizję z serwera?')) return
+    if (discardLocalChanges && !window.confirm('Odrzucić lokalne zmiany i wczytać najnowszą wersję danych?')) return
     setPhase('loading')
     setFormError(null)
     setUncertainRevision(null)
@@ -352,7 +354,7 @@ export default function RawMaterialEditForm({
       setAttempted(false)
       setPhase('editing')
       setFormError(discardLocalChanges
-        ? 'Wczytano aktualny stan serwera. Sprawdź dane przed rozpoczęciem nowego zapisu.'
+        ? 'Wczytano najnowszą wersję danych. Sprawdź je przed zapisaniem zmian.'
         : null)
     } catch (cause) {
       if (!active.current || locationRef.current !== expectedLocation) return
@@ -387,20 +389,20 @@ export default function RawMaterialEditForm({
       const editor = await fetchRawMaterialEditor(materialId, controller.signal)
       if (!active.current || locationRef.current !== expectedLocation) return
       if (editor.revisionId !== completion.revisionId || editor.version !== completion.version) {
-        setFormError('Odczytano niespójny stan serwera. Lokalnych zmian nie zmieniono; użyj jawnego wczytania, aby kontynuować.')
+        setFormError('Odczytano niespójne dane. Lokalne zmiany zachowano; wczytaj najnowszą wersję, aby kontynuować.')
         return
       }
       setUncertainRevision(editor.revisionNo)
-      setFormError('Wynik zapisu nadal jest niepewny. Odczyt serwera nie uruchomił ponownego zapisu; lokalne zmiany zachowano.')
+      setFormError('Nie można potwierdzić wyniku zapisu. Nie rozpoczęto ponownego zapisu; lokalne zmiany zachowano.')
     } catch (cause) {
       if (!active.current || locationRef.current !== expectedLocation) return
       if (isSessionExpired(cause) || (cause instanceof ApiError
         && (cause.status === 403 || cause.status === 404 || cause.status === 503))) {
-        handleFailure(cause, 'Nie udało się odczytać bieżącej wersji serwera.')
+        handleFailure(cause, 'Nie udało się wczytać najnowszej wersji danych.')
       } else {
         setFormError(cause instanceof Error
-          ? `Nie udało się odczytać bieżącej wersji serwera: ${cause.message} Lokalnych zmian nie zmieniono.`
-          : 'Nie udało się odczytać bieżącej wersji serwera. Lokalnych zmian nie zmieniono.')
+          ? `Nie udało się wczytać najnowszej wersji danych: ${cause.message} Lokalne zmiany zachowano.`
+          : 'Nie udało się wczytać najnowszej wersji danych. Lokalne zmiany zachowano.')
       }
     } finally {
       controller.abort()
@@ -542,7 +544,7 @@ export default function RawMaterialEditForm({
             )}
             {phase === 'uncertain' && (
               <>
-                {uncertainRevision !== null && <p>Serwer zwrócił aktualną rewizję v{uncertainRevision}; sam odczyt nie potwierdza wyniku zapisu.</p>}
+                {uncertainRevision !== null && <p>W danych jest już rewizja v{uncertainRevision}; ten odczyt nie potwierdza wyniku zapisu.</p>}
                 <button type="button" className="button button-primary" onClick={() => void loadCurrentEditor(true)}>
                   Świadomie wczytaj aktualny stan
                 </button>
@@ -560,7 +562,7 @@ export default function RawMaterialEditForm({
           <section className="create-success" aria-labelledby="edit-success-title">
             <h3 id="edit-success-title">Zapisano nową rewizję roboczą v{saved.revision.revisionNo}</h3>
             <p>
-              Serwer zwrócił stan mastera: <strong>{saved.lifecycleState} — {lifecycleLabel(saved.lifecycleState)}</strong>.
+              Aktualny stan surowca: <strong>{lifecycleLabel(saved.lifecycleState)}</strong>.
               Rewizja nie została automatycznie zatwierdzona ani opublikowana.
             </p>
             {saved.lifecycleState === 'ACTIVE' && (
@@ -622,12 +624,12 @@ export default function RawMaterialEditForm({
                     <span className="field-hint">Pozostawienie pustego pola jawnie wyczyści opis.</span>
                   </label>
                   <label className="create-form-field" htmlFor="edit-base-unit">
-                    Jednostka bazowa <span className="required-mark">wymagane</span>
+                    Jednostka podstawowa <span className="required-mark">wymagane</span>
                     <select id="edit-base-unit" value={values.baseUnitCode} {...fieldProps('baseUnitCode')}
                       onChange={(event) => setField('baseUnitCode', event.target.value as RawMaterialCreateValues['baseUnitCode'])}>
                       {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
                     </select>
-                    <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „pc” oznacza sztukę, nie rodzaj opakowania.</span>
+                    <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „szt.” oznacza jedną sztukę, nie opakowanie.</span>
                     {getError('baseUnitCode') && <span className="field-error" id="baseUnitCode-error">{getError('baseUnitCode')}</span>}
                   </label>
                   <fieldset className="create-form-fieldset create-quantity-group">
@@ -653,40 +655,40 @@ export default function RawMaterialEditForm({
               </fieldset>
 
               <details className="create-advanced" open>
-                <summary>Aliasy i przeliczniki</summary>
+                <summary>Inne nazwy i dodatkowe jednostki miary</summary>
                 <div className="create-advanced-content">
                   <section aria-labelledby="edit-aliases-title">
                     <div className="create-subsection-heading">
-                      <div><h3 id="edit-aliases-title">Aliasy</h3><p>Alternatywne nazwy tego samego surowca, używane w wyszukiwaniu. Nie tworzą osobnego surowca ani SKU. Lista zostanie wysłana w całości; pusta lista jawnie usuwa dodatkowe aliasy.</p></div>
+                      <div><h3 id="edit-aliases-title">Inne nazwy surowca</h3><p>Dodaj nazwy, pod którymi pracownicy mogą szukać tego samego surowca. Nie utworzą one osobnego surowca. Lista zawiera wszystkie zapisane nazwy; usunięcie nazwy usunie ją z surowca.</p></div>
                       <button type="button" className="button button-secondary" disabled={phase !== 'editing' || values.aliases.length >= 50}
-                        onClick={() => setField('aliases', [...values.aliases, ''])}>Dodaj alias</button>
+                        onClick={() => setField('aliases', [...values.aliases, ''])}>Dodaj nazwę</button>
                     </div>
                     {values.aliases.map((alias, index) => (
                       <div className="create-repeat-row" key={`alias-${index}`}>
-                        <label className="create-form-field" htmlFor={`edit-alias-${index}`}>Alias {index + 1}
+                        <label className="create-form-field" htmlFor={`edit-alias-${index}`}>Inna nazwa {index + 1}
                           <input id={`edit-alias-${index}`} value={alias} maxLength={200} {...fieldProps(`aliases.${index}`)}
                             onChange={(event) => updateAlias(index, event.target.value)} />
                           {getError(`aliases.${index}`) && <span className="field-error">{getError(`aliases.${index}`)}</span>}
                         </label>
-                        <button type="button" className="button button-secondary" aria-label={`Usuń alias ${index + 1}`}
+                        <button type="button" className="button button-secondary" aria-label={`Usuń nazwę ${index + 1}`}
                           disabled={phase !== 'editing'} onClick={() => setField('aliases', values.aliases.filter((_, itemIndex) => itemIndex !== index))}>
                           Usuń
                         </button>
                       </div>
                     ))}
                     {getError('aliases') && <p className="field-error">{getError('aliases')}</p>}
-                    {values.aliases.length === 0 && <p className="field-hint">Brak dodatkowych aliasów.</p>}
+                    {values.aliases.length === 0 && <p className="field-hint">Brak innych nazw surowca.</p>}
                   </section>
 
                   <section aria-labelledby="edit-conversions-title">
                     <div className="create-subsection-heading">
                       <div>
-                        <h3 id="edit-conversions-title">Jednostki przeliczeniowe</h3>
+                        <h3 id="edit-conversions-title">Dodatkowe jednostki miary</h3>
                         <p>
-                          Jednostka bazowa: {UNIT_LABELS[values.baseUnitCode]}. Współczynnik oznacza liczbę jednostek bazowych
-                          przypadającą na 1 jednostkę dodatkową. Przeliczenia metryczne w tym samym wymiarze oblicza serwer;
-                          między wymiarami podaj współczynnik i opis podstawy. Wszystkie obecne pozycje zostaną zachowane,
-                          chyba że je zmienisz lub usuniesz.
+                          Jednostka podstawowa: {UNIT_LABELS[values.baseUnitCode]}. Przelicznik mówi, ile jednostek podstawowych
+                          odpowiada jednej dodatkowej jednostce, np. 1 opakowanie = 250 g. Dla jednostek tego samego rodzaju
+                          przeliczenie jest ustawiane automatycznie. Przy przeliczaniu między masą, objętością i sztukami podaj
+                          przelicznik oraz opisz, czego dotyczy. Zapisz wszystkie pozycje, które mają pozostać przy surowcu.
                         </p>
                       </div>
                       <button type="button" className="button button-secondary" disabled={phase !== 'editing' || values.conversions.length >= 20}
@@ -698,9 +700,15 @@ export default function RawMaterialEditForm({
                       const unit = conversion.unitCode as RawMaterialCreateValues['baseUnitCode']
                       const automatic = RAW_UNITS.includes(unit)
                         && UNIT_DIMENSIONS[unit] === UNIT_DIMENSIONS[values.baseUnitCode]
+                      const factorField = `conversions.${index}.toBaseFactor`
+                      const basisField = `conversions.${index}.basis`
+                      const factorHintId = `edit-conversion-${index}-factor-hint`
+                      const basisHintId = `edit-conversion-${index}-basis-hint`
+                      const factorErrorId = `${factorField.replaceAll('.', '-')}-error`
+                      const basisErrorId = `${basisField.replaceAll('.', '-')}-error`
                       return (
-                        <div className="create-conversion-row" key={`conversion-${index}`}>
-                          <label className="create-form-field" htmlFor={`edit-conversion-unit-${index}`}>Jednostka {index + 1}
+                        <div className={`create-conversion-row${automatic ? ' is-automatic' : ''}`} key={`conversion-${index}`}>
+                          <label className="create-form-field create-conversion-unit" htmlFor={`edit-conversion-unit-${index}`}>Dodatkowa jednostka miary {index + 1}
                             <select id={`edit-conversion-unit-${index}`} value={conversion.unitCode}
                               {...fieldProps(`conversions.${index}.unitCode`)}
                               onChange={(event) => updateConversion(index, { unitCode: event.target.value as RawMaterialConversionInput['unitCode'] })}>
@@ -711,29 +719,31 @@ export default function RawMaterialEditForm({
                             {getError(`conversions.${index}.unitCode`) && <span className="field-error">{getError(`conversions.${index}.unitCode`)}</span>}
                           </label>
                           {automatic ? (
-                            <p className="field-hint create-conversion-auto">Przeliczenie automatyczne w tym samym wymiarze — współczynnik ustali serwer.</p>
+                            <p className="field-hint create-conversion-auto">Przeliczenie jednostek tego samego rodzaju jest ustawiane automatycznie.</p>
                           ) : (
                             <>
-                              <p className="field-hint create-form-field-wide">
-                                {conversion.toBaseFactor
-                                  ? `1 ${conversion.unitCode} = ${conversion.toBaseFactor} ${values.baseUnitCode}.`
-                                  : `Podaj, ile ${values.baseUnitCode} przypada na 1 ${conversion.unitCode}.`}
-                                {conversion.unitCode === 'pc' || values.baseUnitCode === 'pc'
-                                  ? ' „pc” oznacza sztukę, nie opakowanie. Opisz w podstawie, co dokładnie oznacza jedna sztuka dla tego surowca.'
-                                  : ' Opisz w podstawie, co oznacza jedna jednostka dla tego surowca.'}
-                              </p>
-                              <label className="create-form-field" htmlFor={`edit-conversion-factor-${index}`}>Współczynnik — jednostki bazowe na 1 jednostkę dodatkową
+                              <div className="create-form-field create-conversion-factor">
+                                <label htmlFor={`edit-conversion-factor-${index}`}>Przelicznik</label>
                                 <input id={`edit-conversion-factor-${index}`} inputMode="decimal" value={conversion.toBaseFactor}
                                   {...fieldProps(`conversions.${index}.toBaseFactor`)}
+                                  aria-describedby={[factorHintId, getError(factorField) ? factorErrorId : null].filter(Boolean).join(' ')}
                                   onChange={(event) => updateConversion(index, { toBaseFactor: event.target.value })} />
-                                {getError(`conversions.${index}.toBaseFactor`) && <span className="field-error">{getError(`conversions.${index}.toBaseFactor`)}</span>}
-                              </label>
-                              <label className="create-form-field create-form-field-wide" htmlFor={`edit-conversion-basis-${index}`}>Opis podstawy przeliczenia
+                                <span id={factorHintId} className="field-hint">
+                                  {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                </span>
+                                {getError(factorField) && <span className="field-error" id={factorErrorId}>{getError(factorField)}</span>}
+                              </div>
+                              <div className="create-form-field create-conversion-basis">
+                                <label htmlFor={`edit-conversion-basis-${index}`}>Opis przeliczenia</label>
                                 <input id={`edit-conversion-basis-${index}`} value={conversion.basis} maxLength={500}
                                   {...fieldProps(`conversions.${index}.basis`)}
+                                  aria-describedby={[basisHintId, getError(basisField) ? basisErrorId : null].filter(Boolean).join(' ')}
                                   onChange={(event) => updateConversion(index, { basis: event.target.value })} />
-                                {getError(`conversions.${index}.basis`) && <span className="field-error">{getError(`conversions.${index}.basis`)}</span>}
-                              </label>
+                                <span id={basisHintId} className="field-hint">
+                                  {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                </span>
+                                {getError(basisField) && <span className="field-error" id={basisErrorId}>{getError(basisField)}</span>}
+                              </div>
                             </>
                           )}
                           <button type="button" className="button button-secondary" aria-label={`Usuń jednostkę przeliczeniową ${index + 1}`}
@@ -756,7 +766,7 @@ export default function RawMaterialEditForm({
               </label>
 
               <div className="create-form-footer">
-                <p>Pełny zestaw danych podstawowych i token wersji zostaną przekazane serwerowi. Alergeny, przechowywanie i dokumenty nie są edytowane w tym formularzu.</p>
+                <p>Zapis obejmuje dane podstawowe. Alergeny, przechowywanie i dokumenty zmienia się w osobnych sekcjach.</p>
                 <div className="create-form-actions">
                   <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>Anuluj</button>
                   <button type="submit" className="button button-primary" disabled={phase !== 'editing'}>

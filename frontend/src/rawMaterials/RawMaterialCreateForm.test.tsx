@@ -91,22 +91,26 @@ describe('formularz tworzenia surowca RAW', () => {
     enterValidBasicFields()
     fireEvent.change(screen.getByLabelText('Nominalna'), { target: { value: '12,5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
-    fireEvent.click(screen.getByText('Aliasy i przeliczniki', { exact: false }))
-    expect(screen.getByText(/Alternatywne nazwy tego samego surowca/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Dodaj alias' }))
-    fireEvent.change(screen.getByLabelText('Alias 1'), { target: { value: '  Mąka uniwersalna  ' } })
+    fireEvent.click(screen.getByText('Inne nazwy i dodatkowe jednostki miary', { exact: false }))
+    expect(screen.getByText(/nazwy, pod którymi pracownicy mogą szukać/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj nazwę' }))
+    fireEvent.change(screen.getByLabelText('Inna nazwa 1'), { target: { value: '  Mąka uniwersalna  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj jednostkę' }))
-    fireEvent.change(screen.getByLabelText('Jednostka przeliczeniowa 1'), { target: { value: 'kg' } })
+    fireEvent.change(screen.getByLabelText('Dodatkowa jednostka miary 1'), { target: { value: 'kg' } })
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj jednostkę' }))
-    fireEvent.change(screen.getByLabelText('Jednostka przeliczeniowa 2'), { target: { value: 'pc' } })
-    fireEvent.change(screen.getByLabelText(/Współczynnik — jednostki bazowe na 1 jednostkę dodatkową/), {
+    fireEvent.change(screen.getByLabelText('Dodatkowa jednostka miary 2'), { target: { value: 'pc' } })
+    fireEvent.change(screen.getByLabelText('Przelicznik'), {
       target: { value: '2500' },
     })
-    fireEvent.change(screen.getByLabelText('Opis podstawy przeliczenia'), {
+    fireEvent.change(screen.getByLabelText('Opis przeliczenia'), {
       target: { value: '1 sztuka o masie 2500 g' },
     })
-    expect(screen.getByText(/1 pc = 2500 g/)).toBeTruthy()
-    expect(screen.getByText(/„pc” oznacza sztukę, nie opakowanie/)).toBeTruthy()
+    const factorInput = screen.getByLabelText('Przelicznik')
+    const basisInput = screen.getByLabelText('Opis przeliczenia')
+    expect(factorInput.getAttribute('aria-describedby')).toBe('conversion-1-factor-hint')
+    expect(basisInput.getAttribute('aria-describedby')).toBe('conversion-1-basis-hint')
+    expect(screen.getByText(/jeśli 1 sztuka waży 2500 g, wpisz 2500/)).toBeTruthy()
+    expect(screen.getByText(/Wyjaśnij, czego dotyczy przeliczenie/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
     expect(await screen.findByRole('heading', { name: 'Surowiec utworzony' })).toBeTruthy()
@@ -125,7 +129,7 @@ describe('formularz tworzenia surowca RAW', () => {
       ],
     }, reservationId)
     expect(screen.getByText(/RAW-000042/)).toBeTruthy()
-    expect(screen.getByText(/DRAFT/)).toBeTruthy()
+    expect(screen.getByText(/został zapisany jako szkic/)).toBeTruthy()
     expect(screen.getByText(/nie został zatwierdzony ani opublikowany/)).toBeTruthy()
   })
 
@@ -141,7 +145,7 @@ describe('formularz tworzenia surowca RAW', () => {
     fireEvent.click(submit)
 
     await waitFor(() => expect(reserveMock).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('status').textContent).toContain('Przydzielanie numeru SKU')
+    expect(screen.getByRole('status').textContent).toContain('Przygotowywanie numeru SKU')
     await act(async () => resolveReservation?.(reservation))
     expect(await screen.findByRole('heading', { name: 'Surowiec utworzony' })).toBeTruthy()
     expect(createMock).toHaveBeenCalledTimes(1)
@@ -203,7 +207,7 @@ describe('formularz tworzenia surowca RAW', () => {
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
-    expect(await screen.findByText(/Nie ponawiaj zapisu z innymi danymi/)).toBeTruthy()
+    expect(await screen.findByText(/Nie zmieniaj danych przy ponawianiu tej próby/)).toBeTruthy()
     expect(createMock).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: 'Ponów bezpiecznie' })).toBeNull()
   })

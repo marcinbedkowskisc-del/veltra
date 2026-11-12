@@ -7,6 +7,8 @@ import {
   type CategoryOption,
   type SupplierOption,
 } from './catalog'
+import { unitLabel } from './create'
+import SearchField from '../design-system/SearchField'
 
 export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavailable' | 'module-unavailable'
 
@@ -51,25 +53,21 @@ export default function CatalogFilters({
 }: Props) {
   return (
     <div className="catalog-toolbar">
-      <label className="filter-field search-field">
-        <span>Szukaj</span>
-        <div className="search-input-wrap">
-          <input
-            type="search"
+      <div className="filter-field search-field">
+        <label htmlFor="raw-material-search">Szukaj</label>
+        <SearchField
+            id="raw-material-search"
             value={searchInput}
-            onChange={(event) => onChange('search', event.target.value)}
+            onChange={(value) => onChange('search', value)}
             placeholder="Nazwa surowca lub SKU"
-            aria-label="Szukaj surowca po nazwie lub SKU"
+            label="Szukaj surowca po nazwie lub SKU"
             disabled={disabled}
+            loading={searchLoading}
+            loadingLabel={values.search
+              ? 'Aktualizowanie wyników wyszukiwania…'
+              : 'Aktualizowanie katalogu…'}
           />
-          {searchLoading && <span className="search-loading-spinner" aria-hidden="true" />}
-          <span className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
-            {searchLoading
-              ? values.search ? 'Aktualizowanie wyników wyszukiwania…' : 'Aktualizowanie katalogu…'
-              : ''}
-          </span>
-        </div>
-      </label>
+      </div>
 
       <label className="filter-field">
         <span>Kategoria</span>
@@ -88,15 +86,30 @@ export default function CatalogFilters({
       {supplierState === 'available' && (
         <div className="filter-field supplier-filter">
           <label htmlFor="supplier-search">Dostawca</label>
-          <input
-            id="supplier-search"
-            type="search"
-            autoComplete="off"
-            value={supplierInput}
-            onChange={(event) => onSupplierInput(event.target.value)}
-            placeholder="Wyszukaj po nazwie"
-            disabled={disabled}
-          />
+          <div className="supplier-input">
+            <input
+              id="supplier-search"
+              type="search"
+              autoComplete="off"
+              value={supplierInput}
+              onChange={(event) => onSupplierInput(event.target.value)}
+              placeholder="Wyszukaj po nazwie"
+              disabled={disabled}
+            />
+            {values.supplierId && (
+              <button
+                type="button"
+                className="filter-clear"
+                onClick={onSupplierClear}
+                disabled={disabled}
+                aria-label="Wyczyść wybranego dostawcę"
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                  <path d="m5 5 10 10M15 5 5 15" />
+                </svg>
+              </button>
+            )}
+          </div>
           {supplierInput.trim().length > 0 && !values.supplierId && (
             <ul id="supplier-suggestions" className="supplier-suggestions" aria-label="Wyniki dostawców">
               {supplierSearching
@@ -111,11 +124,6 @@ export default function CatalogFilters({
                 ))
                 : <li className="suggestion-empty">Brak pasujących dostawców.</li>}
             </ul>
-          )}
-          {values.supplierId && (
-            <button type="button" className="filter-clear" onClick={onSupplierClear} disabled={disabled}>
-              Wyczyść wybranego dostawcę
-            </button>
           )}
         </div>
       )}
@@ -148,7 +156,7 @@ export default function CatalogFilters({
           disabled={disabled}
         >
           <option value="">Wszystkie jednostki</option>
-          {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+          {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{unitLabel(unit)}</option>)}
         </select>
       </label>
 

@@ -1,8 +1,10 @@
+@import './design-system/design-system.css';
+
 :root {
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-ui, system-ui, sans-serif);
   line-height: 1.5;
-  color: #edf2f8;
-  background: #0c1422;
+  color: var(--text, #edf2f8);
+  background: var(--canvas, #0c1422);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

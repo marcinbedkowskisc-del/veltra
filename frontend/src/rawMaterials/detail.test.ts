@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { parseRawMaterialDetail, parseRawMaterialRevisions } from './detail'
+import {
+  parseRawMaterialDetail,
+  parseRawMaterialReferencePrices,
+  parseRawMaterialRevisions,
+} from './detail'
 
 const response = {
   id: 'material-1',
-  code: 'RM-00001',
-  sku: 'RM-00001',
+  code: 'RAW-000001',
+  sku: 'RAW-000001',
   lifecycle_state: 'ACTIVE',
   approved_revision_id: 'revision-1',
   revision: {
@@ -87,5 +91,48 @@ describe('szczegóły surowca', () => {
     expect(revisions).toHaveLength(1)
     expect(revisions[0].revisionNo).toBe(3)
     expect(revisions[0].approvals[0].outcome).toBe('APPROVED')
+  })
+
+  it('parsuje historię cen z PLN za jednostkę bazową i opakowanie', () => {
+    const prices = parseRawMaterialReferencePrices([{
+      id: 'price-event-1',
+      event_no: 2,
+      event_type: 'PRICE_SET',
+      effective_from: '2025-02-01',
+      net_pln_per_base_unit: '12.50000000',
+      net_pln_per_package: '25.00000000',
+      currency_code: 'PLN',
+    }, {
+      id: 'price-event-2',
+      event_no: 1,
+      event_type: 'PRICE_SET',
+      effective_from: '2025-01-01',
+      net_pln_per_base_unit: null,
+      net_pln_per_package: '20.00000000',
+      currency_code: 'PLN',
+    }])
+
+    expect(prices[0].netPlnPerBaseUnit).toBe('12.50000000')
+    expect(prices[1].netPlnPerBaseUnit).toBeNull()
+    expect(prices[1].currencyCode).toBe('PLN')
+  })
+
+  it('odrzuca nieprawidłową walutę lub cenę w historii cen', () => {
+    const event = {
+      id: 'price-event-1',
+      event_no: 1,
+      event_type: 'PRICE_SET',
+      effective_from: '2025-02-01',
+      net_pln_per_base_unit: '12.50',
+      net_pln_per_package: null,
+      currency_code: 'EUR',
+    }
+
+    expect(() => parseRawMaterialReferencePrices([event])).toThrow('nieprawidłową historię cen')
+    expect(() => parseRawMaterialReferencePrices([{
+      ...event,
+      currency_code: 'PLN',
+      net_pln_per_base_unit: '12,50',
+    }])).toThrow('nieprawidłową historię cen')
   })
 })

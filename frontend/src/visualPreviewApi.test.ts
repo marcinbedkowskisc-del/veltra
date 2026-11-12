@@ -13,10 +13,38 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 }
 
 describe('isolated RAW preview API', () => {
+  it('uses consistent six-digit RAW identifiers for catalog, detail, export and reservations', async () => {
+    const preview = installVisualPreviewApi('authorized')
+    const catalog = await json(await window.fetch('/api/v1/raw-materials?sort=sku&page=1&per_page=50'))
+    const rows = catalog.data as Array<Record<string, string>>
+    const skus = rows.map((row) => row.sku)
+    expect(skus).toHaveLength(32)
+    expect(skus.every((sku) => /^RAW-\d{6}$/.test(sku))).toBe(true)
+    expect(new Set(skus).size).toBe(skus.length)
+    expect(skus).toContain('RAW-000027')
+
+    const detail = await json(await window.fetch(`/api/v1/raw-materials/${rows[0].id}`))
+    expect(detail.data).toMatchObject({ sku: rows[0].sku, code: rows[0].sku })
+    const exportResponse = await window.fetch('/api/v1/raw-materials/catalog-exports/selection/DEMO-EXPORT/download')
+    expect(await exportResponse.text()).toContain('RAW-000001,Mąka pszenna typ 550')
+
+    const reservationResponse = await json(await window.fetch('/api/v1/raw-materials/sku-reservations', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'preview-sku-check' },
+    }))
+    const reservation = reservationResponse.data as Record<string, string>
+    expect(reservation.sku).toMatch(/^RAW-\d{6}$/)
+    expect(skus).not.toContain(reservation.sku)
+    preview.reset()
+  })
+
   it('serves synthetic lifecycle examples and correctly shaped access scenarios', async () => {
     const preview = installVisualPreviewApi('authorized')
     const catalog = await json(await window.fetch('/api/v1/raw-materials?sort=name&direction=asc&page=1&per_page=50'))
+    const prices = await json(await window.fetch('/api/v1/raw-materials/00000000-0000-4000-8000-000000000002/reference-prices'))
     const rows = catalog.data as Array<Record<string, unknown>>
+    expect(prices.data).toHaveLength(4)
+    expect((prices.data as Array<Record<string, unknown>>)[0]).toMatchObject({ currency_code: 'PLN' })
     expect(rows.map((row) => row.lifecycle_state)).toContain('DRAFT')
     expect(rows.map((row) => row.lifecycle_state)).toContain('ACTIVE')
     expect(rows.map((row) => row.lifecycle_state)).toContain('VERIFICATION')
@@ -37,6 +65,8 @@ describe('isolated RAW preview API', () => {
 
     preview.setMode('view-only')
     const viewOnly = await json(await window.fetch('/api/v1/security/raw-materials/capabilities'))
+    const restrictedPrices = await window.fetch('/api/v1/raw-materials/00000000-0000-4000-8000-000000000002/reference-prices')
+    expect(restrictedPrices.status).toBe(403)
     expect(viewOnly.data).toMatchObject({
       readiness: 'READY',
       permissions: { create: false, edit: false },
@@ -104,6 +134,10 @@ describe('isolated RAW preview API', () => {
     expect(created.data).toMatchObject({ sku: 'RAW-000042', lifecycle_state: 'DRAFT' })
     const withCreated = await json(await window.fetch('/api/v1/raw-materials?search=Fasola%20demo%20utworzona%20lokalnie&page=1&per_page=25'))
     expect(withCreated.data).toHaveLength(1)
+    const completeCatalog = await json(await window.fetch('/api/v1/raw-materials?page=1&per_page=50'))
+    const allRows = completeCatalog.data as Array<Record<string, unknown>>
+    const ids = allRows.map((row) => row.id)
+    expect(new Set(ids).size).toBe(ids.length)
 
     preview.reset()
     const afterReset = await json(await window.fetch('/api/v1/raw-materials?search=Fasola%20demo%20utworzona%20lokalnie&page=1&per_page=25'))
@@ -133,11 +167,13 @@ describe('isolated RAW preview API', () => {
 
     expect(revision.revision_no).toBe(3)
     expect(patch.data).toMatchObject({
+      sku: 'RAW-000002',
       lifecycle_state: 'ACTIVE',
       version: 'synthetic-edit-version-2',
       revision: { revision_no: 4 },
     })
     const detail = await json(await window.fetch(`/api/v1/raw-materials/${materialId}`))
+    expect(detail.data).toMatchObject({ sku: 'RAW-000002', code: 'RAW-000002' })
     expect((detail.data as Record<string, unknown>).approved_revision_id).toBe('00000000-0000-4000-8000-000000000203')
     expect(((detail.data as Record<string, unknown>).revision as Record<string, unknown>).name).toBe('Mąka żytnia typ 720')
 

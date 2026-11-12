@@ -1,4 +1,5 @@
 import { isRecord } from '../api'
+import { formatNumber } from '../design-system/formatting'
 
 export const PAGE_SIZES = [25, 50, 100, 200] as const
 export const RAW_UNITS = ['mg', 'g', 'kg', 'ml', 'l', 'pc'] as const
@@ -258,10 +259,7 @@ export function catalogExportPayload(
 }
 
 export function formatDecimal(value: string | null): string {
-  if (value === null) return '—'
-  const [whole, fraction] = value.split('.')
-  const trimmedFraction = fraction?.replace(/0+$/, '')
-  return trimmedFraction ? `${whole},${trimmedFraction}` : whole
+  return formatNumber(value)
 }
 
 export function formatMoney(value: string | null): string {

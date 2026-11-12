@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import DataTable, { type DataTableColumn } from '../design-system/DataTable'
 import {
   CATALOG_COLUMNS,
   formatDecimal,
@@ -7,6 +7,7 @@ import {
   type SortDirection,
   type SortKey,
 } from './catalog'
+import { unitLabel } from './create'
 
 type Props = {
   rows: CatalogRow[]
@@ -54,35 +55,6 @@ export default function CatalogTable({
   onTogglePage,
   onOpenDetail,
 }: Props) {
-  const selectPageRef = useRef<HTMLInputElement>(null)
-  const selectedOnPage = rows.filter((row) => selectedIds.has(row.id)).length
-  const allSelected = rows.length > 0 && selectedOnPage === rows.length
-  const partiallySelected = selectedOnPage > 0 && !allSelected
-
-  useEffect(() => {
-    if (selectPageRef.current) selectPageRef.current.indeterminate = partiallySelected
-  }, [partiallySelected])
-
-  function headerCell(label: string, key: SortKey, permitted = true) {
-    const active = sort === key
-    const ariaSort = active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'
-    return (
-      <th key={key} scope="col" aria-sort={ariaSort}>
-        {permitted ? (
-          <button
-            type="button"
-            className="sort-button"
-            onClick={() => onSort(key)}
-            aria-label={`Sortuj według: ${label}`}
-          >
-            {label}
-            {active && <span aria-hidden="true">{direction === 'asc' ? ' ↑' : ' ↓'}</span>}
-          </button>
-        ) : <span>{label}</span>}
-      </th>
-    )
-  }
-
   function financialValue(
     permitted: boolean | null,
     value: string | null | undefined,
@@ -92,7 +64,6 @@ export default function CatalogTable({
     if (permitted === null) return <span className="muted-value">—</span>
     if (value === undefined) return <span className="restricted-value">Brak danych</span>
     if (value === null) return <span className="muted-value">Brak danych</span>
-
     return (
       <span className="financial-value">
         <span>{formatMoney(value)}</span>
@@ -101,76 +72,75 @@ export default function CatalogTable({
     )
   }
 
+  const columns: Array<DataTableColumn<CatalogRow>> = SORTABLE_COLUMNS.map((column) => {
+    const permitted = column.key === 'reference_net_price'
+      ? canReadReferencePrice === true
+      : column.key === 'usable_unit_cost'
+        ? canReadUsableCost === true
+        : true
+    const active = sort === column.key
+    return {
+      id: column.key,
+      header: column.label,
+      sortKey: column.key,
+      sortDirection: active ? direction : null,
+      sortLabel: `Sortuj według: ${column.label}`,
+      onSort: permitted ? () => onSort(column.key) : undefined,
+      className: `${column.key}-column`,
+      cell: (row) => {
+        switch (column.key) {
+          case 'sku':
+            return <span className="sku-cell">{row.sku}</span>
+          case 'name':
+            return (
+              <button
+                type="button"
+                className="detail-link name-cell"
+                onClick={(event) => onOpenDetail(row.id, event.currentTarget)}
+                disabled={selectionDisabled}
+                aria-label={`Pokaż szczegóły: ${row.name}`}
+              >
+                {row.name}
+              </button>
+            )
+          case 'unit':
+            return unitLabel(row.unit)
+          case 'nominal_quantity':
+            return formatDecimal(row.nominalQuantity)
+          case 'usable_quantity':
+            return formatDecimal(row.usableQuantity)
+          case 'reference_net_price':
+            return financialValue(canReadReferencePrice, row.referencePrice, 'PLN/opak.')
+          case 'usable_unit_cost':
+            return financialValue(canReadUsableCost, row.usableUnitCost, row.usableCostBasis)
+        }
+      },
+    }
+  })
+
   return (
-    <div className="table-scroll" aria-busy={loading}>
-      <table className="catalog-table" aria-label="Katalog surowców">
-        <thead>
-          <tr>
-            <th scope="col" aria-sort="none">
-              <div className="ordinal-heading">
-                <input
-                  ref={selectPageRef}
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={onTogglePage}
-                  disabled={selectionDisabled || rows.length === 0}
-                  aria-label="Zaznacz wszystkie widoczne na tej stronie"
-                />
-                <span>{CATALOG_COLUMNS[0]}</span>
-              </div>
-            </th>
-            {SORTABLE_COLUMNS.map((column) => {
-              const permitted = column.key === 'reference_net_price'
-                ? canReadReferencePrice === true
-                : column.key === 'usable_unit_cost'
-                  ? canReadUsableCost === true
-                  : true
-              return headerCell(column.label, column.key, permitted)
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {loading && rows.length === 0 && (
-            <tr><td className="table-message" colSpan={CATALOG_COLUMNS.length}>Ładowanie katalogu…</td></tr>
-          )}
-          {!loading && rows.length === 0 && (
-            <tr><td className="table-message" colSpan={CATALOG_COLUMNS.length}>{emptyMessage}</td></tr>
-          )}
-          {rows.map((row) => (
-            <tr key={row.id} data-material-id={row.id} aria-selected={selectedIds.has(row.id)}>
-              <td>
-                <div className="ordinal-cell">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(row.id)}
-                    onChange={() => onToggle(row.id)}
-                    disabled={selectionDisabled}
-                    aria-label={`Zaznacz ${row.name}`}
-                  />
-                  <span>{row.ordinal}</span>
-                </div>
-              </td>
-              <td className="sku-cell">{row.sku}</td>
-              <td className="name-cell">
-                <button
-                  type="button"
-                  className="detail-link"
-                  onClick={(event) => onOpenDetail(row.id, event.currentTarget)}
-                  disabled={selectionDisabled}
-                  aria-label={`Pokaż szczegóły: ${row.name}`}
-                >
-                  {row.name}
-                </button>
-              </td>
-              <td>{row.unit}</td>
-              <td>{formatDecimal(row.nominalQuantity)}</td>
-              <td>{formatDecimal(row.usableQuantity)}</td>
-              <td>{financialValue(canReadReferencePrice, row.referencePrice, 'PLN/opak.')}</td>
-              <td>{financialValue(canReadUsableCost, row.usableUnitCost, row.usableCostBasis)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={rows}
+      columns={columns}
+      getRowId={(row) => row.id}
+      ariaLabel="Katalog surowców"
+      loading={loading}
+      loadingMessage="Ładowanie katalogu…"
+      emptyMessage={emptyMessage}
+      stickyHeader
+      updating={loading}
+      wrapperClassName="table-scroll"
+      tableClassName="catalog-table"
+      selection={{
+        selectedIds,
+        disabled: selectionDisabled,
+        headerLabel: 'Zaznacz wszystkie widoczne na tej stronie',
+        rowLabel: (row) => `Zaznacz ${row.name}`,
+        onToggle,
+        onTogglePage,
+        headerContent: <span>{CATALOG_COLUMNS[0]}</span>,
+        cellContent: (row) => <span>{row.ordinal}</span>,
+      }}
+    />
   )
 }

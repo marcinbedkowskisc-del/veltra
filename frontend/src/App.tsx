@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 import AccountLinkForm from './AccountLinkForm'
+import ApplicationShell from './ApplicationShell'
 import AuthPanel, { type AuthContext } from './AuthPanel'
 import { developmentStageLabel } from './config/developmentStage'
 import RawMaterialsCatalogPage from './rawMaterials/RawMaterialsCatalogPage'
@@ -114,26 +115,38 @@ function App() {
     )
   }
 
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <a className="brand-link" href="/" aria-label="VELTRA 2.0 — strona główna">
-          VELTRA <span>2.0</span>
-        </a>
-        <nav className="primary-nav" aria-label="Nawigacja główna">
-          <a href="/" aria-current={isRawMaterialsRoute ? undefined : 'page'}>Start</a>
-          <a href="/raw-materials" aria-current={isRawMaterialsRoute ? 'page' : undefined}>Surowce</a>
-        </nav>
-        <span className="stage-label">{developmentStageLabel}</span>
-      </header>
+  const activeLocation = authContext?.location
+  const contextValue = activeLocation?.name
+    ?? (authContext?.user ? 'Nie wybrano lokalizacji' : 'Zaloguj się, aby wybrać lokalizację')
+  const contextDetail = activeLocation
+    ? `${activeLocation.code} · ${activeLocation.type === 'CENTRAL_KITCHEN' ? 'Kuchnia centralna' : 'Restauracja'}`
+    : undefined
+  const healthLabel = loading
+    ? 'Sprawdzanie backendu'
+    : health?.status === 'ok'
+      ? 'Backend działa'
+      : 'Backend niedostępny'
+  const healthStatus = health?.status ?? (error ? 'down' : 'loading')
 
-      <div className="app-layout">
-        <aside className="app-sidebar" aria-label="Konto i status środowiska">
+  return (
+    <ApplicationShell
+      activePath={isRawMaterialsRoute ? '/raw-materials' : '/'}
+      contexts={[{ label: 'Lokalizacja operacyjna', value: contextValue, detail: contextDetail }]}
+      footerNote={developmentStageLabel}
+      status={(
+        <span className="topbar-health" role="status" aria-live="polite">
+          <span className="status-indicator" data-status={healthStatus} aria-hidden="true" />
+          {healthLabel}
+        </span>
+      )}
+      account={<AuthPanel key={authKey} onContextChange={handleContextChange} />}
+      sidebarFooter={(
+        <details className="sidebar-health">
+          <summary>
+            <span className="status-indicator" data-status={healthStatus} aria-hidden="true" />
+            <span>Status backendu</span>
+          </summary>
           <section className="health-card" aria-label="Status środowiska" aria-live="polite" aria-busy={loading}>
-            <div className="section-heading">
-              <span className="status-indicator" data-status={health?.status ?? (error ? 'down' : 'loading')} aria-hidden="true" />
-              <h2>Status backendu</h2>
-            </div>
             {loading && <p>Sprawdzanie połączenia…</p>}
             {error && <p role="alert" className="error">Backend niedostępny: {error}</p>}
             {health && (
@@ -151,41 +164,38 @@ function App() {
               Sprawdź ponownie
             </button>
           </section>
-          <AuthPanel key={authKey} onContextChange={handleContextChange} />
-        </aside>
-
-        <main className="app-main">
-          {isRawMaterialsRoute ? (
-            authContext?.user ? (
-              authContext.location ? (
-                <RawMaterialsCatalogPage
-                  key={`${authContext.user.id}:${authContext.location.id}`}
-                  operatingLocationId={authContext.location.id}
-                  onSessionExpired={handleSessionExpired}
-                />
-              ) : (
-                <section className="state-panel">
-                  <h1>Wybierz lokalizację operacyjną</h1>
-                  <p>Katalog surowców wymaga aktywnego kontekstu lokalizacji. Wybierz go w panelu konta.</p>
-                </section>
-              )
-            ) : (
-              <section className="state-panel">
-                <h1>Katalog surowców</h1>
-                <p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie w panelu konta.' : 'Zaloguj się i wybierz lokalizację, aby otworzyć katalog.'}</p>
-              </section>
-            )
+        </details>
+      )}
+    >
+      {isRawMaterialsRoute ? (
+        authContext?.user ? (
+          authContext.location ? (
+            <RawMaterialsCatalogPage
+              key={`${authContext.user.id}:${authContext.location.id}`}
+              operatingLocationId={authContext.location.id}
+              onSessionExpired={handleSessionExpired}
+            />
           ) : (
-            <section className="welcome-panel">
-              <p className="eyebrow">OPERACJE • DANE • KONTROLA</p>
-              <h1>Przestrzeń operacyjna VELTRA</h1>
-              <p>Kontrolowany dostęp do danych i procesów operacyjnych.</p>
-              <a className="button button-primary" href="/raw-materials">Otwórz katalog surowców</a>
+            <section className="state-panel">
+              <h1>Wybierz lokalizację operacyjną</h1>
+              <p>Katalog surowców wymaga aktywnego kontekstu lokalizacji. Wybierz go w menu konta.</p>
             </section>
-          )}
-        </main>
-      </div>
-    </div>
+          )
+        ) : (
+          <section className="state-panel">
+            <h1>Katalog surowców</h1>
+            <p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie w menu konta.' : 'Zaloguj się i wybierz lokalizację, aby otworzyć katalog.'}</p>
+          </section>
+        )
+      ) : (
+        <section className="welcome-panel">
+          <p className="eyebrow">OPERACJE • DANE • KONTROLA</p>
+          <h1>Przestrzeń operacyjna VELTRA</h1>
+          <p>Kontrolowany dostęp do danych i procesów operacyjnych.</p>
+          <a className="button button-primary" href="/raw-materials">Otwórz katalog surowców</a>
+        </section>
+      )}
+    </ApplicationShell>
   )
 }
 

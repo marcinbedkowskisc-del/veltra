@@ -11,6 +11,7 @@ import {
   fetchRawMaterialCompletion,
   fetchRawMaterialDetail,
   fetchRawMaterialEditor,
+  fetchRawMaterialReferencePrices,
   fetchRawMaterialRevisions,
   fetchSuppliers,
   reserveRawMaterialSku,
@@ -21,7 +22,7 @@ import {
   type RevisedRawMaterial,
 } from './api'
 import type { CatalogPage, CatalogQuery } from './catalog'
-import type { RawMaterialDetail, RawMaterialRevision } from './detail'
+import type { RawMaterialDetail, RawMaterialReferencePrice, RawMaterialRevision } from './detail'
 
 vi.mock('./api', () => ({
   downloadCatalogExport: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('./api', () => ({
   fetchRawMaterialDetail: vi.fn(),
   fetchRawMaterialCompletion: vi.fn(),
   fetchRawMaterialEditor: vi.fn(),
+  fetchRawMaterialReferencePrices: vi.fn(),
   fetchRawMaterialRevisions: vi.fn(),
   fetchRawMaterialCapabilities: vi.fn(),
   fetchSuppliers: vi.fn(),
@@ -45,7 +47,7 @@ const locationA = '00000000-0000-4000-8000-000000000101'
 const locationB = '00000000-0000-4000-8000-000000000102'
 const detail = (id = materialA, extra: Partial<RawMaterialDetail> = {}): RawMaterialDetail => ({
   id,
-  sku: id === materialA ? 'RM-00001' : 'RM-00002',
+  sku: id === materialA ? 'RAW-000001' : 'RAW-000002',
   lifecycleState: 'ACTIVE',
   approvedRevisionId: `revision-${id}`,
   revision: {
@@ -86,7 +88,7 @@ const revisionHistory: RawMaterialRevision[] = [{
 
 const editableEditor = (id = materialA): RawMaterialEditor => ({
   id,
-  sku: id === materialA ? 'RM-00001' : 'RM-00002',
+  sku: id === materialA ? 'RAW-000001' : 'RAW-000002',
   lifecycleState: 'ACTIVE',
   revisionId: `revision-${id}`,
   revisionNo: 3,
@@ -105,7 +107,7 @@ const editableEditor = (id = materialA): RawMaterialEditor => ({
 
 const revisedMaterial: RevisedRawMaterial = {
   id: materialA,
-  sku: 'RM-00001',
+  sku: 'RAW-000001',
   lifecycleState: 'ACTIVE',
   version: 'next-version',
   revision: { id: 'revision-next', revisionNo: 4 },
@@ -115,7 +117,7 @@ function row(id: string, ordinal: number, extra: Partial<CatalogPage['rows'][num
   return {
     id,
     ordinal,
-    sku: `RM-${String(ordinal).padStart(5, '0')}`,
+    sku: `RAW-${String(ordinal).padStart(6, '0')}`,
     name: `Surowiec ${ordinal}`,
     unit: 'g',
     nominalQuantity: '100.000000',
@@ -153,6 +155,7 @@ const fetchCategoriesMock = vi.mocked(fetchCategories)
 const fetchRawMaterialDetailMock = vi.mocked(fetchRawMaterialDetail)
 const fetchRawMaterialCompletionMock = vi.mocked(fetchRawMaterialCompletion)
 const fetchRawMaterialEditorMock = vi.mocked(fetchRawMaterialEditor)
+const fetchRawMaterialReferencePricesMock = vi.mocked(fetchRawMaterialReferencePrices)
 const fetchRawMaterialRevisionsMock = vi.mocked(fetchRawMaterialRevisions)
 const fetchRawMaterialCapabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
 const fetchSuppliersMock = vi.mocked(fetchSuppliers)
@@ -174,6 +177,7 @@ beforeEach(() => {
     availableActions: [],
   })
   fetchRawMaterialEditorMock.mockRejectedValue(new Error('Brak domyślnej rewizji edytora.'))
+  fetchRawMaterialReferencePricesMock.mockResolvedValue([])
   fetchRawMaterialRevisionsMock.mockResolvedValue(revisionHistory)
   fetchRawMaterialCapabilitiesMock.mockImplementation(async (locationId) => ({
     module: 'RAW_MATERIALS',
@@ -347,7 +351,7 @@ describe('katalog surowców', () => {
       resolveCatalogRefresh = resolve
     }))
     fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
-    const detailDialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    const detailDialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
     const editAction = await within(detailDialog).findByRole('button', { name: 'Edytuj surowiec' })
     fireEvent.click(editAction)
     const editDialog = await screen.findByRole('dialog', { name: 'Edytuj surowiec' })
@@ -414,13 +418,13 @@ describe('katalog surowców', () => {
     )
     await screen.findByText('Surowiec 1')
     fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
-    const detailDialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    const detailDialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
     fireEvent.click(await within(detailDialog).findByRole('button', { name: 'Edytuj surowiec' }))
     await screen.findByRole('dialog', { name: 'Edytuj surowiec' })
 
     rerender(<RawMaterialsCatalogPage onSessionExpired={onSessionExpired} operatingLocationId={locationB} />)
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edytuj surowiec' })).toBeNull())
-    expect(screen.queryByRole('dialog', { name: 'Szczegóły surowca' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Mąka pszenna' })).toBeNull()
     expect(reviseRawMaterialMock).not.toHaveBeenCalled()
     expect(onSessionExpired).not.toHaveBeenCalled()
   })
@@ -499,6 +503,7 @@ describe('katalog surowców', () => {
     const table = await screen.findByRole('table', { name: 'Katalog surowców' })
 
     expect(within(table).getAllByRole('columnheader')).toHaveLength(8)
+    await within(table).findByText('Surowiec 1')
     expect(within(table).getByText('Surowiec 1')).toBeTruthy()
     expect(fetchCatalogMock).toHaveBeenCalledWith(expect.objectContaining({
       sort: 'name',
@@ -530,6 +535,114 @@ describe('katalog surowców', () => {
       expect.objectContaining({ search: 'mąka', page: 1 }),
       expect.any(AbortSignal),
     )
+  })
+
+  it('wyszukuje ze strony drugiej jednym żądaniem i nie podmienia wyników przed debounce', async () => {
+    fetchCatalogMock.mockImplementation(async (query: CatalogQuery) =>
+      page([row(query.page === 1 ? materialA : materialB, query.page)], query.page, 51))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Następna' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Następna' }))
+    await screen.findByText('Surowiec 2')
+    const table = screen.getByRole('table', { name: 'Katalog surowców' })
+    fetchCatalogMock.mockClear()
+    vi.useFakeTimers()
+
+    const search = screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' })
+    fireEvent.change(search, { target: { value: 'mą' } })
+    fireEvent.change(search, { target: { value: 'mąka' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(299) })
+    expect(fetchCatalogMock).not.toHaveBeenCalled()
+    expect(within(table).getByText('Surowiec 2')).toBeTruthy()
+    expect(screen.getByRole('table', { name: 'Katalog surowców' })).toBe(table)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(fetchCatalogMock).toHaveBeenCalledTimes(1)
+    expect(fetchCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ search: 'mąka', page: 1 }),
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('łączy oczekującą frazę z filtrem i X usuwa tylko frazę bez dodatkowego żądania', async () => {
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await screen.findByRole('option', { name: 'Mąki' })
+    fetchCatalogMock.mockClear()
+    const search = screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' })
+    fireEvent.change(search, { target: { value: 'mąka' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    expect(fetchCatalogMock).toHaveBeenCalledTimes(1)
+    expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: 'mąka', categoryId: 'category-1', page: 1 }),
+      expect.any(AbortSignal),
+    )
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 350)) })
+    expect(fetchCatalogMock).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Wyczyść: Szukaj surowca po nazwie lub SKU' }))
+    expect(document.activeElement).toBe(search)
+    expect((search as HTMLInputElement).value).toBe('')
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenCalledTimes(2))
+    expect(fetchCatalogMock).toHaveBeenCalledTimes(2)
+    expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: '', categoryId: 'category-1', page: 1 }),
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('anuluje żądanie przy kolejnych zmianach filtra i ignoruje jego spóźnioną odpowiedź', async () => {
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    let resolveStale: ((result: CatalogPage) => void) | undefined
+    let staleSignal: AbortSignal | undefined
+    fetchCatalogMock
+      .mockImplementationOnce((_query, signal) => {
+        staleSignal = signal
+        return new Promise((resolve) => { resolveStale = resolve })
+      })
+      .mockResolvedValueOnce(page([row(materialB, 2, { name: 'Wynik filtra jednostki' })]))
+    const table = screen.getByRole('table', { name: 'Katalog surowców' })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według statusu' }), { target: { value: 'DRAFT' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według jednostki' }), { target: { value: 'kg' } })
+    expect(staleSignal?.aborted).toBe(true)
+    expect(await screen.findByText('Wynik filtra jednostki')).toBeTruthy()
+    await act(async () => { resolveStale?.(page([row(materialA, 1, { name: 'Nieaktualny filtr' })])) })
+    expect(screen.queryByText('Nieaktualny filtr')).toBeNull()
+    expect(screen.getByRole('table', { name: 'Katalog surowców' })).toBe(table)
+  })
+
+  it('izoluje wiersze i opóźnioną odpowiedź po zmianie klucza kontekstu użytkownika i lokalizacji', async () => {
+    let resolveOld: ((result: CatalogPage) => void) | undefined
+    let resolveNew: ((result: CatalogPage) => void) | undefined
+    let oldSignal: AbortSignal | undefined
+    fetchCatalogMock
+      .mockResolvedValueOnce(page([row(materialA, 1, { name: 'Poprzedni kontekst' })]))
+      .mockImplementationOnce((_query, signal) => {
+        oldSignal = signal
+        return new Promise((resolve) => { resolveOld = resolve })
+      })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve }))
+    const onSessionExpired = vi.fn()
+    const { rerender } = render(
+      <RawMaterialsCatalogPage key={`user-a:${locationA}`} operatingLocationId={locationA} onSessionExpired={onSessionExpired} />,
+    )
+    await screen.findByText('Poprzedni kontekst')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według statusu' }), { target: { value: 'DRAFT' } })
+    expect(oldSignal?.aborted).toBe(false)
+
+    rerender(
+      <RawMaterialsCatalogPage key={`user-b:${locationB}`} operatingLocationId={locationB} onSessionExpired={onSessionExpired} />,
+    )
+    expect(oldSignal?.aborted).toBe(true)
+    expect(screen.queryByText('Poprzedni kontekst')).toBeNull()
+    await act(async () => { resolveOld?.(page([row(materialA, 1, { name: 'Spóźnione dane poprzedniego kontekstu' })])) })
+    expect(screen.queryByText('Spóźnione dane poprzedniego kontekstu')).toBeNull()
+    await act(async () => { resolveNew?.(page([row(materialB, 1, { name: 'Nowy kontekst' })])) })
+    expect(await screen.findByText('Nowy kontekst')).toBeTruthy()
   })
 
   it('pokazuje dostępny wskaźnik podczas bieżącego wyszukiwania bez komunikatu nad tabelą', async () => {
@@ -618,7 +731,7 @@ describe('katalog surowców', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('Nie udało się wczytać katalogu')).toBeTruthy()
+    expect(screen.getByText(/Nie udało się odświeżyć katalogu/)).toBeTruthy()
     expect(document.querySelector('.search-loading-spinner')).toBeNull()
     expect(screen.queryByText('Aktualizowanie wyników wyszukiwania…')).toBeNull()
   })
@@ -656,6 +769,8 @@ describe('katalog surowców', () => {
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
     await screen.findByText('Surowiec 1')
     await screen.findByRole('option', { name: 'Mąki' })
+    const catalogElement = document.querySelector('.catalog-page')
+    const tableElement = document.querySelector('.table-scroll')
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
       target: { value: 'category-1' },
@@ -664,6 +779,8 @@ describe('katalog surowców', () => {
       expect.objectContaining({ categoryId: 'category-1' }),
       expect.any(AbortSignal),
     ))
+    expect(document.querySelector('.catalog-page')).toBe(catalogElement)
+    expect(document.querySelector('.table-scroll')).toBe(tableElement)
 
     const resetButton = screen.getByRole('button', { name: 'Wyczyść filtry' })
     expect(resetButton.tagName).toBe('BUTTON')
@@ -676,6 +793,8 @@ describe('katalog surowców', () => {
     expect((screen.getByRole('combobox', {
       name: 'Filtruj według kategorii',
     }) as HTMLSelectElement).value).toBe('')
+    expect(document.querySelector('.catalog-page')).toBe(catalogElement)
+    expect(document.querySelector('.table-scroll')).toBe(tableElement)
 
     const requestCount = fetchCatalogMock.mock.calls.length
     fireEvent.click(resetButton)
@@ -716,6 +835,9 @@ describe('katalog surowców', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Szukaj surowca po nazwie lub SKU' }), {
       target: { value: 'mąka' },
     })
+    vi.useFakeTimers()
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    vi.useRealTimers()
 
     await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -730,6 +852,7 @@ describe('katalog surowców', () => {
       }),
       expect.any(AbortSignal),
     ))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Następna' }) as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'Następna' }))
     await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ page: 2, sort: 'sku', direction: 'desc' }),
@@ -754,7 +877,7 @@ describe('katalog surowców', () => {
       name: 'Szukaj surowca po nazwie lub SKU',
     }) as HTMLInputElement).value).toBe('')
     expect((screen.getByRole('searchbox', { name: 'Dostawca' }) as HTMLInputElement).value).toBe('')
-    expect(screen.getByText('Strona 1 z 3')).toBeTruthy()
+    await screen.findByText('Strona 1 z 3')
   })
 
   it('anuluje stare żądanie katalogu, aby jego odpowiedź nie nadpisała wyników po resecie', async () => {
@@ -787,6 +910,45 @@ describe('katalog surowców', () => {
     expect(screen.getByText('Nowy wynik')).toBeTruthy()
   })
 
+  it('zachowuje poprzednie wiersze i kontener podczas pobierania nowych wyników filtra', async () => {
+    let resolveRefresh: ((result: CatalogPage) => void) | undefined
+    fetchCatalogMock
+      .mockResolvedValueOnce(page())
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve }))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    await screen.findByRole('option', { name: 'Mąki' })
+    const tableViewport = document.querySelector('.table-scroll')
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('Surowiec 1')).toBeTruthy()
+    expect(screen.getByText('Aktualizowanie wyników…')).toBeTruthy()
+    expect(document.querySelector('.table-scroll')).toBe(tableViewport)
+
+    await act(async () => { resolveRefresh?.(page([row(materialB, 2, { name: 'Nowy wynik' })])) })
+    expect(await screen.findByText('Nowy wynik')).toBeTruthy()
+    expect(document.querySelector('.table-scroll')).toBe(tableViewport)
+  })
+
+  it('dopasowuje tabelę do faktycznych wierszy i umieszcza paginację bezpośrednio pod nią', async () => {
+    fetchCatalogMock.mockResolvedValue(page([
+      row(materialA, 1),
+      row(materialB, 2),
+    ], 1, 2))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+
+    const table = await screen.findByRole('table', { name: 'Katalog surowców' })
+    await within(table).findByText('Surowiec 2')
+    expect(within(table).getAllByRole('row')).toHaveLength(3)
+    const tableContainer = table.parentElement
+    const pagination = screen.getByRole('navigation', { name: 'Stronicowanie katalogu' })
+    expect(tableContainer?.nextElementSibling).toBe(pagination)
+    expect(tableContainer?.getAttribute('style') ?? '').not.toMatch(/height|min-height/)
+  })
+
   it('sortuje przez nowe żądania serwerowe, bez lokalnego sortowania strony', async () => {
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
     await screen.findByText('Surowiec 1')
@@ -814,6 +976,63 @@ describe('katalog surowców', () => {
       expect.objectContaining({ perPage: 50, page: 1 }),
       expect.any(AbortSignal),
     ))
+  })
+
+  it('utrzymuje paginację zgodną z wyświetlonymi wynikami podczas zmiany rozmiaru strony', async () => {
+    let resolveRefresh: ((result: CatalogPage) => void) | undefined
+    fetchCatalogMock
+      .mockResolvedValueOnce(page([row(materialA, 1)], 1, 51))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve }))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    expect(screen.getByText('Strona 1 z 3')).toBeTruthy()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Liczba wierszy na stronę' }), {
+      target: { value: '50' },
+    })
+    expect(screen.getByText('Strona 1 z 3')).toBeTruthy()
+    const updated = page([row(materialB, 1)], 1, 51)
+    updated.meta.perPage = 50
+    updated.meta.lastPage = 2
+    await act(async () => { resolveRefresh?.(updated) })
+    expect(await screen.findByText('Strona 1 z 2')).toBeTruthy()
+  })
+
+  it('pokazuje polską etykietę sztuki i pozwala przejść bezpośrednio do numeru strony', async () => {
+    fetchCatalogMock.mockImplementation(async (query: CatalogQuery) => page(
+      [row(materialA, query.page, { name: `Surowiec ${query.page}`, unit: 'pc' })],
+      query.page,
+      300,
+    ))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+
+    expect(within(screen.getByRole('row', { name: /Surowiec 1/ })).getByText('szt. — sztuka')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Sortuj według: SKU' }))
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'sku', direction: 'asc' }),
+      expect.any(AbortSignal),
+    ))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według kategorii' }), {
+      target: { value: 'category-1' },
+    })
+    await waitFor(() => expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ categoryId: 'category-1', sort: 'sku', direction: 'asc' }),
+      expect.any(AbortSignal),
+    ))
+
+    expect(screen.getByRole('button', { name: 'Przejdź do strony 5' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Przejdź do strony 12' })).toBeTruthy()
+    expect(screen.getByText('…')).toBeTruthy()
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Przejdź do strony 5' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Przejdź do strony 5' }))
+
+    expect(await screen.findByText('Surowiec 5')).toBeTruthy()
+    expect(fetchCatalogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 5, perPage: 25, categoryId: 'category-1', sort: 'sku', direction: 'asc' }),
+      expect.any(AbortSignal),
+    )
+    expect(screen.getByRole('button', { name: 'Przejdź do strony 5' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText('Strona 5 z 12')).toBeTruthy()
   })
 
   it('zachowuje zaznaczenie przez strony, a zaznacz wszystko obejmuje tylko bieżącą stronę', async () => {
@@ -975,27 +1194,90 @@ describe('katalog surowców', () => {
     await waitFor(() => expect(onSessionExpired).toHaveBeenCalledTimes(1))
   })
 
+  it('ładuje istniejącą historię cen wyłącznie przy przyznanym uprawnieniu', async () => {
+    fetchCatalogMock.mockResolvedValue(page([row(materialA, 1)], 1, 1, {
+      canReadReferencePrice: true,
+      canReadUsableCost: false,
+    }))
+    const prices: RawMaterialReferencePrice[] = [{
+      id: 'price-event-1',
+      eventNo: 2,
+      eventType: 'PRICE_SET',
+      effectiveFrom: '2025-02-01',
+      netPlnPerBaseUnit: '12.50000000',
+      netPlnPerPackage: '25.00000000',
+      currencyCode: 'PLN',
+    }, {
+      id: 'price-event-2',
+      eventNo: 1,
+      eventType: 'PRICE_SET',
+      effectiveFrom: '2025-01-01',
+      netPlnPerBaseUnit: '10.00000000',
+      netPlnPerPackage: '20.00000000',
+      currencyCode: 'PLN',
+    }]
+    fetchRawMaterialReferencePricesMock.mockResolvedValue(prices)
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
+    expect(await within(dialog).findByRole('img', { name: /Historia cen netto w PLN/ })).toBeTruthy()
+    expect(within(dialog).getByText('Historia cen')).toBeTruthy()
+    expect(fetchRawMaterialReferencePricesMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal))
+  })
+
   it('otwiera panel zatwierdzonego snapshotu i historii bez zmiany zaznaczenia', async () => {
+    fetchCatalogMock.mockResolvedValue(page(
+      [row(materialA, 1)],
+      1,
+      25,
+      { canReadReferencePrice: true, canReadUsableCost: true },
+    ))
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
     await screen.findByText('Surowiec 1')
     fireEvent.click(screen.getByRole('checkbox', { name: 'Zaznacz Surowiec 1' }))
     const trigger = screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })
     fireEvent.click(trigger)
 
-    const dialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
     expect(await within(dialog).findByText('Opis zatwierdzonego snapshotu.')).toBeTruthy()
-    expect(within(dialog).getByText('v3 · zatwierdzona, obowiązująca')).toBeTruthy()
+    expect(dialog.querySelector('#detail-identity-title')?.closest('.detail-section')?.classList.contains('detail-section-wide')).toBe(false)
+    expect(dialog.querySelector('#detail-quantities-title')?.closest('.detail-section')?.classList.contains('detail-section-wide')).toBe(false)
+    expect(dialog.querySelector('#detail-prices-title')?.closest('.detail-section')?.classList.contains('detail-section-wide')).toBe(true)
+    expect(dialog.querySelector('.detail-content')?.children).toHaveLength(3)
+    await waitFor(() => expect(dialog.closest('.ui-drawer-backdrop')?.classList.contains('is-open')).toBe(true))
+    expect(within(dialog).getByText('Wersja 3 — zatwierdzona i obowiązująca')).toBeTruthy()
     expect(within(dialog).getByText('Mąki')).toBeTruthy()
     expect(within(dialog).getByText('123,45 PLN')).toBeTruthy()
     expect(within(dialog).getByText('15,43 PLN/100g')).toBeTruthy()
-    expect(await within(dialog).findByText(/Mąka pszenna — poprzednia/)).toBeTruthy()
     expect(fetchRawMaterialDetailMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal))
     expect(fetchRawMaterialRevisionsMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal))
-    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Zamknij szczegóły surowca' }))
+    const closeButton = within(dialog).getByRole('button', { name: 'Zamknij szczegóły surowca' })
+    expect(document.activeElement).toBe(closeButton)
+    expect(dialog.closest('.ui-drawer-backdrop')?.classList.contains('is-open')).toBe(true)
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    )
+    expect(focusable.length).toBeGreaterThan(1)
+    focusable[0].focus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(focusable[focusable.length - 1])
+    focusable[focusable.length - 1].focus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(document.activeElement).toBe(focusable[0])
 
+    expect(document.body.style.overflow).toBe('hidden')
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Historia zmian' }))
+    expect(await within(dialog).findByText('Wersja 2 · Mąka pszenna — poprzednia')).toBeTruthy()
+    expect(within(dialog).getByRole('heading', { name: 'Historia zmian' })).toBeTruthy()
     fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Mąka pszenna' })).toBeTruthy()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(document.activeElement).toBe(trigger)
+    expect(document.body.style.overflow).toBe('')
     expect(screen.getByText('Zaznaczono: 1')).toBeTruthy()
   })
 
@@ -1015,8 +1297,25 @@ describe('katalog surowców', () => {
     expect(await within(dialog).findByText('Opis zatwierdzonego snapshotu.')).toBeTruthy()
     expect(within(dialog).queryByText('Cena netto')).toBeNull()
     expect(within(dialog).queryByText('Koszt jednostkowy')).toBeNull()
-    expect(within(dialog).getByText('Historia rewizji nie jest dostępna w bieżącym zakresie uprawnień.')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Historia zmian' }))
+    expect(within(dialog).getByText('Historia zmian nie jest dostępna w bieżącym zakresie uprawnień.')).toBeTruthy()
     expect(fetchRawMaterialRevisionsMock).not.toHaveBeenCalled()
+    expect(fetchRawMaterialReferencePricesMock).not.toHaveBeenCalled()
+  })
+
+  it('czyści cenę szczegółów po cofnięciu uprawnienia do historii cen', async () => {
+    fetchCatalogMock.mockResolvedValue(page([row(materialA, 1, {
+      referencePrice: '12.5',
+    })], 1, 25, { canReadReferencePrice: true, canReadUsableCost: true }))
+    fetchRawMaterialReferencePricesMock.mockRejectedValue(new ApiError(403, 'Brak dostępu.'))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
+    await screen.findByText('Surowiec 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
+    expect(await within(dialog).findByText('Historia cen nie jest dostępna w bieżącym kontekście.')).toBeTruthy()
+    expect(within(dialog).queryByText('Cena netto')).toBeNull()
+    expect(within(dialog).queryByText('12,50 PLN')).toBeNull()
   })
 
   it('czyści szczegóły po 403 i zachowuje wyłącznie stan odmowy dostępu', async () => {
@@ -1048,8 +1347,10 @@ describe('katalog surowców', () => {
     await screen.findByText('Surowiec 1')
     fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
 
-    const dialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
-    expect(await within(dialog).findByText('Historia rewizji nie jest dostępna w bieżącym kontekście.')).toBeTruthy()
+    const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Historia zmian' }))
+    expect(await within(dialog).findByText('Historia zmian nie jest dostępna w bieżącym kontekście.')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Przegląd' }))
     expect(within(dialog).getByText('Opis zatwierdzonego snapshotu.')).toBeTruthy()
     expect(within(dialog).queryByText(/Mąka pszenna — poprzednia/)).toBeNull()
   })
@@ -1104,8 +1405,9 @@ describe('katalog surowców', () => {
     render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} />)
     await screen.findByText('Surowiec 1')
     fireEvent.click(screen.getByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Szczegóły surowca' })
+    const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
     await within(dialog).findByText('Opis zatwierdzonego snapshotu.')
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Historia zmian' }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Zamknij szczegóły surowca' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 

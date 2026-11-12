@@ -25,7 +25,7 @@ const query: CatalogQuery = {
 function row(financial: Record<string, unknown> = {}) {
   return {
     id: 'material-1',
-    sku: 'RM-00001',
+    sku: 'RAW-000001',
     ordinal: 1,
     nominal_quantity: '100.000000',
     usable_quantity: '82.500000',
@@ -83,7 +83,7 @@ describe('kontrakt katalogu RAW', () => {
     expect(result.rows[0]).toMatchObject({
       id: 'material-1',
       ordinal: 1,
-      sku: 'RM-00001',
+      sku: 'RAW-000001',
       name: 'Mąka pszenna',
       unit: 'g',
       nominalQuantity: '100.000000',
@@ -110,7 +110,7 @@ describe('kontrakt katalogu RAW', () => {
   it('nie udostępnia pól finansowych przy niespójnej odpowiedzi i nie określa dostępu przy pustej stronie', () => {
     const inconsistent = parseCatalogEnvelope(envelope([
       row({ reference_net_price: '20.00', currency_code: 'PLN' }),
-      { ...row(), id: 'material-2', sku: 'RM-00002', ordinal: 2 },
+      { ...row(), id: 'material-2', sku: 'RAW-000002', ordinal: 2 },
     ]))
     expect(inconsistent.canReadReferencePrice).toBe(false)
     expect(inconsistent.rows.every((item) => !Object.hasOwn(item, 'referencePrice'))).toBe(true)

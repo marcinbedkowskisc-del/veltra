@@ -87,7 +87,7 @@ const names = [
 const seedProducts = names.map<DemoProduct>((name, index) => ({
   id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
   ordinal: index + 1,
-  sku: `RM-${String(index + 1).padStart(5, '0')}`,
+  sku: `RAW-${String(index + 1).padStart(6, '0')}`,
   lifecycle_state: 'ACTIVE',
   nominal_quantity: `${(250 + index * 25).toFixed(6)}`,
   usable_quantity: `${(240 + index * 24).toFixed(6)}`,
@@ -364,6 +364,28 @@ function revisionsResponse(materialId: string, products: DemoProduct[]): Respons
   ] })
 }
 
+function referencePricesResponse(materialId: string, mode: PreviewMode, products: DemoProduct[]): Response {
+  if (mode === 'detail-forbidden' || mode === 'restricted' || mode === 'view-only') {
+    return jsonResponse({ message: 'Brak dostępu.' }, 403)
+  }
+  const product = products.find((item) => item.id === materialId)
+  if (!product) return jsonResponse({ message: 'Nie znaleziono surowca.' }, 404)
+
+  const currentPrice = Number(product.reference_net_price)
+  const values = [currentPrice * 0.88, currentPrice * 0.94, currentPrice * 0.91, currentPrice]
+  const events = values.map((price, index) => ({
+    id: revisionId(product.ordinal, index + 10),
+    event_no: index + 1,
+    event_type: 'PRICE_SET',
+    effective_from: ['2024-08-01', '2024-11-01', '2025-01-15', '2025-03-01'][index],
+    net_pln_per_base_unit: price.toFixed(6),
+    net_pln_per_package: (price * 2.5).toFixed(6),
+    currency_code: 'PLN',
+    reason_code: 'DEMO',
+  })).reverse()
+  return jsonResponse({ data: events })
+}
+
 function canEditProduct(mode: PreviewMode, product: DemoProduct): boolean {
   const globalEdit = ['authorized', 'version-conflict', 'record-unavailable', 'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-noneditable'].includes(mode)
   const editableLifecycle = product.lifecycle_state === 'DRAFT' || product.lifecycle_state === 'ACTIVE'
@@ -541,6 +563,10 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
     const revisionPath = url.pathname.match(/^\/api\/v1\/raw-materials\/([^/]+)\/revisions$/)
     if (revisionPath && method === 'GET') {
       return revisionsResponse(decodeURIComponent(revisionPath[1]), products)
+    }
+    const referencePricesPath = url.pathname.match(/^\/api\/v1\/raw-materials\/([^/]+)\/reference-prices$/)
+    if (referencePricesPath && method === 'GET') {
+      return referencePricesResponse(decodeURIComponent(referencePricesPath[1]), mode, products)
     }
     if (url.pathname === '/api/v1/raw-materials/categories' && method === 'GET') {
       return jsonResponse({ data: [
@@ -751,7 +777,7 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
       } })
     }
     if (url.pathname.endsWith('/download') && method === 'GET') {
-      return new Response('sku,name\nRM-00001,Mąka pszenna typ 550\n', {
+      return new Response('sku,name\nRAW-000001,Mąka pszenna typ 550\n', {
         headers: {
           'Content-Type': 'text/csv; charset=utf-8',
           'Content-Disposition': 'attachment; filename="demo-katalog.csv"',

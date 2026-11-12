@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildRawMaterialCreatePayload,
+  conversionBasisHint,
+  conversionFactorHint,
   emptyRawMaterialCreateValues,
   validateRawMaterialCreate,
 } from './create'
@@ -12,6 +14,12 @@ const validValues = () => ({
 })
 
 describe('walidacja formularza tworzenia surowca', () => {
+  it('pokazuje przykłady przeliczników dopasowane do wybranych jednostek', () => {
+    expect(conversionFactorHint('pc', 'g', '')).toContain('1 sztuka waży 180 g')
+    expect(conversionFactorHint('ml', 'g', '')).toContain('1 mililitr tego surowca waży 1,05 g')
+    expect(conversionBasisHint('pc', 'g', '180')).toContain('1 sztuka waży 180 g')
+  })
+
   it('wymaga kategorii i nazwy oraz odrzuca zbyt długie wartości', () => {
     const errors = validateRawMaterialCreate({
       ...emptyRawMaterialCreateValues(),

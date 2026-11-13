@@ -116,7 +116,7 @@ describe('fetchRawMaterialCapabilities', () => {
         readiness: 'READY',
         available: true,
         permissions: { create: true, edit: true },
-        actions: { create: true, edit: true },
+        actions: { create: true, edit: true, edit_allergens: true, create_and_approve: true },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -127,7 +127,7 @@ describe('fetchRawMaterialCapabilities', () => {
       readiness: 'READY',
       available: true,
       permissions: { create: true, edit: true },
-      actions: { create: true, edit: true },
+      actions: { create: true, edit: true, editAllergens: true, createAndApprove: true },
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/security/raw-materials/capabilities',
@@ -143,7 +143,7 @@ describe('fetchRawMaterialCapabilities', () => {
         readiness: 'NOT_READY',
         available: false,
         permissions: { create: false, edit: true },
-        actions: { create: false, edit: false },
+        actions: { create: false, edit: false, edit_allergens: false, create_and_approve: false },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
 
@@ -151,7 +151,7 @@ describe('fetchRawMaterialCapabilities', () => {
       readiness: 'NOT_READY',
       available: false,
       permissions: { create: false, edit: true },
-      actions: { create: false, edit: false },
+      actions: { create: false, edit: false, editAllergens: false, createAndApprove: false },
     })
   })
 
@@ -166,7 +166,7 @@ describe('fetchRawMaterialCapabilities', () => {
       readiness: 'READY',
       available: true,
       permissions: { create: true, edit: true },
-      actions: { create: true, edit: true },
+      actions: { create: true, edit: true, edit_allergens: true, create_and_approve: true },
       ...override,
     }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: value }), {

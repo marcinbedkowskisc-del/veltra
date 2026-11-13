@@ -6,6 +6,8 @@ import {
   fetchRawMaterialCapabilities,
   fetchRawMaterialCompletion,
   fetchRawMaterialEditor,
+  fetchAllergenDeclaration,
+  fetchAllergenCatalogs,
   reviseRawMaterial,
   type RawMaterialCapabilities,
   type RawMaterialCompletion,
@@ -13,10 +15,13 @@ import {
   type RevisedRawMaterial,
 } from './api'
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api')>(),
   fetchRawMaterialCapabilities: vi.fn(),
   fetchRawMaterialCompletion: vi.fn(),
   fetchRawMaterialEditor: vi.fn(),
+  fetchAllergenDeclaration: vi.fn(),
+  fetchAllergenCatalogs: vi.fn(),
   reviseRawMaterial: vi.fn(),
 }))
 
@@ -102,6 +107,49 @@ afterEach(() => {
 })
 
 describe('formularz edycji surowca', () => {
+  it('zachowuje dane zakładek i zapisuje zmienione alergeny razem z rewizją', async () => {
+    const catalogId = '00000000-0000-4000-8000-000000000406'
+    completionMock.mockResolvedValue({ ...makeCompletion(), availableActions: ['edit', 'edit_allergens'] })
+    vi.mocked(fetchAllergenDeclaration).mockResolvedValue({
+      version, declaration: { status: 'UNKNOWN', catalog_version_id: null, items: [] },
+    })
+    vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: catalogId, versionNumber: 1, definitions: [] }])
+    renderForm()
+    await screen.findByRole('heading', { name: 'Edytuj surowiec' })
+    fireEvent.change(screen.getByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
+    await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
+    fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
+    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: catalogId } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
+    expect(screen.getByLabelText<HTMLTextAreaElement>(/Opis.*Pozostawienie/).value).toBe('Opis zachowany')
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock).toHaveBeenCalledWith(materialId, expect.objectContaining({
+      name: 'Nowa nazwa', description: 'Opis zachowany',
+      allergen_declaration: { status: 'NO_KNOWN_ALLERGENS', catalog_version_id: catalogId, items: [] },
+    }), version)
+  })
+
+  it('pokazuje ilości bez zbędnych zer i zapisuje pełną precyzję', async () => {
+    const editor = makeEditor()
+    editor.values.nominalQuantity = '125.500000'
+    editor.values.usableQuantity = '0.750000'
+    editorMock.mockResolvedValue(editor)
+    renderForm()
+
+    await screen.findByDisplayValue('125,5')
+    expect(screen.getByLabelText<HTMLInputElement>('Użytkowa').value).toBe('0,75')
+    fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '0,123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock).toHaveBeenCalledWith(materialId, expect.objectContaining({
+      nominal_quantity: '125.5',
+      usable_quantity: '0.123456',
+    }), version)
+  })
+
   it('wymaga obu uprawnień przed pobraniem edytora i zachowuje pełny payload przy jawnym czyszczeniu pól', async () => {
     const onSaved = vi.fn()
     renderForm({ onSaved })
@@ -111,7 +159,12 @@ describe('formularz edycji surowca', () => {
     expect(screen.getByText('RAW-000401')).toBeTruthy()
     expect(screen.queryByLabelText('SKU')).toBeNull()
     expect(screen.queryByLabelText('Identyfikator surowca')).toBeNull()
+    expect(screen.queryByText(materialId)).toBeNull()
+    expect(screen.queryByText(revisionId)).toBeNull()
+    expect(screen.getByLabelText<HTMLInputElement>('Nominalna').value).toBe('10')
+    expect(screen.getByLabelText<HTMLInputElement>('Użytkowa').value).toBe('8')
     expect(editorMock).toHaveBeenCalledWith(materialId, expect.any(AbortSignal))
+    fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
     expect(screen.getByText(/nazwy, pod którymi pracownicy mogą szukać/)).toBeTruthy()
     expect(screen.getByText(/jeśli 1 sztuka waży 2\.500000 kg/)).toBeTruthy()
     expect(screen.getByLabelText('Przelicznik').getAttribute('aria-describedby'))
@@ -132,8 +185,8 @@ describe('formularz edycji surowca', () => {
       name: 'Mąka pszenna',
       description: null,
       base_unit_code: 'kg',
-      nominal_quantity: '10.000000',
-      usable_quantity: '8.000000',
+      nominal_quantity: '10',
+      usable_quantity: '8',
       aliases: [],
       conversions: [],
     }, version)

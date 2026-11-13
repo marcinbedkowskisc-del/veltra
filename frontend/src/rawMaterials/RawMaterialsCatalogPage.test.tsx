@@ -25,7 +25,8 @@ import {
 import type { CatalogPage, CatalogQuery } from './catalog'
 import type { RawMaterialDetail, RawMaterialReferencePrice, RawMaterialRevision } from './detail'
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api')>(),
   downloadCatalogExport: vi.fn(),
   exportCatalog: vi.fn(),
   fetchCatalog: vi.fn(),
@@ -303,6 +304,26 @@ describe('katalog surowców', () => {
     expect(await screen.findByRole('dialog', { name: 'Dodaj surowiec' })).toBeTruthy()
     expect(fetchRawMaterialCapabilitiesMock).toHaveBeenCalledTimes(2)
     expect(fetchCategoriesMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('po utworzeniu szkicu otwiera jego robocze szczegóły w odpowiednim widoku', async () => {
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS', locationId: locationA, readiness: 'READY', available: true,
+      permissions: { create: true, edit: true }, actions: { create: true, edit: true },
+    })
+    reserveRawMaterialSkuMock.mockResolvedValue({
+      reservationId: materialB, sku: 'RAW-000001', expiresAt: '2026-11-13T12:00:00Z', status: 'RESERVED',
+    })
+    createRawMaterialMock.mockResolvedValue({ id: materialA, sku: 'RAW-000001', lifecycleState: 'DRAFT' })
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj surowiec' }))
+    const form = await screen.findByRole('dialog', { name: 'Dodaj surowiec' })
+    fireEvent.change(within(form).getByLabelText(/Kategoria/), { target: { value: 'category-1' } })
+    fireEvent.change(within(form).getByLabelText(/Nazwa surowca/), { target: { value: 'Szkic testowy' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'Utwórz szkic' }))
+    fireEvent.click(await within(form).findByRole('button', { name: 'Otwórz szczegóły' }))
+    await waitFor(() => expect(fetchRawMaterialDetailMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal), true))
+    expect(screen.getByRole('tab', { name: 'Szkice i oczekujące' }).getAttribute('aria-selected')).toBe('true')
   })
 
   it('zamyka akcję fail-closed, jeśli świeże capabilities przed formularzem odmawia CREATE', async () => {

@@ -20,6 +20,7 @@ use App\Http\Requests\RawMaterialBulkShareMaterialsRequest;
 use App\Http\Requests\RawMaterialCategoryRenameRequest;
 use App\Http\Requests\RawMaterialCategoryRequest;
 use App\Http\Requests\RawMaterialCompatibilityAssessmentRequest;
+use App\Http\Requests\RawMaterialCreateApprovedRequest;
 use App\Http\Requests\RawMaterialDataRequest;
 use App\Http\Requests\RawMaterialExchangeRateOverrideRequest;
 use App\Http\Requests\RawMaterialExchangeRateQueryRequest;
@@ -565,6 +566,15 @@ class RawMaterialController extends Controller
     public function store(RawMaterialDataRequest $request, RawMaterialService $service): JsonResponse
     {
         return response()->json(['data' => $service->create(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $request->validated(),
+        )], 201);
+    }
+
+    public function storeApproved(RawMaterialCreateApprovedRequest $request, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->createApproved(
             $request->user(),
             $request->attributes->get('operating_location'),
             $request->validated(),

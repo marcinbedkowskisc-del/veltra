@@ -754,6 +754,22 @@ Wylacznie po osobnym zatwierdzeniu wlasciciela przygotowano w bazie
 `veltra_stage6a1` jeden opublikowany katalog **TEST Stage 6A.4**, z definicjami
 `TEST_WHEAT` i `TEST_MILK`. To dane testowe, nie katalog do eksploatacji.
 
+### Stage 6A.5: formularze i laczne zatwierdzanie RAW
+
+Formularze CREATE i EDIT maja zakladki danych podstawowych, alergenow
+i informacji dodatkowych. Deklaracje mozna zapisac wraz z danymi rewizji,
+jesli uzytkownik ma efektywne `RAW_MATERIALS_ALLERGEN_MANAGE`.
+Niezmieniona deklaracja pozostaje zachowana przez istniejace wersjonowanie.
+
+`POST /api/v1/raw-materials/create-approved` laczy utworzenie, przekazanie
+i zatwierdzenie w jednej transakcji. Wymaga rezerwacji SKU, jawnej kompletnej
+deklaracji alergenow, roli ADMINISTRATOR oraz efektywnych grantow CREATE,
+ALLERGEN_MANAGE, SUBMIT i APPROVE w prawidlowym kontekscie lokalizacji glownej.
+Backend ponownie sprawdza te warunki; samo widoczne dzialanie interfejsu nie
+jest autoryzacja. Ponowienie uzywa tej samej rezerwacji i danych; wynik zostaje
+zapamietany tylko po powodzeniu calej transakcji. Pozostali uzytkownicy
+korzystaja z istniejacego procesu szkicu. Globalny stan RAW pozostaje NOT_READY.
+
 ## Stage 1D: zakresy i macierz rol
 
 Kazde zadanie wymaga aktywnego, zweryfikowanego konta oraz jawnego aktywnego

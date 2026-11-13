@@ -13,6 +13,7 @@ class RawMaterialAllergenDeclarationRequest extends InstallationRequest
             'status' => ['required', Rule::in(['UNKNOWN', 'DECLARED', 'NO_KNOWN_ALLERGENS'])],
             'catalog_version_id' => ['nullable', 'required_if:status,DECLARED', 'required_if:status,NO_KNOWN_ALLERGENS', 'uuid'],
             'items' => ['sometimes', 'array', 'max:80'],
+            'items.*' => ['array:allergen_code,exposure_kind'],
             'items.*.allergen_code' => ['required', 'string', 'max:40', 'regex:/^[A-Z][A-Z0-9_-]{0,39}$/D', 'distinct'],
             'items.*.exposure_kind' => ['required', Rule::in(['DIRECT', 'CROSS_CONTACT_POTENTIAL'])],
         ];

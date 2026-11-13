@@ -52,6 +52,7 @@ use Tests\Concerns\RawCatalogStage3eB1Tests;
 use Tests\Concerns\RawDocumentsStage3eB3Tests;
 use Tests\Concerns\RawDraftTombstoneTests;
 use Tests\Concerns\RawEditingStage3eB2Tests;
+use Tests\Concerns\RawFormWorkflowTests;
 use Tests\Concerns\RawWorkbenchTests;
 use Tests\Support\ModuleCatalogFixtures;
 
@@ -61,6 +62,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     use RawDocumentsStage3eB3Tests;
     use RawDraftTombstoneTests;
     use RawEditingStage3eB2Tests;
+    use RawFormWorkflowTests;
     use RawWorkbenchTests;
 
     private Location $location;

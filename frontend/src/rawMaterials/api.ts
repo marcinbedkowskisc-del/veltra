@@ -35,7 +35,7 @@ export type RawMaterialCapabilities = {
   readiness: 'READY' | 'NOT_READY'
   available: boolean
   permissions: { create: boolean; edit: boolean }
-  actions: { create: boolean; edit: boolean }
+  actions: { create: boolean; edit: boolean; editAllergens?: boolean; createAndApprove?: boolean }
 }
 
 export type RawMaterialSkuReservation = {
@@ -48,7 +48,7 @@ export type RawMaterialSkuReservation = {
 export type CreatedRawMaterial = {
   id: string
   sku: string
-  lifecycleState: 'DRAFT'
+  lifecycleState: 'DRAFT' | 'ACTIVE'
 }
 
 export type RawMaterialCompletion = {
@@ -83,6 +83,7 @@ export type RawMaterialEditPayload = {
     basis?: string
   }>
   change_reason?: string
+  allergen_declaration?: AllergenDeclaration
 }
 
 export type RevisedRawMaterial = {
@@ -116,17 +117,17 @@ function parseSkuReservation(value: unknown): RawMaterialSkuReservation {
   }
 }
 
-function parseCreatedRawMaterial(value: unknown): CreatedRawMaterial {
+function parseCreatedRawMaterial(value: unknown, approved = false): CreatedRawMaterial {
   if (!isRecord(value) || typeof value.id !== 'string' || !UUID.test(value.id)
     || typeof value.code !== 'string' || !RAW_SKU.test(value.code)
-    || value.sku !== value.code || value.lifecycle_state !== 'DRAFT') {
+    || value.sku !== value.code || value.lifecycle_state !== (approved ? 'ACTIVE' : 'DRAFT')) {
     throw new Error('Backend zwrócił nieprawidłowe potwierdzenie utworzenia surowca.')
   }
 
   return {
     id: value.id,
     sku: value.code,
-    lifecycleState: 'DRAFT',
+    lifecycleState: approved ? 'ACTIVE' : 'DRAFT',
   }
 }
 
@@ -139,9 +140,13 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     || typeof value.permissions.edit !== 'boolean'
     || !isRecord(value.actions) || typeof value.actions.create !== 'boolean'
     || typeof value.actions.edit !== 'boolean'
+    || typeof value.actions.edit_allergens !== 'boolean'
+    || typeof value.actions.create_and_approve !== 'boolean'
     || (value.available && value.readiness !== 'READY')
     || (value.actions.create && (!value.permissions.create || !value.available))
-    || (value.actions.edit && (!value.permissions.edit || !value.available))) {
+    || (value.actions.edit && (!value.permissions.edit || !value.available))
+    || (value.actions.edit_allergens && !value.available)
+    || (value.actions.create_and_approve && (!value.actions.create || !value.actions.edit_allergens))) {
     throw new Error('Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.')
   }
 
@@ -151,7 +156,8 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     readiness: value.readiness,
     available: value.available,
     permissions: { create: value.permissions.create, edit: value.permissions.edit },
-    actions: { create: value.actions.create, edit: value.actions.edit },
+    actions: { create: value.actions.create, edit: value.actions.edit,
+      editAllergens: value.actions.edit_allergens, createAndApprove: value.actions.create_and_approve },
   }
 }
 
@@ -366,6 +372,17 @@ export type AllergenDeclaration = {
   items: Array<{ allergen_code: string; exposure_kind: 'DIRECT' | 'CROSS_CONTACT_POTENTIAL' }>
 }
 
+export const unknownAllergens = (): AllergenDeclaration => ({
+  status: 'UNKNOWN', catalog_version_id: null, items: [],
+})
+
+export function allergenError(value: AllergenDeclaration, required: boolean): string | null {
+  if (value.status === 'UNKNOWN') return required ? 'Wybierz deklarację alergenów.' : null
+  if (!value.catalog_version_id) return 'Wybierz katalog alergenów.'
+  if (value.status === 'DECLARED' && value.items.length === 0) return 'Wybierz co najmniej jeden alergen.'
+  return null
+}
+
 export async function fetchAllergenCatalogs(signal?: AbortSignal): Promise<AllergenCatalog[]> {
   const value = await request(`${RAW_API}/allergen-catalog`, 'GET', undefined, { signal })
   if (!Array.isArray(value)) throw new Error('Nieprawidłowy katalog alergenów.')
@@ -434,7 +451,7 @@ export async function reserveRawMaterialSku(idempotencyKey: string): Promise<Raw
 }
 
 export async function createRawMaterial(
-  payload: RawMaterialCreatePayload,
+  payload: RawMaterialCreatePayload & { allergen_declaration?: AllergenDeclaration },
   reservationId: string,
 ): Promise<CreatedRawMaterial> {
   return parseCreatedRawMaterial(await request(
@@ -442,6 +459,15 @@ export async function createRawMaterial(
     'POST',
     { ...payload, sku_reservation_id: reservationId },
   ))
+}
+
+export async function createApprovedRawMaterial(
+  payload: RawMaterialCreatePayload & { allergen_declaration: AllergenDeclaration },
+  reservationId: string,
+): Promise<CreatedRawMaterial> {
+  return parseCreatedRawMaterial(await request(
+    `${RAW_API}/create-approved`, 'POST', { ...payload, sku_reservation_id: reservationId },
+  ), true)
 }
 
 export async function fetchSuppliers(search: string, signal?: AbortSignal): Promise<SupplierOption[]> {

@@ -4,6 +4,8 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentSetService;
 use App\Domain\Sku\SkuAllocationService;
 use App\Domain\Sku\SkuPrefix;
@@ -501,7 +503,7 @@ final class RawMaterialService
     private function validateBasicData(User $actor, array $input, ?string $materialId): array
     {
         $rules = (new RawMaterialDataRequest)->rules();
-        unset($rules['sku_reservation_id']);
+        unset($rules['sku_reservation_id'], $rules['allergen_declaration']);
         Validator::make($input, $rules)->validate();
         $this->requireCategory($actor, $input['category_id']);
         $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
@@ -579,11 +581,67 @@ final class RawMaterialService
 
     public function create(User $actor, Location $context, array $input): array
     {
-        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+        return $this->createMaterial($actor, $context, $input, false);
+    }
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
+    public function createApproved(User $actor, Location $context, array $input): array
+    {
+        if (! isset($input['sku_reservation_id'], $input['allergen_declaration'])) {
+            throw ValidationException::withMessages(['allergen_declaration' => ['Wymagana jest deklaracja alergenów i rezerwacja numeru.']]);
+        }
+        $input['create_and_approve'] = true;
+
+        return $this->createMaterial($actor, $context, $input, true);
+    }
+
+    private function assertCreateApprovedAllowed(User $actor, Location $context): void
+    {
+        $fresh = $actor->fresh();
+        if (! $fresh || ! app(BusinessAuthorization::class)->hasRole($fresh, BusinessRole::Administrator)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        foreach ([RawMaterialPermission::Create, RawMaterialPermission::AllergenManage, RawMaterialPermission::Submit, RawMaterialPermission::Approve] as $permission) {
+            $this->authorization->assertAllowed($fresh, $context, $permission);
+        }
+    }
+
+    private function prepareInputAllergens(User $actor, Location $context, array $input): array
+    {
+        if (! array_key_exists('allergen_declaration', $input)) {
+            return $input;
+        }
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::AllergenManage);
+        $declaration = $input['allergen_declaration'];
+        if (! is_array($declaration)) {
+            throw ValidationException::withMessages(['allergen_declaration' => ['Nieprawidłowa deklaracja alergenów.']]);
+        }
+        $this->validateForm(new RawMaterialAllergenDeclarationRequest, $declaration);
+        $this->validateAllergenDeclaration($declaration);
+        if ($declaration['status'] === 'UNKNOWN') {
+            $input['allergen_declaration'] = null;
+            $input['allergen_state'] = 'UNKNOWN';
+        }
+
+        return $input;
+    }
+
+    private function createMaterial(User $actor, Location $context, array $input, bool $approve): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+        if ($approve) {
+            $this->assertCreateApprovedAllowed($actor, $context);
+        }
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input, $approve): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
+            if ($approve) {
+                $this->assertCreateApprovedAllowed($actor, $context);
+            }
+            $prepared = $this->prepareInputAllergens($actor, $context, $input);
+            if ($approve && ($prepared['allergen_declaration'] ?? null) === null) {
+                throw ValidationException::withMessages(['allergen_declaration' => [__('messages.raw_material_allergen_declaration_required')]]);
+            }
             $reservation = isset($input['sku_reservation_id'])
                 ? $this->reservations->claim($actor, $context, $input['sku_reservation_id'], $input) : null;
             if ($reservation?->consumed_at !== null) {
@@ -617,7 +675,7 @@ final class RawMaterialService
                 $materialId,
                 $revisionId,
                 1,
-                $input,
+                $prepared,
                 $unitData,
                 $aliases,
                 false,
@@ -630,6 +688,10 @@ final class RawMaterialService
                 'document_version_ids' => $this->documentSets->ids($actor->organization_id, $revisionId),
             ]);
             $response = $this->presentMaterial(DB::table('raw_materials')->where('id', $materialId)->first(), (object) $revision);
+            if ($approve) {
+                $submitted = $this->submit($actor, $context, $materialId, $response['version']);
+                $response = $this->approve($actor, $context, $materialId, '', $submitted['version']);
+            }
             if ($reservation !== null) {
                 $this->reservations->consume($reservation->id, $input, $response);
             }
@@ -707,7 +769,7 @@ final class RawMaterialService
 
     public function revise(User $actor, Location $context, string $materialId, array $input, ?string $expectedVersion = null): array
     {
-        return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit, expectedVersion: $expectedVersion);
+        return $this->reviseWithPermission($actor, $context, $materialId, $input, RawMaterialPermission::Edit, expectedVersion: $expectedVersion, prepareDeclaration: true);
     }
 
     public function reviseAllergenDeclaration(User $actor, Location $context, string $materialId, array $input, ?string $expectedVersion = null): array
@@ -895,12 +957,16 @@ final class RawMaterialService
         RawMaterialPermission $permission,
         ?string $changeType = null,
         ?string $expectedVersion = null,
+        bool $prepareDeclaration = false,
     ): array {
         $this->authorization->assertAllowed($actor, $context, $permission);
 
-        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input, $permission, $changeType, $expectedVersion): array {
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $materialId, $input, $permission, $changeType, $expectedVersion, $prepareDeclaration): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, $permission);
+            if ($prepareDeclaration) {
+                $input = $this->prepareInputAllergens($actor, $context, $input);
+            }
             $material = $this->material($actor, $materialId, true);
             RawMaterialVersion::assertCurrent($material, $expectedVersion);
             if (! $this->isEditable($material)) {

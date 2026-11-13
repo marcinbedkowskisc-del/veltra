@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -28,6 +31,12 @@ final class RawMaterialCapabilitiesController
         $editCapability = $authorization->evaluateEditCapability($actor, $location);
         $definition = $modules->find('RAW_MATERIALS');
         $moduleAvailable = $definition !== null && $availability->enabled($location, 'RAW_MATERIALS');
+        $allergenManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
+        $createApproved = app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Administrator)
+            && $createCapability['permission'] && $createCapability['context'] && $moduleAvailable
+            && $allergenManage
+            && $authorization->hasEffectiveGrant($actor, RawMaterialPermission::Submit)
+            && $authorization->hasEffectiveGrant($actor, RawMaterialPermission::Approve);
 
         return response()->json([
             'data' => [
@@ -42,6 +51,8 @@ final class RawMaterialCapabilitiesController
                 'actions' => [
                     'create' => $createCapability['permission'] && $createCapability['context'] && $moduleAvailable,
                     'edit' => $editCapability['permission'] && $editCapability['context'] && $moduleAvailable,
+                    'edit_allergens' => $allergenManage && $editCapability['context'] && $moduleAvailable,
+                    'create_and_approve' => $createApproved,
                 ],
             ],
         ], 200, ['Cache-Control' => 'private, no-store']);

@@ -526,6 +526,8 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
       actions: {
         create: authorized && !unavailable,
         edit: editAuthorized && !unavailable,
+        edit_allergens: false,
+        create_and_approve: false,
       },
     } })
   }

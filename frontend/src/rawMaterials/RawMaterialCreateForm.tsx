@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
+import Tabs from '../design-system/Tabs'
+import AllergenFields from './AllergenFields'
 import { RAW_UNITS, type CategoryOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
@@ -16,13 +18,19 @@ import {
 } from './create'
 import {
   createRawMaterial,
+  createApprovedRawMaterial,
+  allergenError,
+  unknownAllergens,
   reserveRawMaterialSku,
   type CreatedRawMaterial,
   type RawMaterialSkuReservation,
+  type AllergenDeclaration,
 } from './api'
 
 type Props = {
   categories: CategoryOption[]
+  canManageAllergens?: boolean
+  canCreateApproved?: boolean
   operatingLocationId: string
   returnFocus: HTMLElement | null
   onClose: () => void
@@ -88,7 +96,8 @@ function isBusy(phase: Phase): boolean {
 
 export default function RawMaterialCreateForm({
   categories,
-  operatingLocationId,
+  canManageAllergens = false,
+  canCreateApproved = false,
   returnFocus,
   onClose,
   onCreated,
@@ -98,22 +107,28 @@ export default function RawMaterialCreateForm({
   onModuleUnavailable,
 }: Props) {
   const [values, setValues] = useState<RawMaterialCreateValues>(emptyRawMaterialCreateValues)
+  const [tab, setTab] = useState('basic')
+  const [allergens, setAllergens] = useState<AllergenDeclaration>(unknownAllergens)
+  const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
+  const [focusError, setFocusError] = useState(0)
   const [phase, setPhase] = useState<Phase>('editing')
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [created, setCreated] = useState<CreatedRawMaterial | null>(null)
   const [attempted, setAttempted] = useState(false)
+  const [approving, setApproving] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
   const [initialValues] = useState(emptyRawMaterialCreateValues)
   const active = useRef(true)
   const reservationKey = useRef<string | null>(null)
   const reservation = useRef<RawMaterialSkuReservation | null>(null)
-  const attemptPayload = useRef<RawMaterialCreatePayload | null>(null)
+  const attemptPayload = useRef<(RawMaterialCreatePayload & { allergen_declaration?: AllergenDeclaration }) | null>(null)
+  const attemptApproved = useRef(false)
   const attemptStage = useRef<AttemptStage>('reservation')
   const operationLocked = useRef(false)
   const createdNotified = useRef(false)
-  const dirty = JSON.stringify(values) !== JSON.stringify(initialValues)
+  const dirty = JSON.stringify(values) !== JSON.stringify(initialValues) || allergens.status !== 'UNKNOWN'
   const locked = isBusy(phase) || phase === 'complete'
     || phase === 'session-expired' || phase === 'forbidden'
     || phase === 'conflict' || phase === 'unavailable'
@@ -126,6 +141,18 @@ export default function RawMaterialCreateForm({
       if (returnFocus?.isConnected) returnFocus.focus()
     }
   }, [returnFocus])
+
+  useEffect(() => {
+    if (focusError) dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+  }, [focusError, tab])
+
+  function focusErrors(errors: Record<string, string>, allergenMessage: string | null = null) {
+    const keys = Object.keys(errors)
+    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key))) setTab('basic')
+    else if (allergenMessage) setTab('allergens')
+    else if (keys.length) setTab('additional')
+    setFocusError((value) => value + 1)
+  }
 
   useEffect(() => {
     if (!dirty || phase === 'complete') return
@@ -223,7 +250,13 @@ export default function RawMaterialCreateForm({
         return
       }
       if (cause.status === 422) {
-        setServerErrors(asFieldErrors(cause.errors))
+        const errors = asFieldErrors(cause.errors)
+        const allergenMessage = Object.entries(errors).find(([key]) =>
+          ['allergen_declaration', 'status', 'catalog_version_id', 'items'].some((prefix) => key.startsWith(prefix)))?.[1] ?? null
+        setServerErrors(errors)
+        setAllergenValidation(allergenMessage)
+        focusErrors(Object.fromEntries(Object.entries(errors).filter(([key]) =>
+          !['allergen_declaration', 'status', 'catalog_version_id', 'items'].some((prefix) => key.startsWith(prefix)))), allergenMessage)
         setFormError(cause.message)
         setPhase('editing')
         operationLocked.current = false
@@ -259,12 +292,15 @@ export default function RawMaterialCreateForm({
     setFormError('Nie można potwierdzić wyniku operacji. Ponów wyłącznie tę samą próbę, aby bezpiecznie sprawdzić jej rezultat.')
   }
 
-  async function submitCreation(payload: RawMaterialCreatePayload, currentReservation: RawMaterialSkuReservation) {
+  async function submitCreation(payload: RawMaterialCreatePayload & { allergen_declaration?: AllergenDeclaration }, currentReservation: RawMaterialSkuReservation) {
     attemptStage.current = 'creation'
     setPhase('creating')
     setFormError(null)
     try {
-      const result = await createRawMaterial(payload, currentReservation.reservationId)
+      const declaration = payload.allergen_declaration
+      const result = attemptApproved.current && declaration
+        ? await createApprovedRawMaterial({ ...payload, allergen_declaration: declaration }, currentReservation.reservationId)
+        : await createRawMaterial(payload, currentReservation.reservationId)
       if (!active.current) return
       setCreated(result)
       setPhase('complete')
@@ -279,7 +315,7 @@ export default function RawMaterialCreateForm({
     }
   }
 
-  async function obtainReservation(key: string, payload: RawMaterialCreatePayload) {
+  async function obtainReservation(key: string, payload: RawMaterialCreatePayload & { allergen_declaration?: AllergenDeclaration }) {
     attemptStage.current = 'reservation'
     setPhase('reserving')
     setFormError(null)
@@ -315,16 +351,23 @@ export default function RawMaterialCreateForm({
     setFormError(null)
     setServerErrors({})
     const errors = validateRawMaterialCreate(values)
+    const submitter = (event.nativeEvent as SubmitEvent).submitter
+    const approve = submitter instanceof HTMLButtonElement && submitter.value === 'approve'
+    const declarationError = allergenError(allergens, approve)
+    setAllergenValidation(declarationError)
     setValidationErrors(errors)
-    if (Object.keys(errors).length > 0) {
-      dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+    if (Object.keys(errors).length > 0 || declarationError) {
+      focusErrors(errors, declarationError)
       return
     }
 
-    const payload = buildRawMaterialCreatePayload(values)
+    const payload = { ...buildRawMaterialCreatePayload(values),
+      ...(allergens.status !== 'UNKNOWN' ? { allergen_declaration: allergens } : {}) }
     const key = reservationKey.current ?? crypto.randomUUID()
     reservationKey.current = key
     attemptPayload.current = payload
+    attemptApproved.current = approve && canCreateApproved
+    setApproving(attemptApproved.current)
     operationLocked.current = true
     void obtainReservation(key, payload)
   }
@@ -359,7 +402,7 @@ export default function RawMaterialCreateForm({
     }
     if (event.key !== 'Tab') return
     const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+      'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [role="tabpanel"]',
     )
     if (!focusable?.length) {
       event.preventDefault()
@@ -404,7 +447,7 @@ export default function RawMaterialCreateForm({
           <div>
             <p className="eyebrow">KATALOG SUROWCÓW</p>
             <h2 id="raw-create-title">Dodaj surowiec</h2>
-            <p>Surowiec zostanie zapisany jako szkic. Numer SKU zostanie nadany automatycznie.</p>
+            <p>{canCreateApproved ? 'Możesz zapisać szkic lub zatwierdzić kompletny surowiec.' : 'Surowiec zostanie zapisany jako szkic.'} Numer SKU zostanie nadany automatycznie.</p>
           </div>
           <button
             type="button"
@@ -416,8 +459,6 @@ export default function RawMaterialCreateForm({
             Zamknij
           </button>
         </header>
-
-        <p className="create-form-context">Kontekst lokalizacji: <code>{operatingLocationId}</code></p>
 
         {phase === 'reservation-uncertain' && (
           <div className="create-form-notice" role="alert">
@@ -434,7 +475,7 @@ export default function RawMaterialCreateForm({
           </div>
         )}
         {phase === 'reserving' && <p className="create-form-status" role="status">Przygotowywanie numeru SKU…</p>}
-        {phase === 'creating' && <p className="create-form-status" role="status">Zapisywanie szkicu surowca…</p>}
+        {phase === 'creating' && <p className="create-form-status" role="status">{approving ? 'Dodawanie i zatwierdzanie surowca…' : 'Zapisywanie szkicu surowca…'}</p>}
         {formError && phase !== 'reservation-uncertain' && phase !== 'creation-uncertain' && (
           <p className="create-form-error" role="alert">{formError}</p>
         )}
@@ -443,8 +484,8 @@ export default function RawMaterialCreateForm({
           <section className="create-success" aria-labelledby="create-success-title">
             <p className="create-success-mark" aria-hidden="true">✓</p>
             <h3 id="create-success-title">Surowiec utworzony</h3>
-            <p>Surowiec <strong>{created.sku}</strong> został zapisany jako szkic. Identyfikator: <code>{created.id}</code>.</p>
-            <p>Surowiec nie został zatwierdzony ani opublikowany.</p>
+            <p>Surowiec <strong>{created.sku}</strong> {created.lifecycleState === 'ACTIVE' ? 'został zatwierdzony.' : 'został zapisany jako szkic.'}</p>
+            {created.lifecycleState === 'DRAFT' && <p>Surowiec nie został zatwierdzony ani opublikowany.</p>}
             <div className="create-form-actions">
               <button type="button" className="button button-secondary" onClick={requestClose}>Wróć do katalogu</button>
               <button type="button" className="button button-primary" onClick={() => onOpenCreated(created)}>Otwórz szczegóły</button>
@@ -456,6 +497,8 @@ export default function RawMaterialCreateForm({
               <p className="create-form-error" role="alert">Popraw pola oznaczone poniżej.</p>
             )}
 
+            <Tabs label="Formularz surowca" value={tab} onChange={setTab} tabs={[
+              { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key)) ? ' • błąd' : ''}`, content: (
             <fieldset disabled={locked} className="create-form-fieldset">
               <legend>Dane podstawowe</legend>
               <div className="create-form-grid">
@@ -488,19 +531,6 @@ export default function RawMaterialCreateForm({
                   />
                   <span className="field-hint">Maksymalnie 200 znaków.</span>
                   {getError('name') && <span id="name-error" className="field-error">{getError('name')}</span>}
-                </label>
-
-                <label className="create-form-field create-form-field-wide" htmlFor="create-description">
-                  Opis <span className="field-hint">(opcjonalnie, maksymalnie 10 000 znaków)</span>
-                  <textarea
-                    id="create-description"
-                    value={values.description}
-                    maxLength={10000}
-                    rows={3}
-                    onChange={(event) => setField('description', event.target.value)}
-                    {...fieldProps('description')}
-                  />
-                  {getError('description') && <span id="description-error" className="field-error">{getError('description')}</span>}
                 </label>
 
                 <label className="create-form-field" htmlFor="create-base-unit">
@@ -550,10 +580,20 @@ export default function RawMaterialCreateForm({
                 </div>
               </div>
             </fieldset>
-
-            <details className="create-advanced">
-              <summary>Inne nazwy i dodatkowe jednostki miary <span>(opcjonalnie)</span></summary>
+              ) },
+              { id: 'allergens', label: `Alergeny${allergenValidation ? ' • błąd' : ''}`, content: (
+                <AllergenFields value={allergens} permitted={canManageAllergens} disabled={locked} error={allergenValidation}
+                  onChange={(value) => { setAllergens(value); setAllergenValidation(null) }}
+                  onSessionExpired={onSessionExpired} onModuleUnavailable={onModuleUnavailable} />
+              ) },
+              { id: 'additional', label: `Dodatkowe informacje${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => key === 'description' || key.startsWith('aliases') || key.startsWith('conversions')) ? ' • błąd' : ''}`, content: (
               <div className="create-advanced-content">
+                <label className="create-form-field create-form-field-wide" htmlFor="create-description">
+                  Opis <span className="field-hint">(opcjonalnie, maksymalnie 10 000 znaków)</span>
+                  <textarea id="create-description" value={values.description} maxLength={10000} rows={3}
+                    disabled={locked} onChange={(event) => setField('description', event.target.value)} {...fieldProps('description')} />
+                  {getError('description') && <span id="description-error" className="field-error">{getError('description')}</span>}
+                </label>
                 <section aria-labelledby="create-aliases-title">
                   <div className="create-subsection-heading">
                     <div>
@@ -711,10 +751,11 @@ export default function RawMaterialCreateForm({
                   {getError('conversions') && <p className="field-error" role="alert">{getError('conversions')}</p>}
                 </section>
               </div>
-            </details>
+              ) },
+            ]} />
 
             <div className="create-form-footer">
-              <p>Numer SKU zostanie nadany automatycznie. Surowiec zostanie zapisany jako szkic.</p>
+              <p>Numer SKU zostanie nadany automatycznie.{!canCreateApproved && ' Surowiec zostanie zapisany jako szkic.'}</p>
               <div className="create-form-actions">
                 <button type="button" className="button button-secondary" onClick={requestClose} disabled={isBusy(phase)}>
                   Anuluj
@@ -722,6 +763,9 @@ export default function RawMaterialCreateForm({
                 <button type="submit" className="button button-primary" disabled={locked || categories.length === 0}>
                   Utwórz szkic
                 </button>
+                {canCreateApproved && <button type="submit" value="approve" className="button button-primary" disabled={locked || categories.length === 0}>
+                  Dodaj i zatwierdź surowiec
+                </button>}
               </div>
             </div>
           </form>

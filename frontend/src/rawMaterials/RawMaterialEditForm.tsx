@@ -1,5 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
+import { formatNumber } from '../design-system/formatting'
+import Tabs from '../design-system/Tabs'
+import AllergenFields from './AllergenFields'
 import { lifecycleLabel, RAW_UNITS } from './catalog'
 import type { CategoryOption } from './catalog'
 import {
@@ -16,10 +19,14 @@ import {
   fetchRawMaterialCapabilities,
   fetchRawMaterialCompletion,
   fetchRawMaterialEditor,
+  fetchAllergenDeclaration,
+  allergenError,
+  unknownAllergens,
   reviseRawMaterial,
   type RawMaterialEditPayload,
   type RawMaterialEditor,
   type RevisedRawMaterial,
+  type AllergenDeclaration,
 } from './api'
 
 type Props = {
@@ -38,6 +45,17 @@ type Phase = 'loading' | 'editing' | 'authorizing' | 'saving' | 'conflict'
   | 'uncertain' | 'saved' | 'forbidden' | 'not-found' | 'unavailable' | 'error'
 
 type EditorSnapshot = RawMaterialEditor
+
+function editableValues(values: RawMaterialCreateValues): RawMaterialCreateValues {
+  const quantity = (value: string) => value
+    ? formatNumber(value, { maximumFractionDigits: 14 }).replace(/\s/g, '')
+    : ''
+  return {
+    ...values,
+    nominalQuantity: quantity(values.nominalQuantity),
+    usableQuantity: quantity(values.usableQuantity),
+  }
+}
 
 function isSessionExpired(cause: unknown): boolean {
   return cause instanceof ApiError && (cause.status === 401 || cause.status === 419)
@@ -119,6 +137,12 @@ export default function RawMaterialEditForm({
   const [phase, setPhase] = useState<Phase>('loading')
   const [snapshot, setSnapshot] = useState<EditorSnapshot | null>(null)
   const [values, setValues] = useState<RawMaterialCreateValues | null>(null)
+  const [tab, setTab] = useState('basic')
+  const [allergens, setAllergens] = useState<AllergenDeclaration>(unknownAllergens)
+  const [initialAllergens, setInitialAllergens] = useState<AllergenDeclaration>(unknownAllergens)
+  const [canEditAllergens, setCanEditAllergens] = useState(false)
+  const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
+  const [focusError, setFocusError] = useState(0)
   const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
   const [changeReason, setChangeReason] = useState('')
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
@@ -134,7 +158,8 @@ export default function RawMaterialEditForm({
   const active = useRef(true)
   const operationLocked = useRef(false)
   const dirty = values !== null && initialValues !== null
-    && JSON.stringify(values) !== JSON.stringify(initialValues)
+    && (JSON.stringify(values) !== JSON.stringify(initialValues)
+      || JSON.stringify(allergens) !== JSON.stringify(initialAllergens))
   useLayoutEffect(() => {
     locationRef.current = operatingLocationId
     categoriesRef.current = categories
@@ -173,14 +198,26 @@ export default function RawMaterialEditForm({
           setPhase('error')
           return
         }
+        const permitted = completion.availableActions.includes('edit_allergens')
+        const declaration = permitted ? await fetchAllergenDeclaration(materialId, controller.signal) : null
+        if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
+        if (declaration && declaration.version !== editor.version) {
+          setFormError('Dane alergenów zmieniły się podczas otwierania. Wczytaj aktualny stan przed edycją.')
+          setPhase('error')
+          return
+        }
         if (!categoriesRef.current.some((category) => category.id === editor.values.categoryId)) {
           setFormError('Nie można bezpiecznie potwierdzić kategorii bieżącej rewizji. Edycja pozostaje zablokowana.')
           setPhase('error')
           return
         }
         setSnapshot(editor)
-        setValues(editor.values)
-        setInitialValues(editor.values)
+        const formattedValues = editableValues(editor.values)
+        setValues(formattedValues)
+        setInitialValues(formattedValues)
+        setCanEditAllergens(permitted)
+        setAllergens(declaration?.declaration ?? unknownAllergens())
+        setInitialAllergens(declaration?.declaration ?? unknownAllergens())
         setPhase('editing')
       } catch (cause) {
         if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
@@ -212,6 +249,18 @@ export default function RawMaterialEditForm({
       dialogRef.current?.querySelector<HTMLElement>('select, input, textarea')?.focus()
     }
   }, [phase])
+
+  useEffect(() => {
+    if (focusError) dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+  }, [focusError, tab])
+
+  function focusErrors(errors: Record<string, string>, allergenMessage: string | null = null) {
+    const keys = Object.keys(errors)
+    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key))) setTab('basic')
+    else if (allergenMessage) setTab('allergens')
+    else if (keys.length) setTab('additional')
+    setFocusError((value) => value + 1)
+  }
 
   function handleFailure(cause: unknown, fallback: string) {
     if (isSessionExpired(cause)) {
@@ -289,7 +338,7 @@ export default function RawMaterialEditForm({
     }
     if (event.key !== 'Tab') return
     const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+      'button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [role="tabpanel"]',
     )
     if (!focusable?.length) {
       event.preventDefault()
@@ -340,14 +389,27 @@ export default function RawMaterialEditForm({
         setPhase('error')
         return
       }
+      const permitted = completion.availableActions.includes('edit_allergens')
+      const declaration = permitted ? await fetchAllergenDeclaration(materialId, controller.signal) : null
+      if (!active.current || locationRef.current !== expectedLocation) return
+      if (declaration && declaration.version !== editor.version) {
+        setFormError('Dane alergenów zmieniły się podczas wczytywania.')
+        setPhase('error')
+        return
+      }
       if (!categoriesRef.current.some((category) => category.id === editor.values.categoryId)) {
         setFormError('Nie można bezpiecznie potwierdzić kategorii bieżącej rewizji.')
         setPhase('error')
         return
       }
       setSnapshot(editor)
-      setValues(editor.values)
-      setInitialValues(editor.values)
+      const formattedValues = editableValues(editor.values)
+      setValues(formattedValues)
+      setInitialValues(formattedValues)
+      setCanEditAllergens(permitted)
+      setAllergens(declaration?.declaration ?? unknownAllergens())
+      setInitialAllergens(declaration?.declaration ?? unknownAllergens())
+      setAllergenValidation(null)
       setValidationErrors({})
       setServerErrors({})
       setChangeReason('')
@@ -416,20 +478,24 @@ export default function RawMaterialEditForm({
     setFormError(null)
     setServerErrors({})
     const errors = validateRawMaterialCreate(values)
+    const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
+    const declarationError = allergensChanged ? allergenError(allergens, false) : null
+    setAllergenValidation(declarationError)
     if (Boolean(values.nominalQuantity.trim()) !== Boolean(values.usableQuantity.trim())) {
       errors.nominalQuantity = 'Podaj ilość nominalną i użytkową razem albo pozostaw obie puste.'
     }
     if (initialValues?.nominalQuantity && !values.nominalQuantity.trim() && !values.usableQuantity.trim()) {
       errors.nominalQuantity = 'Nie można wyczyścić istniejących ilości w tym kontrakcie. Podaj obie wartości.'
     }
-    if (Object.keys(errors).length > 0) {
+    if (Object.keys(errors).length > 0 || declarationError) {
       setValidationErrors(errors)
-      dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
+      focusErrors(errors, declarationError)
       return
     }
 
     const expectedLocation = operatingLocationId
-    const payload = buildEditPayload(values, changeReason)
+    const payload = { ...buildEditPayload(values, changeReason),
+      ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
     operationLocked.current = true
     setPhase('authorizing')
     const controller = new AbortController()
@@ -448,6 +514,7 @@ export default function RawMaterialEditForm({
       }
       if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
         || !completion.availableActions.includes('edit') || !completion.version
+        || (allergensChanged && !completion.availableActions.includes('edit_allergens'))
         || completion.revisionId !== snapshot.revisionId || completion.version !== snapshot.version) {
         setPhase('conflict')
         setFormError('Uprawnienie lub wersja edytora zmieniły się. Lokalne zmiany zachowano; wczytaj aktualny stan świadomie.')
@@ -473,7 +540,13 @@ export default function RawMaterialEditForm({
         setPhase('conflict')
         setFormError('Wersja edycji jest nieprawidłowa lub wymagana. Wczytaj aktualny stan przed dalszą pracą.')
       } else if (cause instanceof ApiError && cause.status === 422) {
-        setServerErrors(serverFieldErrors(cause.errors))
+        const errors = serverFieldErrors(cause.errors)
+        const allergenMessage = Object.entries(errors).find(([key]) =>
+          ['allergen_declaration', 'status', 'catalog_version_id', 'items'].some((prefix) => key.startsWith(prefix)))?.[1] ?? null
+        setServerErrors(errors)
+        setAllergenValidation(allergenMessage)
+        focusErrors(Object.fromEntries(Object.entries(errors).filter(([key]) =>
+          !['allergen_declaration', 'status', 'catalog_version_id', 'items'].some((prefix) => key.startsWith(prefix)))), allergenMessage)
         setFormError(cause.message)
         setPhase('editing')
       } else if (cause instanceof Error && (!(cause instanceof ApiError) || cause.status >= 500)) {
@@ -518,14 +591,12 @@ export default function RawMaterialEditForm({
           <div>
             <p className="eyebrow">KATALOG SUROWCÓW</p>
             <h2 id="raw-edit-title">Edytuj surowiec</h2>
-            <p>Zmiany zostaną zapisane jako nowa rewizja robocza. Rewizja zatwierdzona nie jest nadpisywana.</p>
+            <p>Zmiany zostaną zapisane jako szkic. Zatwierdzona wersja pozostanie bez zmian.</p>
           </div>
           <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>
             Zamknij
           </button>
         </header>
-
-        <p className="create-form-context">Kontekst lokalizacji: <code>{operatingLocationId}</code></p>
 
         {phase === 'loading' && <p className="create-form-status" role="status">Sprawdzanie uprawnień i wczytywanie rewizji edytora…</p>}
         {phase === 'authorizing' && <p className="create-form-status" role="status">Ponowne sprawdzanie uprawnień i wersji…</p>}
@@ -570,8 +641,6 @@ export default function RawMaterialEditForm({
             )}
             <dl className="detail-grid">
               <div><dt>SKU</dt><dd>{saved.sku}</dd></div>
-              <div><dt>Identyfikator surowca</dt><dd>{saved.id}</dd></div>
-              <div><dt>Identyfikator nowej rewizji</dt><dd>{saved.revision.id}</dd></div>
             </dl>
             <div className="create-form-actions">
               <button type="button" className="button button-primary" onClick={onClose}>Wróć do szczegółów</button>
@@ -584,11 +653,9 @@ export default function RawMaterialEditForm({
           && phase !== 'error' && (
           <>
             <section className="detail-section edit-revision-context" aria-label="Informacje o edytowanej rewizji">
-              <p><strong>Edytowana rewizja:</strong> v{snapshot.revisionNo} · {snapshot.lifecycleState === 'ACTIVE' ? 'rewizja robocza; zatwierdzona pozostaje aktywna' : 'rewizja robocza szkicu'}</p>
+              <p><strong>Wersja {snapshot.revisionNo}</strong></p>
               <dl className="detail-grid">
-                <div><dt>SKU — niezmienne</dt><dd>{snapshot.sku}</dd></div>
-                <div><dt>Identyfikator surowca — niezmienny</dt><dd>{snapshot.id}</dd></div>
-                <div><dt>Identyfikator rewizji — niezmienny</dt><dd>{snapshot.revisionId}</dd></div>
+                <div><dt>SKU</dt><dd>{snapshot.sku}</dd></div>
               </dl>
             </section>
 
@@ -598,6 +665,8 @@ export default function RawMaterialEditForm({
               {attempted && Object.keys(validationErrors).length > 0 && (
                 <p className="create-form-error" role="alert">Popraw pola oznaczone poniżej.</p>
               )}
+              <Tabs label="Formularz surowca" value={tab} onChange={setTab} tabs={[
+                { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key)) ? ' • błąd' : ''}`, content: (
               <fieldset disabled={phase !== 'editing'} className="create-form-fieldset">
                 <legend>Dane podstawowe</legend>
                 <div className="create-form-grid">
@@ -614,14 +683,6 @@ export default function RawMaterialEditForm({
                     <input id="edit-name" value={values.name} maxLength={200} {...fieldProps('name')}
                       onChange={(event) => setField('name', event.target.value)} />
                     {getError('name') && <span className="field-error" id="name-error">{getError('name')}</span>}
-                  </label>
-                  <label className="create-form-field create-form-field-wide" htmlFor="edit-description">
-                    Opis
-                    <textarea id="edit-description" value={values.description} rows={3} maxLength={10000}
-                      {...fieldProps('description')}
-                      onChange={(event) => setField('description', event.target.value)} />
-                    {getError('description') && <span className="field-error" id="description-error">{getError('description')}</span>}
-                    <span className="field-hint">Pozostawienie pustego pola jawnie wyczyści opis.</span>
                   </label>
                   <label className="create-form-field" htmlFor="edit-base-unit">
                     Jednostka podstawowa <span className="required-mark">wymagane</span>
@@ -653,10 +714,22 @@ export default function RawMaterialEditForm({
                   </fieldset>
                 </div>
               </fieldset>
-
-              <details className="create-advanced" open>
-                <summary>Inne nazwy i dodatkowe jednostki miary</summary>
+                ) },
+                { id: 'allergens', label: `Alergeny${allergenValidation ? ' • błąd' : ''}`, content: (
+                  <AllergenFields value={allergens} permitted={canEditAllergens} disabled={phase !== 'editing'} error={allergenValidation}
+                    onChange={(value) => { setAllergens(value); setAllergenValidation(null) }}
+                    onSessionExpired={onSessionExpired} onModuleUnavailable={onModuleUnavailable} />
+                ) },
+                { id: 'additional', label: `Dodatkowe informacje${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => key === 'description' || key.startsWith('aliases') || key.startsWith('conversions')) ? ' • błąd' : ''}`, content: (<>
                 <div className="create-advanced-content">
+                  <label className="create-form-field create-form-field-wide" htmlFor="edit-description">
+                    Opis
+                    <textarea id="edit-description" value={values.description} rows={3} maxLength={10000}
+                      disabled={phase !== 'editing'} {...fieldProps('description')}
+                      onChange={(event) => setField('description', event.target.value)} />
+                    {getError('description') && <span className="field-error" id="description-error">{getError('description')}</span>}
+                    <span className="field-hint">Pozostawienie pustego pola jawnie wyczyści opis.</span>
+                  </label>
                   <section aria-labelledby="edit-aliases-title">
                     <div className="create-subsection-heading">
                       <div><h3 id="edit-aliases-title">Inne nazwy surowca</h3><p>Dodaj nazwy, pod którymi pracownicy mogą szukać tego samego surowca. Nie utworzą one osobnego surowca. Lista zawiera wszystkie zapisane nazwy; usunięcie nazwy usunie ją z surowca.</p></div>
@@ -757,16 +830,16 @@ export default function RawMaterialEditForm({
                     {values.conversions.length === 0 && <p className="field-hint">Brak dodatkowych jednostek.</p>}
                   </section>
                 </div>
-              </details>
-
               <label className="create-form-field create-form-field-wide" htmlFor="edit-change-reason">
                 Powód zmiany (opcjonalnie)
                 <textarea id="edit-change-reason" value={changeReason} maxLength={500} rows={2}
                   onChange={(event) => setChangeReason(event.target.value)} />
               </label>
+                </>) },
+              ]} />
 
               <div className="create-form-footer">
-                <p>Zapis obejmuje dane podstawowe. Alergeny, przechowywanie i dokumenty zmienia się w osobnych sekcjach.</p>
+                <p>Zapis utworzy wersję roboczą. Przechowywanie i dokumenty zmienia się w osobnych sekcjach.</p>
                 <div className="create-form-actions">
                   <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>Anuluj</button>
                   <button type="submit" className="button button-primary" disabled={phase !== 'editing'}>

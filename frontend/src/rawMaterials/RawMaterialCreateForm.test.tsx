@@ -5,13 +5,18 @@ import type { CategoryOption } from './catalog'
 import RawMaterialCreateForm from './RawMaterialCreateForm'
 import {
   createRawMaterial,
+  createApprovedRawMaterial,
+  fetchAllergenCatalogs,
   reserveRawMaterialSku,
   type CreatedRawMaterial,
   type RawMaterialSkuReservation,
 } from './api'
 
-vi.mock('./api', () => ({
+vi.mock('./api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api')>(),
   createRawMaterial: vi.fn(),
+  createApprovedRawMaterial: vi.fn(),
+  fetchAllergenCatalogs: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
 }))
 
@@ -33,6 +38,8 @@ const created: CreatedRawMaterial = {
 const categories: CategoryOption[] = [{ id: categoryId, name: 'Produkty spożywcze' }]
 const reserveMock = vi.mocked(reserveRawMaterialSku)
 const createMock = vi.mocked(createRawMaterial)
+const createApprovedMock = vi.mocked(createApprovedRawMaterial)
+const allergenCatalogId = '00000000-0000-4000-8000-000000000005'
 
 function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCreateForm>> = {}) {
   const props: React.ComponentProps<typeof RawMaterialCreateForm> = {
@@ -59,6 +66,8 @@ beforeEach(() => {
   vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000099')
   reserveMock.mockResolvedValue(reservation)
   createMock.mockResolvedValue(created)
+  createApprovedMock.mockResolvedValue({ ...created, lifecycleState: 'ACTIVE' })
+  vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, definitions: [] }])
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
@@ -68,6 +77,62 @@ afterEach(() => {
 })
 
 describe('formularz tworzenia surowca RAW', () => {
+  it('zachowuje dane w zakładkach i zatwierdza kompletny surowiec jednym żądaniem', async () => {
+    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    enterValidBasicFields()
+    fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
+    fireEvent.change(screen.getByLabelText(/Opis/), { target: { value: 'Opis testowy' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj nazwę' }))
+    fireEvent.change(screen.getByLabelText('Inna nazwa 1'), { target: { value: 'Alias testowy' } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
+    await screen.findByLabelText('Status deklaracji')
+    await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
+    fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
+    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: allergenCatalogId } })
+    fireEvent.click(screen.getByRole('tab', { name: 'Dane podstawowe' }))
+    expect(screen.getByLabelText<HTMLInputElement>(/Nazwa surowca/).value).toBe('Mąka testowa')
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
+    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+    expect(createApprovedMock).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Mąka testowa', description: 'Opis testowy', aliases: ['Alias testowy'],
+      allergen_declaration: { status: 'NO_KNOWN_ALLERGENS', catalog_version_id: allergenCatalogId, items: [] },
+    }), reservationId)
+    expect(createMock).not.toHaveBeenCalled()
+  })
+
+  it('kieruje do błędnej zakładki i nie rezerwuje SKU bez deklaracji', async () => {
+    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    enterValidBasicFields()
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
+    expect(await screen.findByText('Wybierz deklarację alergenów.')).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Alergeny • błąd' }).getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Status deklaracji')))
+    expect(reserveMock).not.toHaveBeenCalled()
+  })
+
+  it('ponawia niepewne zatwierdzenie z tym samym payloadem i rezerwacją', async () => {
+    createApprovedMock.mockRejectedValueOnce(new Error('Brak odpowiedzi.'))
+    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    enterValidBasicFields()
+    fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
+    await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
+    fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
+    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: allergenCatalogId } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
+    await screen.findByRole('button', { name: 'Ponów bezpiecznie' })
+    const first = createApprovedMock.mock.calls[0]
+    fireEvent.click(screen.getByRole('button', { name: 'Ponów bezpiecznie' }))
+    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+    expect(createApprovedMock.mock.calls[1]).toEqual(first)
+    expect(reserveMock).toHaveBeenCalledTimes(1)
+    expect(createMock).not.toHaveBeenCalled()
+  })
+
+  it('nie oferuje zatwierdzenia użytkownikowi bez uprawnionej akcji', () => {
+    renderForm()
+    expect(screen.queryByRole('button', { name: 'Dodaj i zatwierdź surowiec' })).toBeNull()
+  })
+
   it('pokazuje wymagane pola, a rezerwację SKU wykonuje dopiero po poprawnym submit', async () => {
     renderForm()
     expect(screen.getByRole('dialog', { name: 'Dodaj surowiec' })).toBeTruthy()
@@ -91,7 +156,7 @@ describe('formularz tworzenia surowca RAW', () => {
     enterValidBasicFields()
     fireEvent.change(screen.getByLabelText('Nominalna'), { target: { value: '12,5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
-    fireEvent.click(screen.getByText('Inne nazwy i dodatkowe jednostki miary', { exact: false }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
     expect(screen.getByText(/nazwy, pod którymi pracownicy mogą szukać/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj nazwę' }))
     fireEvent.change(screen.getByLabelText('Inna nazwa 1'), { target: { value: '  Mąka uniwersalna  ' } })
@@ -129,6 +194,8 @@ describe('formularz tworzenia surowca RAW', () => {
       ],
     }, reservationId)
     expect(screen.getByText(/RAW-000042/)).toBeTruthy()
+    expect(screen.queryByText(materialId)).toBeNull()
+    expect(screen.queryByText(locationId)).toBeNull()
     expect(screen.getByText(/został zapisany jako szkic/)).toBeTruthy()
     expect(screen.getByText(/nie został zatwierdzony ani opublikowany/)).toBeTruthy()
   })

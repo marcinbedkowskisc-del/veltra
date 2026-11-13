@@ -23,6 +23,7 @@ class RawMaterialDataRequest extends InstallationRequest
             'conversions.*.to_base_factor' => ['sometimes', 'required', 'regex:/^\\d+(?:\\.\\d{1,12})?$/D'],
             'conversions.*.basis' => ['sometimes', 'required', 'string', 'max:500'],
             'change_reason' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'allergen_declaration' => ['sometimes', 'required', 'array:status,catalog_version_id,items'],
             'document_upload_ids' => ['sometimes', 'array'],
             'document_upload_ids.*' => ['required', 'uuid', 'distinct'],
             'detach_document_version_ids' => ['sometimes', 'array'],

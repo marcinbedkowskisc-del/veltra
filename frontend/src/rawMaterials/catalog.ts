@@ -268,7 +268,7 @@ export function catalogExportPayload(
 }
 
 export function formatDecimal(value: string | null): string {
-  return formatNumber(value)
+  return formatNumber(value, { maximumFractionDigits: 14 })
 }
 
 export function formatMoney(value: string | null): string {

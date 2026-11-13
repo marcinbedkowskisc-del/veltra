@@ -152,6 +152,7 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::get('/', [RawMaterialController::class, 'index']);
     Route::get('/workbench', [RawMaterialController::class, 'workbench']);
     Route::post('/sku-reservations', [RawMaterialController::class, 'reserveSku'])->middleware('throttle:raw-sku');
+    Route::post('/create-approved', [RawMaterialController::class, 'storeApproved']);
     Route::post('/', [RawMaterialController::class, 'store']);
     Route::get('/categories', [RawMaterialController::class, 'categories']);
     Route::post('/categories', [RawMaterialController::class, 'storeCategory']);

@@ -770,7 +770,7 @@ export default function RawMaterialsCatalogPage({
       {exportMessage && <p className="inline-success" role="status">{exportMessage}</p>}
       {currentCreatedMaterial && (
         <p className="inline-success" role="status">
-          Utworzono szkic {currentCreatedMaterial.sku}. Identyfikator: {currentCreatedMaterial.id}. Stan zwrócony przez serwer: {currentCreatedMaterial.lifecycleState}.
+          {currentCreatedMaterial.lifecycleState === 'ACTIVE' ? 'Zatwierdzono surowiec' : 'Utworzono szkic'} {currentCreatedMaterial.sku}.
         </p>
       )}
       {catalogState !== 'forbidden' && catalogState !== 'unavailable' && catalogState !== 'error' && (
@@ -841,26 +841,28 @@ export default function RawMaterialsCatalogPage({
     </>
   )
 
+  function changeView(next: string) {
+    if (next === view) return
+    catalogRequestGeneration.current += 1
+    setSelectedDetail(null)
+    setRows([])
+    setMeta(EMPTY_META)
+    setSelectedIds(new Set())
+    previousPage.current = null
+    setCanReadReferencePrice(false)
+    setCanReadUsableCost(false)
+    setCatalogState('loading')
+    setCatalogError(null)
+    resetFilters()
+    setView(next)
+  }
+
   return (
     <section className="catalog-page" aria-labelledby="catalog-title" aria-busy={tableLoading}>
       <Tabs
         label="Widok katalogu RAW"
         value={view}
-        onChange={(next) => {
-          if (next === view) return
-          catalogRequestGeneration.current += 1
-          setSelectedDetail(null)
-          setRows([])
-          setMeta(EMPTY_META)
-          setSelectedIds(new Set())
-          previousPage.current = null
-          setCanReadReferencePrice(false)
-          setCanReadUsableCost(false)
-          setCatalogState('loading')
-          setCatalogError(null)
-          resetFilters()
-          setView(next)
-        }}
+        onChange={changeView}
         tabs={[
           { id: 'approved', label: 'Zatwierdzone', content: catalogContent },
           { id: 'workbench', label: 'Szkice i oczekujące', content: catalogContent },
@@ -896,6 +898,8 @@ export default function RawMaterialsCatalogPage({
         && operatingLocationId && (
         <RawMaterialCreateForm
           categories={categories}
+          canManageAllergens={capabilities.actions.editAllergens === true}
+          canCreateApproved={capabilities.actions.createAndApprove === true}
           operatingLocationId={createFormLocationId}
           returnFocus={createReturnFocus}
           onClose={() => {
@@ -904,6 +908,7 @@ export default function RawMaterialsCatalogPage({
           onCreated={handleCreated}
           onOpenCreated={(material) => {
             setCreateFormLocationId(null)
+            changeView(material.lifecycleState === 'ACTIVE' ? 'approved' : 'workbench')
             setSelectedDetail({ id: material.id, trigger: null, locationId: operatingLocationId ?? null })
           }}
           onSessionExpired={handleCreateSessionExpired}

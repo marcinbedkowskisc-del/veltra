@@ -43,6 +43,28 @@ explicitly enabled and token-gated; sessions do not replace its controls.
 
 See the [project README](../README.md) for Docker setup and test commands.
 
+## RAW — pricing and nominal/usable quantity contract
+
+This contract supersedes older stage notes below for quantity and pricing
+behavior.
+
+Each newly created RAW material requires a nominal package quantity. The usable
+quantity is optional: omission means it equals the nominal quantity, while an
+explicit usable quantity is retained as a distinct yield value. If nominal
+quantity changes while usable quantity is omitted, the new usable quantity
+defaults to the new nominal value.
+
+Reference price input is manual and supports either a net package price or a net
+price per nominal kg, liter or piece. Both are normalized to the same package
+price; supplier associations remain informational and do not determine price.
+Price input and nominal/usable quantity provenance are included in revision
+hash version 3, while existing V1/V2 revision hashes remain verifiable.
+Approved price history records the input basis and both quantity snapshots.
+Usable costs use net package price divided by usable quantity and are presented
+per 100 g, per 100 ml or per piece. CSV pricing uses the same normalization.
+Price visibility and editing continue to require their existing effective RAW
+permissions; this contract does not change module readiness or grants.
+
 ## RAW — Stage 3E-B.3 (lokalny backend, PARTIAL, nadal NOT_READY)
 
 - `POST /api/v1/raw-materials/document-uploads`: multipart `files[]` oraz
@@ -220,6 +242,13 @@ See the [project README](../README.md) for Docker setup and test commands.
   Zapis i import ceny wymagają roli ADMINISTRATOR, właściwego grantu RAW
   oraz kontekstu primary. Powtórzenie niezmienionej ceny ręcznej tworzy audyt
   próby, ale nie nowe zdarzenie ceny. Dotychczasowe profile CSV pozostają bez zmian.
+- Katalogowy CSV `POST /api/v1/raw-materials/catalog-imports` używa nagłówka
+  `sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity`.
+  Ilość nominalna jest wymagana; pusta ilość użytkowa domyślnie równa się nominalnej,
+  a jawna zachowuje pochodzenie. Starszy nagłówek sześciokolumnowy jest rozpoznawany,
+  ale podgląd blokuje jego wiersze jako niekompletne. Historia importu zachowuje
+  obie ilości oraz informację, czy użytkowa była podana jawnie. Import cen
+  referencyjnych pozostaje bez zmian.
 - Przed otwarciem nowego formularza klient wywołuje
   `POST /api/v1/raw-materials/sku-reservations` z pustym JSON i `Idempotency-Key`.
   Odpowiedź `201 data`: `reservation_id`, `sku`, `expires_at`, `status`.
@@ -234,7 +263,9 @@ See the [project README](../README.md) for Docker setup and test commands.
   409. Historyczne przypisania nie są przepisywane. INT/PRD/MEN zachowują
   poprzedni zakres. Unikalność pełnego RAW jest dodatkowo wymuszona w instalacji.
 - Migracja 042 jest forward-only. Do testów służy wyłącznie
-  [izolowany Compose 3E-B1](../compose.stage3e-b1-test.yaml), z syntetycznym
-  plikiem `--env-file`; PostgreSQL 17, Redis, prywatna sieć i wolumeny mają osobny
-  prefiks projektu. Runner wykorzystuje istniejący obraz narzędziowy testów 3D.1,
-  montując aktualne źródła. Nie uruchamiać migracji na bazie instalacyjnej.
+  [izolowany Compose 3E-B1](../compose.stage3e-b1-test.yaml), z jawnym
+  syntetycznym plikiem `--env-file` i projektem `veltra-test-stage3e-b1`.
+  PostgreSQL/Redis używają `tmpfs`, sieć jest wewnętrzna, a niejawne wolumeny
+  instalacji nie są podłączane. Korzystaj z `scripts/compose-test-clean` do
+  weryfikacji; rzeczywiste sprzątanie wymaga odrębnego rootless Docker daemon.
+  Nie uruchamiać migracji na bazie instalacyjnej.

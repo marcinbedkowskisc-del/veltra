@@ -1,6 +1,8 @@
 import { RAW_UNITS } from './catalog'
 
 export type RawMaterialUnit = (typeof RAW_UNITS)[number]
+export type RawMaterialPricingUnit = 'kg' | 'l' | 'pc'
+export type RawMaterialPricingBasis = 'PACKAGE' | 'NOMINAL_UNIT'
 
 export type RawMaterialConversionInput = {
   unitCode: string
@@ -15,6 +17,11 @@ export type RawMaterialCreateValues = {
   baseUnitCode: RawMaterialUnit
   nominalQuantity: string
   usableQuantity: string
+  usableQuantityExplicit: boolean
+  pricingBasis: RawMaterialPricingBasis
+  pricingAmount: string
+  pricingUnitCode: RawMaterialPricingUnit
+  supplierIds: string[]
   aliases: string[]
   conversions: RawMaterialConversionInput[]
 }
@@ -26,6 +33,12 @@ export type RawMaterialCreatePayload = {
   base_unit_code: RawMaterialUnit
   nominal_quantity?: string
   usable_quantity?: string
+  pricing?: {
+    basis: RawMaterialPricingBasis
+    amount: string
+    unit_code?: RawMaterialPricingUnit
+  }
+  supplier_ids?: string[]
   aliases?: string[]
   conversions?: Array<{
     unit_code: RawMaterialUnit
@@ -135,6 +148,11 @@ export function emptyRawMaterialCreateValues(): RawMaterialCreateValues {
     baseUnitCode: 'g',
     nominalQuantity: '',
     usableQuantity: '',
+    usableQuantityExplicit: false,
+    pricingBasis: 'PACKAGE',
+    pricingAmount: '',
+    pricingUnitCode: 'kg',
+    supplierIds: [],
     aliases: [],
     conversions: [],
   }
@@ -157,7 +175,25 @@ function validFactor(value: string): boolean {
   return /^\d+(?:\.\d{1,12})?$/.test(value) && /[1-9]/.test(value)
 }
 
-export function validateRawMaterialCreate(values: RawMaterialCreateValues): Record<string, string> {
+function decimalGreaterThan(left: string, right: string): boolean {
+  const [leftInteger, leftFraction = ''] = left.split('.')
+  const [rightInteger, rightFraction = ''] = right.split('.')
+  const normalizedLeftInteger = leftInteger.replace(/^0+(?=\d)/, '')
+  const normalizedRightInteger = rightInteger.replace(/^0+(?=\d)/, '')
+  if (normalizedLeftInteger.length !== normalizedRightInteger.length) {
+    return normalizedLeftInteger.length > normalizedRightInteger.length
+  }
+  if (normalizedLeftInteger !== normalizedRightInteger) {
+    return normalizedLeftInteger > normalizedRightInteger
+  }
+  const precision = Math.max(leftFraction.length, rightFraction.length)
+  return leftFraction.padEnd(precision, '0') > rightFraction.padEnd(precision, '0')
+}
+
+export function validateRawMaterialCreate(
+  values: RawMaterialCreateValues,
+  requireNominal = false,
+): Record<string, string> {
   const errors: Record<string, string> = {}
   const name = values.name.trim()
   const description = values.description.trim()
@@ -169,16 +205,32 @@ export function validateRawMaterialCreate(values: RawMaterialCreateValues): Reco
 
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
+  if (requireNominal && !nominal) errors.nominalQuantity = 'Podaj ilość nominalną opakowania.'
   if (usable && !nominal) errors.nominalQuantity = 'Podaj ilość nominalną razem z użytkową.'
   if (nominal && !validDecimal(nominal, 6)) {
     errors.nominalQuantity = 'Wpisz dodatnią liczbę z maksymalnie 18 cyframi przed przecinkiem i 6 po nim.'
   } else if (nominal && values.baseUnitCode === 'pc' && /\.[0-9]*[1-9]/.test(nominal)) {
     errors.nominalQuantity = 'Ilość w sztukach musi być liczbą całkowitą.'
   }
-  if (usable && !validDecimal(usable, 6)) {
+  if (values.usableQuantityExplicit && !usable) {
+    errors.usableQuantity = 'Podaj ilość użytkową albo wyczyść pole, aby użyć ilości nominalnej.'
+  } else if (values.usableQuantityExplicit && !validDecimal(usable, 6)) {
     errors.usableQuantity = 'Wpisz dodatnią liczbę z maksymalnie 18 cyframi przed przecinkiem i 6 po nim.'
   } else if (usable && values.baseUnitCode === 'pc' && /\.[0-9]*[1-9]/.test(usable)) {
     errors.usableQuantity = 'Ilość w sztukach musi być liczbą całkowitą.'
+  }
+  if (usable && nominal && validDecimal(usable, 6) && validDecimal(nominal, 6)
+    && decimalGreaterThan(usable, nominal)) {
+    errors.usableQuantity = 'Ilość użytkowa nie może być większa od ilości nominalnej.'
+  }
+  const pricingAmount = normalizeDecimalInput(values.pricingAmount)
+  if (pricingAmount && !/^\d{1,17}(?:\.\d{1,14})?$/.test(pricingAmount)) {
+    errors.pricingAmount = 'Podaj cenę nieujemną z maksymalnie 14 miejscami po przecinku.'
+  }
+  if (pricingAmount && !nominal) errors.nominalQuantity = 'Cena wymaga ilości nominalnej.'
+  if (values.pricingBasis === 'NOMINAL_UNIT'
+    && UNIT_DIMENSIONS[values.pricingUnitCode] !== UNIT_DIMENSIONS[values.baseUnitCode]) {
+    errors.pricingUnitCode = 'Jednostka ceny nie odpowiada jednostce surowca.'
   }
 
   if (values.aliases.length > 50) errors.aliases = 'Możesz dodać maksymalnie 50 innych nazw surowca.'
@@ -226,6 +278,7 @@ export function validateRawMaterialCreate(values: RawMaterialCreateValues): Reco
 
 export function buildRawMaterialCreatePayload(
   values: RawMaterialCreateValues,
+  includeSupplierIds = false,
 ): RawMaterialCreatePayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
@@ -248,7 +301,15 @@ export function buildRawMaterialCreatePayload(
     ...(values.description.trim() ? { description: values.description.trim() } : {}),
     base_unit_code: values.baseUnitCode,
     ...(nominal ? { nominal_quantity: nominal } : {}),
-    ...(usable ? { usable_quantity: usable } : {}),
+    ...(values.usableQuantityExplicit && usable ? { usable_quantity: usable } : {}),
+    ...(normalizeDecimalInput(values.pricingAmount) ? {
+      pricing: {
+        basis: values.pricingBasis,
+        amount: normalizeDecimalInput(values.pricingAmount),
+        ...(values.pricingBasis === 'NOMINAL_UNIT' ? { unit_code: values.pricingUnitCode } : {}),
+      },
+    } : {}),
+    ...(includeSupplierIds ? { supplier_ids: values.supplierIds } : {}),
     ...(aliases.length ? { aliases } : {}),
     ...(conversions.length ? { conversions } : {}),
   }

@@ -34,6 +34,7 @@ final class RawMaterialService
         private RawMaterialCatalogValues $catalogValues,
         private RawMaterialSkuReservationService $reservations,
         private RawMaterialDocumentSetService $documentSets,
+        private RawMaterialPricingService $pricing,
     ) {}
 
     public function categories(User $actor, Location $context): array
@@ -42,6 +43,65 @@ final class RawMaterialService
 
         return DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
             ->orderBy('depth')->orderBy('name')->get()->map(fn (object $row): array => (array) $row)->all();
+    }
+
+    private function supplierIdsForEditor(User $actor, string $materialId): array
+    {
+        if (! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
+            || ! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierView)) {
+            return [];
+        }
+
+        return DB::table('raw_material_supplier_associations')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $materialId)
+            ->orderBy('supplier_id')->pluck('supplier_id')->all();
+    }
+
+    private function syncSupplierAssociations(User $actor, Location $context, string $materialId, array $input): void
+    {
+        if (! array_key_exists('supplier_ids', $input)) {
+            return;
+        }
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierManage);
+        $supplierIds = array_values(array_unique($input['supplier_ids']));
+        $activeCount = DB::table('organization_suppliers')
+            ->where('organization_id', $actor->organization_id)
+            ->where('lifecycle_state', 'ACTIVE')
+            ->whereIn('id', $supplierIds)->count();
+        if ($activeCount !== count($supplierIds)) {
+            throw ValidationException::withMessages([
+                'supplier_ids' => ['Wybierz aktywnych dostawców z biblioteki bieżącej organizacji.'],
+            ]);
+        }
+
+        $this->contexts->run(AuthorizationMutationScope::rawMaterialCommercial(), $actor->id, function () use (
+            $actor,
+            $materialId,
+            $supplierIds,
+        ): void {
+            $query = DB::table('raw_material_supplier_associations')
+                ->where('organization_id', $actor->organization_id)
+                ->where('raw_material_id', $materialId);
+            if ($supplierIds === []) {
+                $query->delete();
+            } else {
+                $query->whereNotIn('supplier_id', $supplierIds)->delete();
+                $existing = DB::table('raw_material_supplier_associations')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('raw_material_id', $materialId)
+                    ->whereIn('supplier_id', $supplierIds)->pluck('supplier_id')->all();
+                foreach (array_diff($supplierIds, $existing) as $supplierId) {
+                    DB::table('raw_material_supplier_associations')->insert([
+                        'id' => Str::uuid()->toString(),
+                        'organization_id' => $actor->organization_id,
+                        'raw_material_id' => $materialId,
+                        'supplier_id' => $supplierId,
+                        'created_by' => $actor->id,
+                    ]);
+                }
+            }
+        });
     }
 
     public function createCategory(User $actor, Location $context, array $input): array
@@ -322,13 +382,15 @@ final class RawMaterialService
         }
 
         $quantities = DB::table('raw_material_revisions')->where('id', $revisionId)
-            ->select('nominal_quantity', 'usable_quantity')
+            ->select('nominal_quantity', 'usable_quantity', 'usable_quantity_explicit')
             ->selectRaw('raw_materials_round_half_even_v1(usable_quantity * 100 / NULLIF(nominal_quantity, 0), 6)::text AS yield_percent')
             ->first();
 
         return $this->presentMaterial($material, $revision)
             + RawMaterialCatalogValues::present($quantities)
             + app(RawMaterialHistoryService::class)->metadata($actor, $context, $material) + [
+                'pricing_input' => $this->pricingInputForEditor($actor, $revision),
+                'supplier_ids' => $this->supplierIdsForEditor($actor, $material->id),
                 'allergen_declaration' => $declaration,
                 'storage_variants' => $this->storageVariantsForRevision($revision->id),
             ];
@@ -384,7 +446,8 @@ final class RawMaterialService
                 $this->validateForm(new RawMaterialDataRequest, $input);
                 $base = DB::table('raw_material_revisions')->where('id', $snapshot['revision']['id'])->firstOrFail();
                 $input = $this->mergeRevisionInput($base, $input, RawMaterialPermission::Edit);
-                $this->validateBasicData($actor, $input, $materialId);
+                [$unitData] = $this->validateBasicData($actor, $input, $materialId);
+                $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $base);
             } elseif ($section === 'allergens') {
                 $this->validateForm(new RawMaterialAllergenDeclarationRequest, $input);
                 $this->validateAllergenDeclaration($input);
@@ -443,7 +506,8 @@ final class RawMaterialService
         $missing = [];
         $errors = [];
         if ($revision->allergen_state !== 'DECLARED'
-            || ((int) $revision->content_hash_version === 2 && ! $this->hasValidV2AllergenAttestation($revision))) {
+            || (in_array((int) $revision->content_hash_version, [2, 3], true)
+                && ! $this->hasValidV2AllergenAttestation($revision))) {
             $missing[] = [
                 'code' => 'RAW_MATERIAL_ALLERGEN_DECLARATION_REQUIRED', 'field' => 'allergen_declaration',
                 'section' => 'allergens', 'message' => __('messages.raw_material_allergen_declaration_required'),
@@ -525,6 +589,10 @@ final class RawMaterialService
             }
             $input['nominal_quantity'] = (string) $baseRevision->nominal_quantity;
             $input['usable_quantity'] = (string) $baseRevision->usable_quantity;
+            $input['_usable_quantity_explicit'] = (bool) $baseRevision->usable_quantity_explicit;
+        } elseif (! array_key_exists('nominal_quantity', $input)
+            && array_key_exists('usable_quantity', $input) && $baseRevision->nominal_quantity !== null) {
+            $input['nominal_quantity'] = (string) $baseRevision->nominal_quantity;
         }
         if (! array_key_exists('allergen_declaration', $input)) {
             $input['allergen_declaration'] = $this->allergenDeclarationForRevision($baseRevision->id);
@@ -648,6 +716,25 @@ final class RawMaterialService
                 return json_decode($reservation->response_body, true, flags: JSON_THROW_ON_ERROR);
             }
             [$unitData, $aliases] = $this->validateBasicData($actor, $input, null);
+            if (RawMaterialCatalogValues::quantities($input)['nominal_quantity'] === null) {
+                throw ValidationException::withMessages([
+                    'nominal_quantity' => ['Ilość nominalna opakowania jest wymagana.'],
+                ]);
+            }
+            $pricingInputProvided = array_key_exists('pricing', $input);
+            $input = $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, null);
+            unset(
+                $prepared['pricing_input_basis'],
+                $prepared['pricing_input_amount'],
+                $prepared['pricing_input_unit_code'],
+            );
+            if ($pricingInputProvided) {
+                $prepared = array_replace($prepared, array_intersect_key($input, array_flip([
+                    'pricing_input_basis',
+                    'pricing_input_amount',
+                    'pricing_input_unit_code',
+                ])));
+            }
             $materialId = $reservation?->id ?? Str::uuid()->toString();
             $revisionId = Str::uuid()->toString();
             $now = now();
@@ -681,6 +768,7 @@ final class RawMaterialService
                 false,
                 $input['change_reason'] ?? null,
             );
+            $this->syncSupplierAssociations($actor, $context, $materialId, $input);
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'CREATED', null, [
                 'code' => $code,
                 'revision_id' => $revisionId,
@@ -708,6 +796,19 @@ final class RawMaterialService
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
             $this->requireCategory($actor, $input['category_id']);
+            $usableQuantityExplicit = array_key_exists('usable_quantity', $input) && $input['usable_quantity'] !== null;
+            $quantities = RawMaterialCatalogValues::quantities($input);
+            if ($quantities['nominal_quantity'] === null) {
+                throw ValidationException::withMessages([
+                    'nominal_quantity' => ['Ilość nominalna opakowania jest wymagana.'],
+                ]);
+            }
+            $input['nominal_quantity'] = $quantities['nominal_quantity'];
+            if ($usableQuantityExplicit) {
+                $input['usable_quantity'] = $quantities['usable_quantity'];
+            } else {
+                unset($input['usable_quantity']);
+            }
             $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], []);
             $materialId = Str::uuid()->toString();
             $revisionId = Str::uuid()->toString();
@@ -753,6 +854,7 @@ final class RawMaterialService
                 'UNKNOWN',
                 true,
             );
+            $this->syncSupplierAssociations($actor, $context, $materialId, $input);
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'CREATED', null, [
                 'code' => $sku,
                 'revision_id' => $revisionId,
@@ -995,6 +1097,7 @@ final class RawMaterialService
             }
             $input = $this->mergeRevisionInput($baseRevision, $input, $permission);
             [$unitData, $aliases] = $this->validateBasicData($actor, $input, $materialId);
+            $input = $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $baseRevision);
             $latestNo = (int) DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->max('revision_no');
             $revisionId = Str::uuid()->toString();
             DB::table('raw_materials')->where('id', $materialId)->update([
@@ -1016,6 +1119,7 @@ final class RawMaterialService
                 $input['allergen_state'] ?? $baseRevision->allergen_state,
                 baseRevisionId: $baseRevisionId,
             );
+            $this->syncSupplierAssociations($actor, $context, $materialId, $input);
             $metadata = [
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
@@ -1042,6 +1146,7 @@ final class RawMaterialService
             ...($revision->nominal_quantity === null ? [] : [
                 'nominal_quantity' => (string) $revision->nominal_quantity,
                 'usable_quantity' => (string) $revision->usable_quantity,
+                '_usable_quantity_explicit' => (bool) $revision->usable_quantity_explicit,
             ]),
             'conversions' => DB::table('raw_material_revision_units')
                 ->where('revision_id', $revision->id)
@@ -1231,6 +1336,13 @@ final class RawMaterialService
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'APPROVED', $previous, [
                 'revision_id' => $revision->id,
                 'content_hash' => $revision->content_hash,
+                'reference_price' => $this->pricing->recordApprovedRevision(
+                    $actor,
+                    $context,
+                    DB::table('raw_materials')->where('id', $materialId)->firstOrFail(),
+                    $revision,
+                    $operationId,
+                ),
             ], $reason, $operationId);
 
             return $this->presentCurrent($actor, $materialId);
@@ -1628,11 +1740,20 @@ final class RawMaterialService
             'allergen_state' => $stage2d['attestation'] === null ? $allergenState : 'DECLARED',
         ];
         $quantities = RawMaterialCatalogValues::quantities($input);
+        $usableQuantityExplicit = (bool) ($input['_usable_quantity_explicit']
+            ?? array_key_exists('usable_quantity', $input));
+        unset($input['_usable_quantity_explicit']);
         if ($quantities['nominal_quantity'] !== null) {
             $payload += $quantities;
         }
-        $hash = $this->hashPayloadV2(
-            $payload,
+        $pricingFields = [
+            'usable_quantity_explicit' => $quantities['nominal_quantity'] !== null && $usableQuantityExplicit,
+            'pricing_input_basis' => $input['pricing_input_basis'] ?? null,
+            'pricing_input_amount' => $input['pricing_input_amount'] ?? null,
+            'pricing_input_unit_code' => $input['pricing_input_unit_code'] ?? null,
+        ];
+        $hash = $this->hashPayloadV3(
+            $payload + $pricingFields,
             $unitData['units'],
             $aliases,
             $stage2d['allergen_declaration'],
@@ -1645,11 +1766,12 @@ final class RawMaterialService
             'revision_no' => $revisionNo,
             ...$payload,
             ...$quantities,
+            ...$pricingFields,
             'critical_change' => $critical,
             'change_reason' => $reason,
             'created_by' => $actor->id,
             'created_at' => $createdAt,
-            'content_hash_version' => 2,
+            'content_hash_version' => 3,
             'content_hash' => $hash,
         ];
         DB::table('raw_material_revisions')->insert($revision);
@@ -1841,7 +1963,20 @@ final class RawMaterialService
             ->orderBy('variant_code')
             ->get()->map(fn (object $variant): array => $this->canonicalStorageVariant((array) $variant))->all();
 
-        return $this->hashPayloadV2($payload, $units, $aliases, $allergenDeclaration, $storageVariants);
+        if ((int) $revision->content_hash_version === 2) {
+            return $this->hashPayloadV2($payload, $units, $aliases, $allergenDeclaration, $storageVariants);
+        }
+
+        $payload += [
+            'usable_quantity_explicit' => (bool) $revision->usable_quantity_explicit,
+            'pricing_input_basis' => $revision->pricing_input_basis,
+            'pricing_input_amount' => $revision->pricing_input_amount === null
+                ? null
+                : (string) $revision->pricing_input_amount,
+            'pricing_input_unit_code' => $revision->pricing_input_unit_code,
+        ];
+
+        return $this->hashPayloadV3($payload, $units, $aliases, $allergenDeclaration, $storageVariants);
     }
 
     private function hashPayload(array $payload, array $units, array $aliases): string
@@ -1872,6 +2007,29 @@ final class RawMaterialService
 
         return hash('sha256', json_encode([
             'version' => 2,
+            'payload' => $payload,
+            'units' => $units,
+            'aliases' => $aliases,
+            'allergen_declaration' => $allergenDeclaration,
+            'storage_variants' => $storageVariants,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    private function hashPayloadV3(
+        array $payload,
+        array $units,
+        array $aliases,
+        array $allergenDeclaration,
+        array $storageVariants,
+    ): string {
+        ksort($payload);
+        usort($units, fn (array $left, array $right): int => $left['unit_code'] <=> $right['unit_code']);
+        usort($aliases, fn (array $left, array $right): int => $left['normalized_alias'] <=> $right['normalized_alias']);
+        usort($allergenDeclaration['items'], fn (array $left, array $right): int => [$left['allergen_code'], $left['exposure_kind']] <=> [$right['allergen_code'], $right['exposure_kind']]);
+        usort($storageVariants, fn (array $left, array $right): int => $left['variant_code'] <=> $right['variant_code']);
+
+        return hash('sha256', json_encode([
+            'version' => 3,
             'payload' => $payload,
             'units' => $units,
             'aliases' => $aliases,
@@ -2118,6 +2276,7 @@ final class RawMaterialService
                 'base_unit_dimension' => $revision->base_unit_dimension,
                 'nominal_quantity' => $revision->nominal_quantity,
                 'usable_quantity' => $revision->usable_quantity,
+                'usable_quantity_explicit' => (bool) ($revision->usable_quantity_explicit ?? false),
                 'allergen_state' => $revision->allergen_state,
                 'units' => DB::table('raw_material_revision_units')->where('revision_id', $revision->id)
                     ->orderBy('unit_code')->get()->map(fn (object $unit): array => [
@@ -2140,6 +2299,48 @@ final class RawMaterialService
             'version' => $material->edit_version,
             'approved_revision_id' => $material->approved_revision_id,
             'revision' => $revisionData,
+        ];
+    }
+
+    private function pricingInputForEditor(User $actor, object $revision): ?array
+    {
+        if (! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView)) {
+            return null;
+        }
+
+        $event = DB::table('raw_material_reference_price_events')
+            ->where('pricing_revision_id', $revision->id)->first();
+        if ($revision->pricing_input_basis !== null && $event === null) {
+            return [
+                'basis' => $revision->pricing_input_basis,
+                'amount' => (string) $revision->pricing_input_amount,
+                'unit_code' => $revision->pricing_input_unit_code,
+            ];
+        }
+        $event = DB::table('raw_material_reference_price_events')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $revision->raw_material_id)
+            ->where('effective_from', '<=', now()->toDateString())
+            ->orderByDesc('effective_from')->orderByDesc('event_no')->first();
+        if (! $event || $event->event_type !== 'PRICE_SET') {
+            return null;
+        }
+        $basis = $event->pricing_input_basis;
+        $amount = $event->pricing_input_amount;
+        $unitCode = $event->pricing_input_unit_code;
+        if ($basis === null && $event->net_pln_per_package !== null) {
+            $basis = 'PACKAGE';
+            $amount = $event->net_pln_per_package;
+            $unitCode = null;
+        }
+        if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT'], true)) {
+            return null;
+        }
+
+        return [
+            'basis' => $basis,
+            'amount' => (string) $amount,
+            'unit_code' => $unitCode,
         ];
     }
 

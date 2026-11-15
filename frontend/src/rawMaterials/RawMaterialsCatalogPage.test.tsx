@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import RawMaterialsCatalogPage from './RawMaterialsCatalogPage'
+import { emptyRawMaterialCreateValues } from './create'
 import {
   downloadCatalogExport,
   exportCatalog,
@@ -97,12 +98,14 @@ const editableEditor = (id = materialA): RawMaterialEditor => ({
   revisionNo: 3,
   version: `version-${id}`,
   values: {
+    ...emptyRawMaterialCreateValues(),
     categoryId: 'category-1',
     name: id === materialA ? 'Mąka pszenna' : 'Ryż basmati',
     description: 'Opis roboczy.',
     baseUnitCode: 'kg',
     nominalQuantity: '10.000000',
     usableQuantity: '8.000000',
+    usableQuantityExplicit: true,
     aliases: ['alias'],
     conversions: [],
   },
@@ -320,6 +323,7 @@ describe('katalog surowców', () => {
     const form = await screen.findByRole('dialog', { name: 'Dodaj surowiec' })
     fireEvent.change(within(form).getByLabelText(/Kategoria/), { target: { value: 'category-1' } })
     fireEvent.change(within(form).getByLabelText(/Nazwa surowca/), { target: { value: 'Szkic testowy' } })
+    fireEvent.change(within(form).getByLabelText(/Nominalna/), { target: { value: '10' } })
     fireEvent.click(within(form).getByRole('button', { name: 'Utwórz szkic' }))
     fireEvent.click(await within(form).findByRole('button', { name: 'Otwórz szczegóły' }))
     await waitFor(() => expect(fetchRawMaterialDetailMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal), true))
@@ -1281,6 +1285,12 @@ describe('katalog surowców', () => {
       effectiveFrom: '2025-02-01',
       netPlnPerBaseUnit: '12.50000000',
       netPlnPerPackage: '25.00000000',
+      pricingInputBasis: 'NOMINAL_UNIT',
+      pricingInputAmount: '10.00000000000000',
+      pricingInputUnitCode: 'kg',
+      pricingNominalQuantity: '2800.000000',
+      pricingUsableQuantity: '1500.000000',
+      pricingBaseUnitCode: 'g',
       currencyCode: 'PLN',
     }, {
       id: 'price-event-2',
@@ -1289,6 +1299,12 @@ describe('katalog surowców', () => {
       effectiveFrom: '2025-01-01',
       netPlnPerBaseUnit: '10.00000000',
       netPlnPerPackage: '20.00000000',
+      pricingInputBasis: null,
+      pricingInputAmount: null,
+      pricingInputUnitCode: null,
+      pricingNominalQuantity: null,
+      pricingUsableQuantity: null,
+      pricingBaseUnitCode: null,
       currencyCode: 'PLN',
     }]
     fetchRawMaterialReferencePricesMock.mockResolvedValue(prices)
@@ -1299,6 +1315,9 @@ describe('katalog surowców', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Mąka pszenna' })
     expect(await within(dialog).findByRole('img', { name: /Historia cen netto w PLN/ })).toBeTruthy()
     expect(within(dialog).getByText('Historia cen')).toBeTruthy()
+    expect(within(dialog).getByText(/Podstawa: jednostka nominalna \(kg\)/)).toBeTruthy()
+    expect(within(within(dialog).getByRole('list', { name: 'Szczegóły historii cen' }))
+      .getByText(/nominalna/)).toBeTruthy()
     expect(fetchRawMaterialReferencePricesMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal))
   })
 

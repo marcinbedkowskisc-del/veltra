@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 final class RawMaterialCatalogCsvImportWorkflow
 {
@@ -339,6 +340,10 @@ final class RawMaterialCatalogCsvImportWorkflow
                             'name' => $row['name'],
                             'description' => $row['description'],
                             'base_unit_code' => $row['base_unit_code'],
+                            'nominal_quantity' => $row['nominal_quantity'],
+                            ...(! $row['usable_quantity_provided'] ? [] : [
+                                'usable_quantity' => $row['usable_quantity'],
+                            ]),
                         ],
                     );
                     $materialId = $material['id'];
@@ -360,6 +365,9 @@ final class RawMaterialCatalogCsvImportWorkflow
                         'description' => $row['description'],
                         'base_unit_code' => $row['base_unit_code'],
                         'category_code' => $row['category_code'],
+                        'nominal_quantity' => $row['nominal_quantity'],
+                        'usable_quantity' => $row['usable_quantity'],
+                        'usable_quantity_explicit' => $row['usable_quantity_provided'],
                         'result_code' => $row['status_code'] === 'CREATE' ? 'CREATED' : 'NO_CHANGE',
                     ]),
                 );
@@ -435,6 +443,8 @@ final class RawMaterialCatalogCsvImportWorkflow
                 'revisions.name',
                 'revisions.description',
                 'revisions.base_unit_code',
+                'revisions.nominal_quantity',
+                'revisions.usable_quantity',
                 'categories.code as category_code',
             ])
             ->keyBy('code');
@@ -446,6 +456,23 @@ final class RawMaterialCatalogCsvImportWorkflow
 
         foreach ($rows as $row) {
             $error = $this->validateRow($row);
+            if ($error === null) {
+                try {
+                    $quantities = RawMaterialCatalogValues::quantities([
+                        'base_unit_code' => $row['base_unit_code'],
+                        'nominal_quantity' => $row['nominal_quantity'],
+                        ...($row['usable_quantity'] === null ? [] : [
+                            'usable_quantity' => $row['usable_quantity'],
+                        ]),
+                    ]);
+                    $row = [...$row, ...$quantities];
+                } catch (ValidationException $exception) {
+                    $error = [
+                        'code' => 'QUANTITY_INVALID',
+                        'message' => $exception->validator->errors()->first(),
+                    ];
+                }
+            }
             $category = $categories->get($row['category_code']);
             if ($error === null && $category === null) {
                 $error = [
@@ -482,6 +509,8 @@ final class RawMaterialCatalogCsvImportWorkflow
                         && $material->name === $row['name']
                         && $material->description === $row['description']
                         && $material->base_unit_code === $row['base_unit_code']
+                        && $material->nominal_quantity === $row['nominal_quantity']
+                        && $material->usable_quantity === $row['usable_quantity']
                         && $material->category_code === $row['category_code'];
                     if ($matchesAttributes) {
                         $statusCode = 'NO_CHANGE';
@@ -530,6 +559,8 @@ final class RawMaterialCatalogCsvImportWorkflow
                     'name' => $material->name,
                     'description' => $material->description,
                     'base_unit_code' => $material->base_unit_code,
+                    'nominal_quantity' => $material->nominal_quantity,
+                    'usable_quantity' => $material->usable_quantity,
                     'category_code' => $material->category_code,
                 ],
                 'error_code' => $error['code'] ?? null,
@@ -543,6 +574,8 @@ final class RawMaterialCatalogCsvImportWorkflow
                 'description' => $row['description'],
                 'base_unit_code' => $row['base_unit_code'],
                 'category_code' => $row['category_code'],
+                'nominal_quantity' => $row['nominal_quantity'],
+                'usable_quantity' => $row['usable_quantity'],
                 'status_code' => $statusCode,
                 'status' => self::STATUS_LABELS[$statusCode],
                 'error_code' => $error['code'] ?? null,
@@ -581,6 +614,9 @@ final class RawMaterialCatalogCsvImportWorkflow
         }
         if (! in_array($row['base_unit_code'], ['mg', 'g', 'kg', 'ml', 'l', 'pc'], true)) {
             return ['code' => 'BASE_UNIT_INVALID', 'message' => 'Jednostka bazowa nie jest obsługiwana dla RAW.'];
+        }
+        if ($row['nominal_quantity'] === null) {
+            return ['code' => 'NOMINAL_QUANTITY_REQUIRED', 'message' => 'Ilość nominalna opakowania jest wymagana.'];
         }
         if (preg_match('/\A[A-Z0-9_-]{1,50}\z/', $row['category_code']) !== 1) {
             return ['code' => 'CATEGORY_CODE_INVALID', 'message' => 'Kod kategorii jest pusty albo ma nieprawidłowy format.'];
@@ -645,6 +681,9 @@ final class RawMaterialCatalogCsvImportWorkflow
                 'description' => $row->description,
                 'base_unit_code' => $row->base_unit_code,
                 'category_code' => $row->category_code,
+                'nominal_quantity' => $row->nominal_quantity,
+                'usable_quantity' => $row->usable_quantity,
+                'usable_quantity_provided' => (bool) $row->usable_quantity_explicit,
                 'status' => $row->result_code === 'CREATED' ? 'UTWORZENIE' : 'BEZ ZMIAN',
             ])->all(),
         ];

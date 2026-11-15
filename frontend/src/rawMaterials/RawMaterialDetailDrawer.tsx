@@ -595,7 +595,31 @@ export default function RawMaterialDetailDrawer({
                             referencePrices.length === 0
                               ? <p className="detail-muted">Nie ma jeszcze zarejestrowanych cen dla tego surowca.</p>
                               : detail.revision
-                                ? <PriceHistoryChart prices={referencePrices} baseUnitCode={detail.revision.baseUnitCode} />
+                                ? (
+                                  <>
+                                    <PriceHistoryChart prices={referencePrices} baseUnitCode={detail.revision.baseUnitCode} />
+                                    <ul className="detail-list" aria-label="Szczegóły historii cen">
+                                      {referencePrices.map((price) => (
+                                        <li key={price.id}>
+                                          <strong>{dateLabel(price.effectiveFrom)} · zdarzenie {price.eventNo}</strong>
+                                          {price.pricingInputBasis && price.pricingInputAmount !== null && (
+                                            <p className="detail-muted">
+                                              Podstawa: {price.pricingInputBasis === 'PACKAGE'
+                                                ? 'całe opakowanie'
+                                                : `${price.pricingInputBasis === 'NOMINAL_UNIT' ? 'jednostka nominalna' : 'jednostka podstawowa'} (${unitShortLabel(price.pricingInputUnitCode ?? '')})`}
+                                              {' · '}średnia cena wejściowa {formatMoney(price.pricingInputAmount)} PLN
+                                              {price.pricingNominalQuantity !== null
+                                                && price.pricingUsableQuantity !== null
+                                                && price.pricingBaseUnitCode !== null
+                                                ? ` · nominalna ${formatNumber(price.pricingNominalQuantity, { maximumFractionDigits: 6 })} ${unitShortLabel(price.pricingBaseUnitCode)} · użytkowa ${formatNumber(price.pricingUsableQuantity, { maximumFractionDigits: 6 })} ${unitShortLabel(price.pricingBaseUnitCode)}`
+                                                : ''}
+                                            </p>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </>
+                                )
                                 : <p className="detail-muted">Nie można wyświetlić cen bez informacji o jednostce podstawowej.</p>
                           )}
                       </section>

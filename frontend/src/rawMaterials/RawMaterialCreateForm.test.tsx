@@ -60,6 +60,7 @@ function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCr
 function enterValidBasicFields() {
   fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
   fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
+  fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '10' } })
 }
 
 beforeEach(() => {
@@ -77,6 +78,25 @@ afterEach(() => {
 })
 
 describe('formularz tworzenia surowca RAW', () => {
+  it('pokazuje i serializuje cenę wyłącznie przy przyznanym uprawnieniu', async () => {
+    renderForm()
+    expect(screen.queryByRole('heading', { name: 'Średnia cena netto' })).toBeNull()
+    cleanup()
+
+    renderForm({ canManageReferencePrice: true })
+    expect(screen.getByRole('heading', { name: 'Średnia cena netto' })).toBeTruthy()
+    enterValidBasicFields()
+    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto za kg (PLN)'), { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+
+    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      nominal_quantity: '10',
+      pricing: { basis: 'NOMINAL_UNIT', amount: '10', unit_code: 'kg' },
+    }), reservationId)
+  })
+
   it('zachowuje dane w zakładkach i zatwierdza kompletny surowiec jednym żądaniem', async () => {
     renderForm({ canManageAllergens: true, canCreateApproved: true })
     enterValidBasicFields()
@@ -154,7 +174,7 @@ describe('formularz tworzenia surowca RAW', () => {
   it('wysyła mapowany payload i używa serwerowej rezerwacji SKU/idempotencji', async () => {
     renderForm()
     enterValidBasicFields()
-    fireEvent.change(screen.getByLabelText('Nominalna'), { target: { value: '12,5' } })
+    fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '12,5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
     fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
     expect(screen.getByText(/nazwy, pod którymi pracownicy mogą szukać/)).toBeTruthy()

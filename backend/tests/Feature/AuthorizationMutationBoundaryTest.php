@@ -262,6 +262,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
             'category_id' => $category['id'],
             'name' => 'Mąka testowa',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
             'conversions' => [['unit_code' => 'g']],
             'aliases' => ['Mąka do testów'],
         ]);

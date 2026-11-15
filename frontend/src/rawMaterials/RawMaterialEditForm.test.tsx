@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
 import RawMaterialEditForm from './RawMaterialEditForm'
+import { emptyRawMaterialCreateValues } from './create'
 import {
   fetchRawMaterialCapabilities,
   fetchRawMaterialCompletion,
@@ -53,12 +54,14 @@ const makeEditor = (extra: Partial<RawMaterialEditor> = {}): RawMaterialEditor =
   revisionNo: 4,
   version,
   values: {
+    ...emptyRawMaterialCreateValues(),
     categoryId,
     name: 'Mąka pszenna',
     description: 'Opis zachowany',
     baseUnitCode: 'kg',
     nominalQuantity: '10.000000',
     usableQuantity: '8.000000',
+    usableQuantityExplicit: true,
     aliases: ['alias zachowany'],
     conversions: [{ unitCode: 'pc', toBaseFactor: '2.500000', basis: '1 sztuka' }],
   },
@@ -148,6 +151,26 @@ describe('formularz edycji surowca', () => {
       nominal_quantity: '125.5',
       usable_quantity: '0.123456',
     }), version)
+  })
+
+  it('wyciera odziedziczoną ilość użytkową przy zmianie ilości nominalnej', async () => {
+    const editor = makeEditor()
+    editor.values.usableQuantity = ''
+    editor.values.usableQuantityExplicit = false
+    editorMock.mockResolvedValue(editor)
+    renderForm()
+
+    await screen.findByRole('heading', { name: 'Edytuj surowiec' })
+    expect(screen.getByLabelText<HTMLInputElement>(/Nominalna/).value).toBe('10')
+    expect(screen.getByLabelText<HTMLInputElement>('Użytkowa').value).toBe('')
+    fireEvent.change(screen.getByLabelText(/^Nominalna/), { target: { value: '12' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock).toHaveBeenCalledWith(materialId, expect.objectContaining({
+      nominal_quantity: '12',
+    }), version)
+    expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('usable_quantity')
   })
 
   it('wymaga obu uprawnień przed pobraniem edytora i zachowuje pełny payload przy jawnym czyszczeniu pól', async () => {

@@ -4,13 +4,19 @@ namespace App\Domain\RawMaterials;
 
 final class RawMaterialCatalogCsvParser
 {
-    private const HEADER = [
+    private const LEGACY_HEADER = [
         'sku',
         'entity_type',
         'name',
         'description',
         'base_unit_code',
         'category_code',
+    ];
+
+    private const HEADER = [
+        ...self::LEGACY_HEADER,
+        'nominal_quantity',
+        'usable_quantity',
     ];
 
     public function parse(string $contents): array
@@ -23,14 +29,15 @@ final class RawMaterialCatalogCsvParser
         }
 
         $records = $this->records($contents);
-        if ($records === [] || $records[0] !== self::HEADER) {
+        if ($records === [] || ! in_array($records[0], [self::LEGACY_HEADER, self::HEADER], true)) {
             throw new RawMaterialException(
                 'RAW_MATERIAL_CATALOG_CSV_HEADER_INVALID',
-                'Nagłówek CSV musi zawierać dokładnie sześć wymaganych kolumn we właściwej kolejności.',
+                'Nagłówek CSV musi zawierać sześć kolumn katalogu oraz opcjonalne kolumny ilości we właściwej kolejności.',
                 422,
                 ['row_number' => 1],
             );
         }
+        $hasQuantities = $records[0] === self::HEADER;
         if (count($records) < 2) {
             throw new RawMaterialException('RAW_MATERIAL_CATALOG_CSV_EMPTY', 'Plik CSV nie zawiera żadnych wierszy danych.', 422);
         }
@@ -44,16 +51,16 @@ final class RawMaterialCatalogCsvParser
         $skuRows = [];
         foreach ($dataRecords as $index => $fields) {
             $rowNumber = $index + 2;
-            if (count($fields) !== count(self::HEADER)) {
+            if (count($fields) !== count($records[0])) {
                 throw new RawMaterialException(
                     'RAW_MATERIAL_CATALOG_CSV_COLUMN_COUNT_INVALID',
-                    "Wiersz {$rowNumber} musi zawierać dokładnie sześć pól.",
+                    "Wiersz {$rowNumber} nie zawiera wymaganej liczby pól dla nagłówka CSV.",
                     422,
                     ['row_number' => $rowNumber],
                 );
             }
 
-            [$sku, $entityType, $name, $description, $baseUnitCode, $categoryCode] = $fields;
+            [$sku, $entityType, $name, $description, $baseUnitCode, $categoryCode] = array_slice($fields, 0, 6);
             $rows[] = [
                 'row_number' => $rowNumber,
                 'sku' => $sku,
@@ -62,6 +69,9 @@ final class RawMaterialCatalogCsvParser
                 'description' => $description === '' ? null : $description,
                 'base_unit_code' => $baseUnitCode,
                 'category_code' => $categoryCode,
+                'nominal_quantity' => $hasQuantities && $fields[6] !== '' ? $fields[6] : null,
+                'usable_quantity' => $hasQuantities && $fields[7] !== '' ? $fields[7] : null,
+                'usable_quantity_provided' => $hasQuantities && $fields[7] !== '',
                 'duplicate_row_numbers' => [],
             ];
             if ($sku !== '') {

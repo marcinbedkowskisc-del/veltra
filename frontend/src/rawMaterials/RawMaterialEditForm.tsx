@@ -4,7 +4,7 @@ import { formatNumber } from '../design-system/formatting'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
 import { lifecycleLabel, RAW_UNITS } from './catalog'
-import type { CategoryOption } from './catalog'
+import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   normalizeDecimalInput,
   conversionBasisHint,
@@ -27,6 +27,7 @@ import {
   type RawMaterialEditor,
   type RevisedRawMaterial,
   type AllergenDeclaration,
+  fetchSuppliers,
 } from './api'
 
 type Props = {
@@ -91,7 +92,13 @@ function serverFieldErrors(errors: Record<string, string[]>): Record<string, str
   ]))
 }
 
-function buildEditPayload(values: RawMaterialCreateValues, changeReason: string): RawMaterialEditPayload {
+function buildEditPayload(
+  values: RawMaterialCreateValues,
+  changeReason: string,
+  includePricing: boolean,
+  includeSuppliers: boolean,
+  initialValues: RawMaterialCreateValues,
+): RawMaterialEditPayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
   const conversions: RawMaterialEditPayload['conversions'] = values.conversions.map((conversion) => {
@@ -106,13 +113,25 @@ function buildEditPayload(values: RawMaterialCreateValues, changeReason: string)
       basis: conversion.basis.trim(),
     }
   })
+  const pricingChanged = values.pricingBasis !== initialValues.pricingBasis
+    || values.pricingAmount !== initialValues.pricingAmount
+    || values.pricingUnitCode !== initialValues.pricingUnitCode
 
   return {
     category_id: values.categoryId,
     name: values.name.trim(),
     description: values.description.trim() || null,
     base_unit_code: values.baseUnitCode,
-    ...(nominal && usable ? { nominal_quantity: nominal, usable_quantity: usable } : {}),
+    ...(nominal ? { nominal_quantity: nominal } : {}),
+    ...(values.usableQuantityExplicit && usable ? { usable_quantity: usable } : {}),
+    ...(includePricing && pricingChanged && normalizeDecimalInput(values.pricingAmount) ? {
+      pricing: {
+        basis: values.pricingBasis,
+        amount: normalizeDecimalInput(values.pricingAmount),
+        ...(values.pricingBasis === 'NOMINAL_UNIT' ? { unit_code: values.pricingUnitCode } : {}),
+      },
+    } : {}),
+    ...(includeSuppliers ? { supplier_ids: values.supplierIds } : {}),
     aliases: values.aliases.map((alias) => alias.trim()).filter(Boolean),
     conversions,
     ...(changeReason.trim() ? { change_reason: changeReason.trim() } : {}),
@@ -141,6 +160,11 @@ export default function RawMaterialEditForm({
   const [allergens, setAllergens] = useState<AllergenDeclaration>(unknownAllergens)
   const [initialAllergens, setInitialAllergens] = useState<AllergenDeclaration>(unknownAllergens)
   const [canEditAllergens, setCanEditAllergens] = useState(false)
+  const [canManageReferencePrice, setCanManageReferencePrice] = useState(false)
+  const [canManageSuppliers, setCanManageSuppliers] = useState(false)
+  const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
+  const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
+  const [supplierError, setSupplierError] = useState<string | null>(null)
   const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
   const [focusError, setFocusError] = useState(0)
   const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
@@ -211,11 +235,32 @@ export default function RawMaterialEditForm({
           setPhase('error')
           return
         }
+        const supplierPermission = capabilities.actions.manageSuppliers === true
+        if (supplierPermission) {
+          try {
+            const suppliers = await fetchSuppliers('', controller.signal)
+            if (controller.signal.aborted || !active.current || locationRef.current !== expectedLocation) return
+            setSupplierOptions(suppliers)
+            setSupplierOptionsLoaded(true)
+            setSupplierError(null)
+          } catch (cause) {
+            if (controller.signal.aborted) return
+            setSupplierOptionsLoaded(false)
+            setSupplierError(cause instanceof Error ? cause.message : 'Nie udało się wczytać biblioteki dostawców.')
+          }
+        } else {
+          setSupplierOptions([])
+          setSupplierOptionsLoaded(false)
+          setSupplierError(null)
+        }
         setSnapshot(editor)
         const formattedValues = editableValues(editor.values)
         setValues(formattedValues)
         setInitialValues(formattedValues)
         setCanEditAllergens(permitted)
+        setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
+        setCanManageSuppliers(supplierPermission)
+        setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
         setAllergens(declaration?.declaration ?? unknownAllergens())
         setInitialAllergens(declaration?.declaration ?? unknownAllergens())
         setPhase('editing')
@@ -312,6 +357,34 @@ export default function RawMaterialEditForm({
     setFormError(null)
   }
 
+  function setNominalQuantity(value: string) {
+    setValues((current) => current ? {
+      ...current,
+      nominalQuantity: value,
+      ...(current.usableQuantityExplicit ? {} : { usableQuantity: '' }),
+    } : current)
+    setValidationErrors((current) => ({ ...current, nominalQuantity: '' }))
+    setServerErrors((current) => ({ ...current, nominalQuantity: '' }))
+    setFormError(null)
+  }
+
+  function setUsableQuantity(value: string) {
+    setValues((current) => current ? {
+      ...current,
+      usableQuantity: value,
+      usableQuantityExplicit: value.trim() !== '',
+    } : current)
+    setValidationErrors((current) => ({ ...current, usableQuantity: '' }))
+    setServerErrors((current) => ({ ...current, usableQuantity: '' }))
+    setFormError(null)
+  }
+
+  function setBaseUnit(value: RawMaterialCreateValues['baseUnitCode']) {
+    const pricingUnitCode = UNIT_DIMENSIONS[value] === 'MASS'
+      ? 'kg' : UNIT_DIMENSIONS[value] === 'VOLUME' ? 'l' : 'pc'
+    setValues((current) => current ? { ...current, baseUnitCode: value, pricingUnitCode } : current)
+  }
+
   function updateAlias(index: number, value: string) {
     if (!values) return
     setField('aliases', values.aliases.map((alias, itemIndex) => itemIndex === index ? value : alias))
@@ -389,6 +462,24 @@ export default function RawMaterialEditForm({
         setPhase('error')
         return
       }
+      const supplierPermission = capabilities.actions.manageSuppliers === true
+      if (supplierPermission) {
+        try {
+          const suppliers = await fetchSuppliers('', controller.signal)
+          if (!active.current || locationRef.current !== expectedLocation) return
+          setSupplierOptions(suppliers)
+          setSupplierOptionsLoaded(true)
+          setSupplierError(null)
+        } catch (cause) {
+          if (!active.current) return
+          setSupplierOptionsLoaded(false)
+          setSupplierError(cause instanceof Error ? cause.message : 'Nie udało się wczytać biblioteki dostawców.')
+        }
+      } else {
+        setSupplierOptions([])
+        setSupplierOptionsLoaded(false)
+        setSupplierError(null)
+      }
       const permitted = completion.availableActions.includes('edit_allergens')
       const declaration = permitted ? await fetchAllergenDeclaration(materialId, controller.signal) : null
       if (!active.current || locationRef.current !== expectedLocation) return
@@ -407,6 +498,8 @@ export default function RawMaterialEditForm({
       setValues(formattedValues)
       setInitialValues(formattedValues)
       setCanEditAllergens(permitted)
+      setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
+      setCanManageSuppliers(supplierPermission)
       setAllergens(declaration?.declaration ?? unknownAllergens())
       setInitialAllergens(declaration?.declaration ?? unknownAllergens())
       setAllergenValidation(null)
@@ -481,9 +574,6 @@ export default function RawMaterialEditForm({
     const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
     const declarationError = allergensChanged ? allergenError(allergens, false) : null
     setAllergenValidation(declarationError)
-    if (Boolean(values.nominalQuantity.trim()) !== Boolean(values.usableQuantity.trim())) {
-      errors.nominalQuantity = 'Podaj ilość nominalną i użytkową razem albo pozostaw obie puste.'
-    }
     if (initialValues?.nominalQuantity && !values.nominalQuantity.trim() && !values.usableQuantity.trim()) {
       errors.nominalQuantity = 'Nie można wyczyścić istniejących ilości w tym kontrakcie. Podaj obie wartości.'
     }
@@ -494,7 +584,13 @@ export default function RawMaterialEditForm({
     }
 
     const expectedLocation = operatingLocationId
-    const payload = { ...buildEditPayload(values, changeReason),
+    const payload = { ...buildEditPayload(
+      values,
+      changeReason,
+      canManageReferencePrice,
+      canManageSuppliers && supplierOptionsLoaded,
+      initialValues ?? values,
+    ),
       ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
     operationLocked.current = true
     setPhase('authorizing')
@@ -687,7 +783,7 @@ export default function RawMaterialEditForm({
                   <label className="create-form-field" htmlFor="edit-base-unit">
                     Jednostka podstawowa <span className="required-mark">wymagane</span>
                     <select id="edit-base-unit" value={values.baseUnitCode} {...fieldProps('baseUnitCode')}
-                      onChange={(event) => setField('baseUnitCode', event.target.value as RawMaterialCreateValues['baseUnitCode'])}>
+                      onChange={(event) => setBaseUnit(event.target.value as RawMaterialCreateValues['baseUnitCode'])}>
                       {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
                     </select>
                     <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „szt.” oznacza jedną sztukę, nie opakowanie.</span>
@@ -699,19 +795,63 @@ export default function RawMaterialEditForm({
                       <label htmlFor="edit-nominal-quantity">Nominalna</label>
                       <input id="edit-nominal-quantity" inputMode="decimal" value={values.nominalQuantity}
                         {...fieldProps('nominalQuantity')}
-                        onChange={(event) => setField('nominalQuantity', event.target.value)} />
+                        onChange={(event) => setNominalQuantity(event.target.value)} />
                       <label htmlFor="edit-usable-quantity">Użytkowa</label>
                       <input id="edit-usable-quantity" inputMode="decimal" value={values.usableQuantity}
                         {...fieldProps('usableQuantity')}
-                        onChange={(event) => setField('usableQuantity', event.target.value)} />
+                        onChange={(event) => setUsableQuantity(event.target.value)} />
                     </div>
                     {(getError('nominalQuantity') || getError('usableQuantity')) && (
                       <span className="field-error" id="nominalQuantity-error">
                         {getError('nominalQuantity') ?? getError('usableQuantity')}
                       </span>
                     )}
-                    <span className="field-hint">Ilości podaj w parze, maksymalnie z 6 miejscami po przecinku.</span>
+                    <span className="field-hint">Pozostaw ilość użytkową pustą, aby automatycznie użyć nominalnej. Maksymalnie 6 miejsc po przecinku.</span>
                   </fieldset>
+                  {canManageReferencePrice ? (
+                    <section className="create-form-field create-form-field-wide" aria-labelledby="edit-pricing-title">
+                      <h3 id="edit-pricing-title">Średnia cena netto</h3>
+                      <p className="field-hint">Cena jest wprowadzana ręcznie i nie jest wyliczana z ofert dostawców.</p>
+                      <div className="create-form-grid">
+                        <label className="create-form-field" htmlFor="edit-pricing-basis">Podstawa ceny
+                          <select id="edit-pricing-basis" value={values.pricingBasis} disabled={phase !== 'editing'}
+                            onChange={(event) => setField('pricingBasis', event.target.value as RawMaterialCreateValues['pricingBasis'])}>
+                            <option value="PACKAGE">Całe opakowanie</option>
+                            <option value="NOMINAL_UNIT">Jednostka nominalna</option>
+                          </select>
+                        </label>
+                        <label className="create-form-field" htmlFor="edit-pricing-amount">
+                          {values.pricingBasis === 'PACKAGE'
+                            ? 'Średnia cena netto opakowania (PLN)'
+                            : `Średnia cena netto za ${values.pricingUnitCode} (PLN)`}
+                          <input id="edit-pricing-amount" inputMode="decimal" value={values.pricingAmount}
+                            disabled={phase !== 'editing'} {...fieldProps('pricingAmount')}
+                            onChange={(event) => setField('pricingAmount', event.target.value)} />
+                          {getError('pricingAmount') && <span className="field-error">{getError('pricingAmount')}</span>}
+                        </label>
+                      </div>
+                    </section>
+                  ) : (
+                    <p className="field-hint">Edycja ceny referencyjnej wymaga osobnego uprawnienia.</p>
+                  )}
+                  {canManageSuppliers && (
+                    <label className="create-form-field create-form-field-wide" htmlFor="edit-suppliers">
+                      Dostawcy — powiązania informacyjne
+                      {supplierOptionsLoaded ? (
+                        <select id="edit-suppliers" multiple value={values.supplierIds} disabled={phase !== 'editing'}
+                          onChange={(event) => setField('supplierIds',
+                            Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
+                          {supplierOptions.map((supplier) => (
+                            <option key={supplier.id} value={supplier.id}>{supplierLabel(supplier)}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="field-hint">Biblioteka dostawców jest niedostępna; obecne powiązania pozostaną bez zmian.</span>
+                      )}
+                      <span className="field-hint">Powiązanie nie wyznacza ceny i nie pobiera ofert.</span>
+                      {supplierError && <span className="field-error" role="alert">{supplierError}</span>}
+                    </label>
+                  )}
                 </div>
               </fieldset>
                 ) },

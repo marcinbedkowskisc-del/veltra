@@ -40,6 +40,13 @@ final class RawMaterialCsvImportPersistenceService
      *     ingredient_name:string,
      *     price_net:string,
      *     normalized_net_pln_per_base_unit:string,
+     *     net_pln_per_package:?string,
+     *     pricing_input_basis:?string,
+     *     pricing_input_amount:?string,
+     *     pricing_input_unit_code:?string,
+     *     pricing_nominal_quantity:?string,
+     *     pricing_usable_quantity:?string,
+     *     pricing_revision_id:?string,
      *     vat_rate:string,
      *     unit:string,
      *     effective_date:string
@@ -205,7 +212,7 @@ final class RawMaterialCsvImportPersistenceService
             throw new InvalidArgumentException('Import musi zawierać co najmniej jeden przygotowany wiersz.');
         }
 
-        $expectedKeys = [
+        $requiredKeys = [
             'ingredient_id',
             'ingredient_name',
             'price_net',
@@ -214,11 +221,22 @@ final class RawMaterialCsvImportPersistenceService
             'unit',
             'effective_date',
         ];
+        $optionalKeys = [
+            'net_pln_per_package',
+            'pricing_input_basis',
+            'pricing_input_amount',
+            'pricing_input_unit_code',
+            'pricing_nominal_quantity',
+            'pricing_usable_quantity',
+            'pricing_revision_id',
+        ];
         foreach ($rows as $row) {
-            if (! is_array($row) || array_is_list($row) || array_diff(array_keys($row), $expectedKeys) !== []
-                || array_diff($expectedKeys, array_keys($row)) !== []) {
+            if (! is_array($row) || array_is_list($row)
+                || array_diff(array_keys($row), [...$requiredKeys, ...$optionalKeys]) !== []
+                || array_diff($requiredKeys, array_keys($row)) !== []) {
                 throw new InvalidArgumentException('Przygotowany wiersz importu ma nieprawidłowy kształt.');
             }
+            $row += array_fill_keys($optionalKeys, null);
             if (! is_string($row['ingredient_id']) || ! preg_match('/\A(?:RAW|SUR)-[0-9]{6,9}\z/', $row['ingredient_id'])
                 || ! is_string($row['ingredient_name']) || trim($row['ingredient_name']) === ''
                 || mb_strlen($row['ingredient_name'], 'UTF-8') > 200) {
@@ -237,6 +255,24 @@ final class RawMaterialCsvImportPersistenceService
             }
             if (! in_array($row['unit'], ['kg', 'l', 'szt.'], true)) {
                 throw new InvalidArgumentException('Jednostka wejściowa musi mieć wartość kg, l albo szt.');
+            }
+            if ($row['pricing_input_basis'] !== null) {
+                if ($row['pricing_input_basis'] !== 'NOMINAL_UNIT'
+                    || ! in_array($row['pricing_input_unit_code'], ['kg', 'l', 'pc'], true)
+                    || ! is_string($row['pricing_revision_id'])
+                    || ! is_string($row['net_pln_per_package'])
+                    || ! is_string($row['pricing_nominal_quantity'])
+                    || ! is_string($row['pricing_usable_quantity'])) {
+                    throw new InvalidArgumentException('Dane podstawy ceny CSV są niekompletne.');
+                }
+                foreach ([
+                    'pricing_input_amount' => 'Cena wejściowa',
+                    'net_pln_per_package' => 'Cena opakowania',
+                    'pricing_nominal_quantity' => 'Ilość nominalna',
+                    'pricing_usable_quantity' => 'Ilość użytkowa',
+                ] as $field => $label) {
+                    $this->assertDecimal($row[$field], 14, $label);
+                }
             }
             if (! is_string($row['effective_date'])) {
                 throw new InvalidArgumentException('Data efektywności musi mieć format YYYY-MM-DD.');
@@ -265,6 +301,15 @@ final class RawMaterialCsvImportPersistenceService
 
         $plans = [];
         foreach ($rows as $index => $row) {
+            $row += array_fill_keys([
+                'net_pln_per_package',
+                'pricing_input_basis',
+                'pricing_input_amount',
+                'pricing_input_unit_code',
+                'pricing_nominal_quantity',
+                'pricing_usable_quantity',
+                'pricing_revision_id',
+            ], null);
             $plan = [
                 'row_number' => $index + 1,
                 'input' => $row,
@@ -321,6 +366,23 @@ final class RawMaterialCsvImportPersistenceService
 
                 continue;
             }
+            if ($row['pricing_input_basis'] !== null && (
+                $row['pricing_input_basis'] !== 'NOMINAL_UNIT'
+                || $row['pricing_revision_id'] !== $revision->id
+                || $revision->nominal_quantity === null
+                || $revision->usable_quantity === null
+                || ! DB::scalar('SELECT CAST(? AS numeric) = CAST(? AS numeric)', [
+                    $row['pricing_nominal_quantity'], $revision->nominal_quantity,
+                ])
+                || ! DB::scalar('SELECT CAST(? AS numeric) = CAST(? AS numeric)', [
+                    $row['pricing_usable_quantity'], $revision->usable_quantity,
+                ]))) {
+                $plan['error_code'] = 'PRICING_QUANTITY_SNAPSHOT_MISMATCH';
+                $plan['error_detail'] = 'Ilości ceny nie odpowiadają bieżącej zatwierdzonej rewizji.';
+                $plans[] = $plan;
+
+                continue;
+            }
 
             $plan['result_code'] = 'NO_CHANGE';
             $plan['error_code'] = null;
@@ -370,6 +432,11 @@ final class RawMaterialCsvImportPersistenceService
         if ($sameDatePrices->isNotEmpty()) {
             $sameDatePrice = $sameDatePrices->first();
             $same = $sameDatePrice->event_type === 'PRICE_SET'
+                && ($input['pricing_input_basis'] === null
+                    || ($sameDatePrice->pricing_input_basis === $input['pricing_input_basis']
+                        && $sameDatePrice->pricing_input_unit_code === $input['pricing_input_unit_code']
+                        && $sameDatePrice->pricing_input_amount !== null
+                        && $this->numericEquals((string) $sameDatePrice->pricing_input_amount, $input['pricing_input_amount'])))
                 && $this->numericEquals(
                     (string) $sameDatePrice->net_pln_per_base_unit,
                     $input['normalized_net_pln_per_base_unit'],
@@ -398,7 +465,12 @@ final class RawMaterialCsvImportPersistenceService
             || ! $this->numericEquals(
                 (string) $priceState->net_pln_per_base_unit,
                 $input['normalized_net_pln_per_base_unit'],
-            );
+            )
+            || ($input['pricing_input_basis'] !== null
+                && ($priceState->pricing_input_basis !== $input['pricing_input_basis']
+                    || $priceState->pricing_input_unit_code !== $input['pricing_input_unit_code']
+                    || $priceState->pricing_input_amount === null
+                    || ! $this->numericEquals((string) $priceState->pricing_input_amount, $input['pricing_input_amount'])));
 
         $metadataState = DB::table('raw_material_import_metadata_events')
             ->where('organization_id', $organizationId)
@@ -435,6 +507,13 @@ final class RawMaterialCsvImportPersistenceService
             $plan['price_event'] = [
                 'effective_from' => $input['effective_date'],
                 'net_pln_per_base_unit' => $input['normalized_net_pln_per_base_unit'],
+                'net_pln_per_package' => $input['net_pln_per_package'],
+                'pricing_input_basis' => $input['pricing_input_basis'],
+                'pricing_input_amount' => $input['pricing_input_amount'],
+                'pricing_input_unit_code' => $input['pricing_input_unit_code'],
+                'pricing_nominal_quantity' => $input['pricing_nominal_quantity'],
+                'pricing_usable_quantity' => $input['pricing_usable_quantity'],
+                'pricing_revision_id' => $input['pricing_revision_id'],
             ];
         }
 

@@ -1,4 +1,4 @@
-name: veltra-stage3e-b1-test
+name: veltra-test-stage3e-b1
 
 x-environment: &environment
   APP_ENV: testing
@@ -64,6 +64,7 @@ services:
     environment: *environment
     volumes:
       - ./backend:/var/www/html
+      - ./tests/compose/backend.test.env:/var/www/html/.env:ro
       - test-storage:/var/www/html/storage
       - test-cache:/var/www/html/bootstrap/cache
     command: ["sleep", "infinity"]

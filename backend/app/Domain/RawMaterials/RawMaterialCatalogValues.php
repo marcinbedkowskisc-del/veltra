@@ -29,6 +29,11 @@ final class RawMaterialCatalogValues
     {
         $nominal = $input['nominal_quantity'] ?? null;
         $usable = $input['usable_quantity'] ?? $nominal;
+        if ($nominal === null && $usable !== null) {
+            throw ValidationException::withMessages([
+                'nominal_quantity' => ['Ilość użytkowa wymaga podania ilości nominalnej.'],
+            ]);
+        }
         if ($nominal === null && $usable === null) {
             return ['nominal_quantity' => null, 'usable_quantity' => null];
         }
@@ -40,6 +45,11 @@ final class RawMaterialCatalogValues
             }
         }
         $values = DB::selectOne('SELECT ?::numeric(24,6)::text AS nominal, ?::numeric(24,6)::text AS usable', [$nominal, $usable]);
+        if (DB::scalar('SELECT CAST(? AS numeric) > CAST(? AS numeric)', [$values->usable, $values->nominal])) {
+            throw ValidationException::withMessages([
+                'usable_quantity' => ['Ilość użytkowa nie może być większa od ilości nominalnej.'],
+            ]);
+        }
 
         return ['nominal_quantity' => $values->nominal, 'usable_quantity' => $values->usable];
     }

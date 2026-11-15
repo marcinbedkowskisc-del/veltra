@@ -115,8 +115,14 @@ describe('fetchRawMaterialCapabilities', () => {
         location_id: locationId,
         readiness: 'READY',
         available: true,
-        permissions: { create: true, edit: true },
-        actions: { create: true, edit: true, edit_allergens: true, create_and_approve: true },
+        permissions: {
+          create: true, edit: true,
+          view_reference_price: false, manage_reference_price: false, manage_suppliers: false,
+        },
+        actions: {
+          create: true, edit: true, edit_allergens: true, create_and_approve: true,
+          view_reference_price: false, manage_reference_price: false, manage_suppliers: false,
+        },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -126,8 +132,13 @@ describe('fetchRawMaterialCapabilities', () => {
       locationId,
       readiness: 'READY',
       available: true,
-      permissions: { create: true, edit: true },
-      actions: { create: true, edit: true, editAllergens: true, createAndApprove: true },
+      permissions: {
+        create: true, edit: true, viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
+      },
+      actions: {
+        create: true, edit: true, editAllergens: true, createAndApprove: true,
+        viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
+      },
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/security/raw-materials/capabilities',
@@ -259,6 +270,11 @@ describe('kontrakt edycji surowca', () => {
         baseUnitCode: 'kg',
         nominalQuantity: '10.000000',
         usableQuantity: '8.000000',
+        usableQuantityExplicit: true,
+        pricingBasis: 'PACKAGE',
+        pricingAmount: '',
+        pricingUnitCode: 'kg',
+        supplierIds: [],
         aliases: ['mąka do wypieków'],
         conversions: [
           { unitCode: 'g', toBaseFactor: '0.001000', basis: '' },

@@ -101,7 +101,12 @@ trait RawEditingStage3eB2Tests
         $this->assertNotContains('approve', $report['available_actions']);
         $this->assertContains('submit', $report['available_actions']);
         $this->assertArrayNotHasKey('percentage_complete', $report);
-        $bad = $this->rawMaterialService->validateEdits($this->steward, $this->location, $material['id'], $input + ['nominal_quantity' => '0']);
+        $bad = $this->rawMaterialService->validateEdits(
+            $this->steward,
+            $this->location,
+            $material['id'],
+            array_replace($input, ['nominal_quantity' => '0']),
+        );
         $this->assertSame(1, $bad['error_count']);
         $this->assertSame(1, $bad['missing_requirement_count']);
         $this->assertSame('nominal_quantity', $bad['errors'][0]['field']);
@@ -383,7 +388,12 @@ trait RawEditingStage3eB2Tests
 
     private function b2Draft(): array
     {
-        $input = ['category_id' => $this->category()['id'], 'name' => 'Szkic B2', 'base_unit_code' => 'g'];
+        $input = [
+            'category_id' => $this->category()['id'],
+            'name' => 'Szkic B2',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+        ];
 
         return [$this->rawMaterialService->create($this->steward, $this->location, $input), $input];
     }

@@ -1,4 +1,4 @@
-name: veltra-stage3e-b2-test
+name: veltra-test-stage3e-b2
 
 services:
   postgres:

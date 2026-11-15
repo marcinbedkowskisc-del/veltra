@@ -118,7 +118,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
         ], expectedVersion: $this->rawVersion($material['id']));
         $declaredRevisionId = $declared['revision']['id'];
         $declaredRevision = DB::table('raw_material_revisions')->where('id', $declaredRevisionId)->first();
-        $this->assertSame(2, (int) $declaredRevision->content_hash_version);
+        $this->assertSame(3, (int) $declaredRevision->content_hash_version);
         $this->assertSame('DECLARED', $declaredRevision->allergen_state);
         $this->assertRevisionHashMatches($declaredRevision);
         $declaredData = $this->rawMaterials->revisionStage2d(
@@ -369,6 +369,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => $name,
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
     }
 

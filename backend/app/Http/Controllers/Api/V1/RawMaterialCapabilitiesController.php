@@ -32,6 +32,10 @@ final class RawMaterialCapabilitiesController
         $definition = $modules->find('RAW_MATERIALS');
         $moduleAvailable = $definition !== null && $availability->enabled($location, 'RAW_MATERIALS');
         $allergenManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
+        $referencePriceManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceManage);
+        $referencePriceView = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView);
+        $supplierManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
+            && $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierView);
         $createApproved = app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Administrator)
             && $createCapability['permission'] && $createCapability['context'] && $moduleAvailable
             && $allergenManage
@@ -47,12 +51,18 @@ final class RawMaterialCapabilitiesController
                 'permissions' => [
                     'create' => $createCapability['permission'],
                     'edit' => $editCapability['permission'],
+                    'view_reference_price' => $referencePriceView,
+                    'manage_reference_price' => $referencePriceManage,
+                    'manage_suppliers' => $supplierManage,
                 ],
                 'actions' => [
                     'create' => $createCapability['permission'] && $createCapability['context'] && $moduleAvailable,
                     'edit' => $editCapability['permission'] && $editCapability['context'] && $moduleAvailable,
                     'edit_allergens' => $allergenManage && $editCapability['context'] && $moduleAvailable,
                     'create_and_approve' => $createApproved,
+                    'view_reference_price' => $referencePriceView && $moduleAvailable,
+                    'manage_reference_price' => $referencePriceManage && $moduleAvailable,
+                    'manage_suppliers' => $supplierManage && $moduleAvailable,
                 ],
             ],
         ], 200, ['Cache-Control' => 'private, no-store']);

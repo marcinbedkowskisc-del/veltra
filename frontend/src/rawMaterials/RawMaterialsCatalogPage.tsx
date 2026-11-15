@@ -899,6 +899,8 @@ export default function RawMaterialsCatalogPage({
         <RawMaterialCreateForm
           categories={categories}
           canManageAllergens={capabilities.actions.editAllergens === true}
+          canManageReferencePrice={capabilities.actions.manageReferencePrice === true}
+          canManageSuppliers={capabilities.actions.manageSuppliers === true}
           canCreateApproved={capabilities.actions.createAndApprove === true}
           operatingLocationId={createFormLocationId}
           returnFocus={createReturnFocus}

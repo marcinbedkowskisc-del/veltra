@@ -21,6 +21,7 @@ final class RawMaterialCommercialService
         private RawMaterialAuthorization $authorization,
         private RawMaterialLocationSharePolicy $sharePolicy,
         private AuthorizationMutationContext $contexts,
+        private RawMaterialPricingService $pricing,
     ) {}
 
     public function suppliers(User $actor, Location $context, array $filters = []): array
@@ -897,12 +898,15 @@ final class RawMaterialCommercialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::ReferencePriceView);
         $this->material($actor, $materialId);
         $this->assertMaterialSharedForConsumer($actor, $context, $materialId);
-        $query = DB::table('raw_material_reference_price_events')
-            ->where('organization_id', $actor->organization_id)->where('raw_material_id', $materialId);
+        $query = DB::table('raw_material_reference_price_events as prices')
+            ->leftJoin('raw_material_revisions as pricing_revisions', 'pricing_revisions.id', '=', 'prices.pricing_revision_id')
+            ->where('prices.organization_id', $actor->organization_id)
+            ->where('prices.raw_material_id', $materialId)
+            ->select('prices.*', 'pricing_revisions.base_unit_code as pricing_base_unit_code');
         if ($asOf !== null) {
-            $query->whereDate('effective_from', '<=', $asOf);
+            $query->whereDate('prices.effective_from', '<=', $asOf);
         }
-        $rows = $query->orderByDesc('effective_from')->orderByDesc('event_no')->get();
+        $rows = $query->orderByDesc('prices.effective_from')->orderByDesc('prices.event_no')->get();
 
         $canViewPurchasingCosts = $this->authorization->hasEffectiveGrant(
             $actor,
@@ -941,15 +945,18 @@ final class RawMaterialCommercialService
                 if (($input['expected_event_no'] ?? -1) !== $latestNo) {
                     $this->conflict('RAW_MATERIAL_VERSION_CONFLICT', 'Historia ceny zmieniła się. Odśwież widok i spróbuj ponownie.');
                 }
-                $nominal = DB::table('raw_material_revisions')->where('id', $material->approved_revision_id)->value('nominal_quantity');
+                $revision = DB::table('raw_material_revisions')->where('id', $material->approved_revision_id)->first();
+                $nominal = $revision?->nominal_quantity;
                 if (isset($input['net_pln_per_package'])) {
                     if ($nominal === null) {
                         throw ValidationException::withMessages(['net_pln_per_package' => ['Cena opakowania wymaga zatwierdzonej ilości nominalnej.']]);
                     }
-                    $input['net_pln_per_base_unit'] = (string) DB::scalar(
-                        'SELECT raw_materials_round_half_even_v1(?::numeric / ?::numeric, 14)',
-                        [$input['net_pln_per_package'], $nominal],
+                    $normalized = $this->pricing->normalizeReferencePrice(
+                        'PACKAGE',
+                        $input['net_pln_per_package'],
+                        (string) $nominal,
                     );
+                    $input['net_pln_per_base_unit'] = $normalized['net_pln_per_base_unit'];
                 }
                 $id = Str::uuid()->toString();
                 $event = [
@@ -979,6 +986,25 @@ final class RawMaterialCommercialService
                         $this->conflict('RAW_MATERIAL_REFERENCE_PRICE_CALCULATION_MISMATCH',
                             'Cena referencyjna nie zgadza się z wybraną ofertą i kursem.');
                     }
+                }
+                if ($input['event_type'] === 'PRICE_SET'
+                    && ! filled($input['source_offer_event_id'] ?? null)
+                    && $revision?->nominal_quantity !== null
+                    && $revision?->usable_quantity !== null) {
+                    $basis = isset($input['net_pln_per_package']) ? 'PACKAGE' : 'LEGACY_BASE_UNIT';
+                    $normalized = $basis === 'PACKAGE'
+                        ? $this->pricing->normalizeReferencePrice('PACKAGE', $input['net_pln_per_package'], (string) $revision->nominal_quantity)
+                        : $this->pricing->normalizeReferencePrice('LEGACY_BASE_UNIT', $input['net_pln_per_base_unit'], (string) $revision->nominal_quantity);
+                    $event['net_pln_per_package'] = $normalized['net_pln_per_package'];
+                    $event += [
+                        'pricing_input_basis' => $basis,
+                        'pricing_input_amount' => $basis === 'PACKAGE'
+                            ? $input['net_pln_per_package'] : $input['net_pln_per_base_unit'],
+                        'pricing_input_unit_code' => $basis === 'PACKAGE' ? null : $revision->base_unit_code,
+                        'pricing_nominal_quantity' => $revision->nominal_quantity,
+                        'pricing_usable_quantity' => $revision->usable_quantity,
+                        'pricing_revision_id' => $revision->id,
+                    ];
                 }
                 if (! filled($input['source_offer_event_id'] ?? null)) {
                     $previous = DB::table('raw_material_reference_price_events')
@@ -1549,6 +1575,16 @@ final class RawMaterialCommercialService
             'net_pln_per_base_unit' => $row->net_pln_per_base_unit === null
                 ? null : (string) $row->net_pln_per_base_unit,
             'net_pln_per_package' => $row->net_pln_per_package === null ? null : (string) $row->net_pln_per_package,
+            'pricing_input_basis' => $row->pricing_input_basis,
+            'pricing_input_amount' => $row->pricing_input_amount === null
+                ? null : (string) $row->pricing_input_amount,
+            'pricing_input_unit_code' => $row->pricing_input_unit_code,
+            'pricing_nominal_quantity' => $row->pricing_nominal_quantity === null
+                ? null : (string) $row->pricing_nominal_quantity,
+            'pricing_usable_quantity' => $row->pricing_usable_quantity === null
+                ? null : (string) $row->pricing_usable_quantity,
+            'pricing_revision_id' => $row->pricing_revision_id,
+            'pricing_base_unit_code' => $row->pricing_base_unit_code ?? null,
             'currency_code' => 'PLN',
             'reason_code' => $row->reason_code,
             'exchange_rate_event_id' => $row->exchange_rate_event_id,

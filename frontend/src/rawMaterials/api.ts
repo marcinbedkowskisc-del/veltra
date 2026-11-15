@@ -19,8 +19,10 @@ import {
 } from './detail'
 import {
   UNIT_DIMENSIONS,
+  type RawMaterialPricingBasis,
   type RawMaterialCreatePayload,
   type RawMaterialCreateValues,
+  type RawMaterialPricingUnit,
   type RawMaterialUnit,
 } from './create'
 
@@ -34,8 +36,22 @@ export type RawMaterialCapabilities = {
   locationId: string
   readiness: 'READY' | 'NOT_READY'
   available: boolean
-  permissions: { create: boolean; edit: boolean }
-  actions: { create: boolean; edit: boolean; editAllergens?: boolean; createAndApprove?: boolean }
+  permissions: {
+    create: boolean
+    edit: boolean
+    viewReferencePrice?: boolean
+    manageReferencePrice?: boolean
+    manageSuppliers?: boolean
+  }
+  actions: {
+    create: boolean
+    edit: boolean
+    editAllergens?: boolean
+    createAndApprove?: boolean
+    viewReferencePrice?: boolean
+    manageReferencePrice?: boolean
+    manageSuppliers?: boolean
+  }
 }
 
 export type RawMaterialSkuReservation = {
@@ -76,6 +92,12 @@ export type RawMaterialEditPayload = {
   base_unit_code: RawMaterialUnit
   nominal_quantity?: string
   usable_quantity?: string
+  pricing?: {
+    basis: RawMaterialPricingBasis
+    amount: string
+    unit_code?: RawMaterialPricingUnit
+  }
+  supplier_ids?: string[]
   aliases: string[]
   conversions: Array<{
     unit_code: RawMaterialUnit
@@ -155,9 +177,18 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     locationId: value.location_id,
     readiness: value.readiness,
     available: value.available,
-    permissions: { create: value.permissions.create, edit: value.permissions.edit },
+    permissions: {
+      create: value.permissions.create,
+      edit: value.permissions.edit,
+      viewReferencePrice: value.permissions.view_reference_price === true,
+      manageReferencePrice: value.permissions.manage_reference_price === true,
+      manageSuppliers: value.permissions.manage_suppliers === true,
+    },
     actions: { create: value.actions.create, edit: value.actions.edit,
-      editAllergens: value.actions.edit_allergens, createAndApprove: value.actions.create_and_approve },
+      editAllergens: value.actions.edit_allergens, createAndApprove: value.actions.create_and_approve,
+      viewReferencePrice: value.actions.view_reference_price === true,
+      manageReferencePrice: value.actions.manage_reference_price === true,
+      manageSuppliers: value.actions.manage_suppliers === true },
   }
 }
 
@@ -228,6 +259,34 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
     || (revision.nominal_quantity === null) !== (revision.usable_quantity === null)) {
     throw invalid()
   }
+  const usableQuantityExplicit = revision.usable_quantity_explicit === true
+    || (revision.usable_quantity_explicit === undefined
+      && typeof revision.usable_quantity === 'string'
+      && revision.usable_quantity !== revision.nominal_quantity)
+  if (usableQuantityExplicit && revision.usable_quantity === null) throw invalid()
+  let pricingBasis: RawMaterialPricingBasis = 'PACKAGE'
+  let pricingAmount = ''
+  let pricingUnitCode: RawMaterialPricingUnit = UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit] === 'MASS'
+    ? 'kg' : UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit] === 'VOLUME' ? 'l' : 'pc'
+  if (value.pricing_input !== null && value.pricing_input !== undefined) {
+    if (!isRecord(value.pricing_input)
+      || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT')
+      || typeof value.pricing_input.amount !== 'string' || !DECIMAL.test(value.pricing_input.amount)) {
+      throw invalid()
+    }
+    pricingBasis = value.pricing_input.basis
+    pricingAmount = value.pricing_input.amount
+    if (pricingBasis === 'NOMINAL_UNIT') {
+      if (typeof value.pricing_input.unit_code !== 'string'
+        || !['kg', 'l', 'pc'].includes(value.pricing_input.unit_code)) throw invalid()
+      pricingUnitCode = value.pricing_input.unit_code as RawMaterialPricingUnit
+    }
+  }
+  const supplierIds = value.supplier_ids === undefined
+    ? []
+    : Array.isArray(value.supplier_ids) && value.supplier_ids.every((id) => typeof id === 'string' && UUID.test(id))
+      ? value.supplier_ids as string[]
+      : (() => { throw invalid() })()
 
   const description = nullableString(revision.description, invalid().message)
   const unitsValue = revision.units
@@ -271,7 +330,12 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
       description: description ?? '',
       baseUnitCode: baseUnitCode as RawMaterialUnit,
       nominalQuantity: revision.nominal_quantity ?? '',
-      usableQuantity: revision.usable_quantity ?? '',
+      usableQuantity: usableQuantityExplicit ? revision.usable_quantity ?? '' : '',
+      usableQuantityExplicit,
+      pricingBasis,
+      pricingAmount,
+      pricingUnitCode,
+      supplierIds,
       aliases: (revision.aliases as string[]).filter((alias) =>
         alias.trim().normalize('NFKC').toLocaleLowerCase('pl-PL')
         !== name.trim().normalize('NFKC').toLocaleLowerCase('pl-PL')),

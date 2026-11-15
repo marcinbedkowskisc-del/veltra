@@ -257,6 +257,7 @@ trait RawDraftTombstoneTests
             'category_id' => DB::table('raw_material_categories')->value('id'),
             'name' => 'Szkic z uploadem tymczasowym',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $this->rawMaterialService->deleteDraft(
             $this->steward,

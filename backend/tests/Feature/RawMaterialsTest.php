@@ -104,10 +104,10 @@ class RawMaterialsTest extends AuthorizationTestCase
         $category = $this->category();
         $this->selectRawMaterialApiContext($this->steward);
 
-        $catalogCsv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000801;RAW;Mąka integracyjna;Opis mąki;kg;{$category['code']}\n"
-            ."RAW-000802;RAW;Ryż integracyjny;Opis ryżu;kg;{$category['code']}\n"
-            ."RAW-000803;RAW;Sól integracyjna;Opis soli;kg;{$category['code']}\n";
+        $catalogCsv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000801;RAW;Mąka integracyjna;Opis mąki;kg;{$category['code']};1;\n"
+            ."RAW-000802;RAW;Ryż integracyjny;Opis ryżu;kg;{$category['code']};1;\n"
+            ."RAW-000803;RAW;Sól integracyjna;Opis soli;kg;{$category['code']};1;\n";
         $catalogPreviewResponse = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/catalog-imports', [
             'file' => UploadedFile::fake()->createWithContent('katalog-integracyjny.csv', $catalogCsv),
         ])->assertCreated()->assertJsonPath('data.can_commit', true);
@@ -257,6 +257,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'SKU po imporcie integracyjnym',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
         ]);
         $this->assertSame('RAW-000804', $generated['code']);
     }
@@ -268,6 +269,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Mąka pszenna',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
             'conversions' => [['unit_code' => 'g']],
             'aliases' => ['Mąka tortowa'],
         ]);
@@ -733,18 +735,21 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $parser = app(RawMaterialCatalogCsvParser::class);
         $rows = $parser->parse(
-            'sku;entity_type;name;description;base_unit_code;category_code'."\r\n"
-                .'RAW-000123;RAW;"Mąka; ""00""";"Opis'."\r\n".'z polskimi znakami";kg;DRY_GOODS'."\r\n",
+            'sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity'."\r\n"
+                .'RAW-000123;RAW;"Mąka; ""00""";"Opis'."\r\n".'z polskimi znakami";kg;DRY_GOODS;2500;1500'."\r\n",
         );
 
         $this->assertSame('Mąka; "00"', $rows[0]['name']);
         $this->assertSame("Opis\r\nz polskimi znakami", $rows[0]['description']);
         $this->assertSame(2, $rows[0]['row_number']);
+        $this->assertSame('2500', $rows[0]['nominal_quantity']);
+        $this->assertSame('1500', $rows[0]['usable_quantity']);
+        $this->assertTrue($rows[0]['usable_quantity_provided']);
 
         foreach ([
-            "SKU;entity_type;name;description;base_unit_code;category_code\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS\n",
-            "sku;entity_type;name;description;base_unit_code;category_code;extra\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS;wartość\n",
-            "sku;entity_type;name;description;base_unit_code;category_code\n",
+            "SKU;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS;1000;\n",
+            "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity;extra\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS;1000;;wartość\n",
+            "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n",
         ] as $invalid) {
             try {
                 $parser->parse($invalid);
@@ -754,8 +759,13 @@ class RawMaterialsTest extends AuthorizationTestCase
             }
         }
 
+        $legacy = $parser->parse(
+            "sku;entity_type;name;description;base_unit_code;category_code\nRAW-000124;RAW;Ryż;;g;DRY_GOODS\n",
+        );
+        $this->assertNull($legacy[0]['nominal_quantity']);
+
         try {
-            $parser->parse("\xFF\xFE".'sku;entity_type;name;description;base_unit_code;category_code'."\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS\n");
+            $parser->parse("\xFF\xFE".'sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity'."\nRAW-000123;RAW;Mąka;;kg;DRY_GOODS;1000;\n");
             $this->fail('Parser zaakceptował dane spoza UTF-8.');
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_CATALOG_CSV_ENCODING_INVALID', $exception->errorCode);
@@ -767,9 +777,9 @@ class RawMaterialsTest extends AuthorizationTestCase
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            .'RAW-000020;RAW;" Mąka; ""00"" ";"Opis; ""dokładny""";kg;'.$category['code']."\n"
-            .'RAW-000010;RAW;Ryż;Ziarno;g;'.$category['code']."\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            .'RAW-000020;RAW;" Mąka; ""00"" ";"Opis; ""dokładny""";kg;'.$category['code'].";2800;1500\n"
+            .'RAW-000010;RAW;Ryż;Ziarno;g;'.$category['code'].";1000;\n";
         $preview = $workflow->upload(
             $this->steward,
             $this->location,
@@ -799,19 +809,41 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('raw_material_reference_price_events')->count());
         $this->assertSame(1, DB::table('raw_material_catalog_import_batches')->count());
         $this->assertSame(2, DB::table('raw_material_catalog_import_rows')->count());
+        $explicitImportRow = DB::table('raw_material_catalog_import_rows')
+            ->where('batch_id', $result['batch_id'])
+            ->where('sku', 'RAW-000020')
+            ->first();
+        $this->assertSame('2800.000000', $explicitImportRow->nominal_quantity);
+        $this->assertSame('1500.000000', $explicitImportRow->usable_quantity);
+        $this->assertTrue((bool) $explicitImportRow->usable_quantity_explicit);
+        $defaultImportRow = DB::table('raw_material_catalog_import_rows')
+            ->where('batch_id', $result['batch_id'])
+            ->where('sku', 'RAW-000010')
+            ->first();
+        $this->assertSame('1000.000000', $defaultImportRow->nominal_quantity);
+        $this->assertSame('1000.000000', $defaultImportRow->usable_quantity);
+        $this->assertFalse((bool) $defaultImportRow->usable_quantity_explicit);
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('raw_material_catalog_import_rows')
             ->where('batch_id', $result['batch_id'])
             ->update(['name' => 'Zmieniona historia']));
+
+        $this->assertSame('2800.000000', DB::table('raw_material_revisions')
+            ->where('raw_material_id', $materialId)->value('nominal_quantity'));
+        $this->assertSame('1500.000000', DB::table('raw_material_revisions')
+            ->where('raw_material_id', $materialId)->value('usable_quantity'));
+        $this->assertTrue((bool) DB::table('raw_material_revisions')
+            ->where('raw_material_id', $materialId)->value('usable_quantity_explicit'));
 
         $generated = $this->rawMaterialService->create($this->steward, $this->location, [
             'category_id' => $category['id'],
             'name' => 'Później wygenerowany',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1',
         ]);
         $this->assertSame('RAW-000021', $generated['code']);
 
-        $singleRowCsv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            .'RAW-000020;RAW;" Mąka; ""00"" ";"Opis; ""dokładny""";kg;'.$category['code']."\n";
+        $singleRowCsv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            .'RAW-000020;RAW;" Mąka; ""00"" ";"Opis; ""dokładny""";kg;'.$category['code'].";2800;1500\n";
         $singleRowPreview = $workflow->upload(
             $this->steward,
             $this->location,
@@ -832,12 +864,12 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         Storage::fake('raw_material_csv_imports');
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000201;RAW;Pierwszy;;kg;BASIC\n"
-            ."RAW-000201;RAW;Duplikat;;kg;BASIC\n"
-            .";RAW;Brak SKU;;kg;BASIC\n"
-            ."RAW-000204;RAW;Brak kategorii;;kg;UNKNOWN\n"
-            ."RAW-000205;RAW;Nieobsługiwana jednostka;;box;BASIC\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000201;RAW;Pierwszy;;kg;BASIC;1000;\n"
+            ."RAW-000201;RAW;Duplikat;;kg;BASIC;1000;\n"
+            .";RAW;Brak SKU;;kg;BASIC;1000;\n"
+            ."RAW-000204;RAW;Brak kategorii;;kg;UNKNOWN;1000;\n"
+            ."RAW-000205;RAW;Nieobsługiwana jednostka;;box;BASIC;1000;\n";
         $preview = $workflow->upload(
             $this->steward,
             $this->location,
@@ -858,8 +890,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000300;RAW;Nowa mąka;;kg;{$category['code']}\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000300;RAW;Nowa mąka;;kg;{$category['code']};1000;\n";
         $file = fn (): UploadedFile => UploadedFile::fake()->createWithContent('katalog.csv', $csv);
         $initial = $workflow->upload($this->steward, $this->location, $file());
         $this->rawMaterialService->createImported($this->steward, $this->location, 'RAW-000300', [
@@ -867,6 +899,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Inna mąka',
             'description' => null,
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
         ]);
 
         try {
@@ -881,8 +914,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertFalse($conflict['can_commit']);
         $this->assertSame('SKU_CONFLICT', $conflict['rows'][0]['error_code']);
 
-        $identicalCsv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000300;RAW;Inna mąka;;kg;{$category['code']}\n";
+        $identicalCsv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000300;RAW;Inna mąka;;kg;{$category['code']};1000;\n";
         $identical = $workflow->upload(
             $this->steward,
             $this->location,
@@ -899,9 +932,9 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000401;RAW;Pierwszy;;kg;{$category['code']}\n"
-            ."RAW-000402;RAW;Drugi;;kg;{$category['code']}\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000401;RAW;Pierwszy;;kg;{$category['code']};1000;\n"
+            ."RAW-000402;RAW;Drugi;;kg;{$category['code']};1000;\n";
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
         $preview = $workflow->upload(
             $this->steward,
@@ -995,8 +1028,8 @@ class RawMaterialsTest extends AuthorizationTestCase
                 });
 
                 $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
-                $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-                    ."{$sku};RAW;Lokalny materiał;;kg;{$category['code']}\n";
+                $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+                    ."{$sku};RAW;Lokalny materiał;;kg;{$category['code']};1000;\n";
                 $preview = $workflow->upload(
                     $this->steward,
                     $this->location,
@@ -1040,9 +1073,9 @@ class RawMaterialsTest extends AuthorizationTestCase
 
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n";
         for ($number = 1; $number <= 375; $number++) {
-            $csv .= sprintf("RAW-%06d;RAW;Surowiec %03d;;kg;%s\n", $number, $number, $category['code']);
+            $csv .= sprintf("RAW-%06d;RAW;Surowiec %03d;;kg;%s;1000;\n", $number, $number, $category['code']);
         }
 
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
@@ -1073,8 +1106,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
         $this->selectRawMaterialApiContext($this->steward);
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-000601;RAW;Import HTTP;;kg;{$category['code']}\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-000601;RAW;Import HTTP;;kg;{$category['code']};1000;\n";
         $previewResponse = $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/catalog-imports', [
             'file' => UploadedFile::fake()->createWithContent('katalog-http.csv', $csv),
         ]);
@@ -1091,7 +1124,10 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->withHeader('Idempotency-Key', 'catalog-http-idempotency-key-01')
             ->postJson($commitUrl, ['confirmed' => true]);
         $commitResponse->assertOk()->assertJsonPath('data.batch_status', 'COMMITTED')
-            ->assertJsonPath('data.rows.0.status', 'UTWORZENIE');
+            ->assertJsonPath('data.rows.0.status', 'UTWORZENIE')
+            ->assertJsonPath('data.rows.0.nominal_quantity', '1000.000000')
+            ->assertJsonPath('data.rows.0.usable_quantity', '1000.000000')
+            ->assertJsonPath('data.rows.0.usable_quantity_provided', false);
         $batchId = $commitResponse->json('data.batch_id');
 
         $retryResponse = $this->actingAs($this->steward, 'web')
@@ -1135,7 +1171,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                 $this->location,
                 UploadedFile::fake()->createWithContent(
                     'katalog.csv',
-                    "sku;entity_type;name;description;base_unit_code;category_code\nRAW-000501;RAW;Mąka;;kg;BASIC\n",
+                    "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\nRAW-000501;RAW;Mąka;;kg;BASIC;1000;\n",
                 ),
             );
             $this->fail('Importer zaakceptował operatora bez uprawnienia CREATE.');
@@ -1148,7 +1184,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->actingAs($this->steward, 'web')->post('/api/v1/raw-materials/catalog-imports', [
             'file' => UploadedFile::fake()->createWithContent(
                 'katalog.csv',
-                "sku;entity_type;name;description;base_unit_code;category_code\nRAW-000501;RAW;Mąka;;kg;BASIC\n",
+                "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\nRAW-000501;RAW;Mąka;;kg;BASIC;1000;\n",
             ),
         ])->assertStatus(503)->assertJsonPath('error.code', 'RAW_MATERIALS_MODULE_UNAVAILABLE');
     }
@@ -2192,6 +2228,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'name' => 'Tajny szkic',
             'description' => 'Nieopublikowana treść',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $activeId = $this->declaredMaterial($category['id'], 'Materiał zatwierdzony');
         $this->rawMaterialService->submit($this->steward, $this->location, $activeId, expectedVersion: $this->rawVersion($activeId));
@@ -2241,6 +2278,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Szkic do edycji',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $originalRevisionId = $material['revision']['id'];
         $this->selectContext($this->steward);
@@ -2683,6 +2721,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Kasza jaglana',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $before = DB::table('raw_materials')->count();
 
@@ -2691,6 +2730,7 @@ class RawMaterialsTest extends AuthorizationTestCase
                 'category_id' => $category['id'],
                 'name' => 'Kasza',
                 'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
                 'aliases' => ['  KASZA   JAGLANA '],
             ]);
             $this->fail('A duplicate alias was accepted.');
@@ -2749,6 +2789,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Olej rzepakowy',
             'base_unit_code' => 'ml',
+            'nominal_quantity' => '1000',
         ]);
         $this->rawMaterialService->submit($this->steward, $this->location, $material['id'], expectedVersion: $this->rawVersion($material['id']));
         $this->assertSame('VERIFICATION', DB::table('raw_materials')->where('id', $material['id'])->value('lifecycle_state'));
@@ -3881,6 +3922,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             ])['id'],
             'name' => 'Surowiec bez zatwierdzonej rewizji',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
             'conversions' => [['unit_code' => 'g']],
         ]);
         $this->assertFalse($policy->canConsume($this->steward, $restaurant, $draft['id']));
@@ -4486,6 +4528,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'category_id' => $root['id'],
             'name' => 'Cukier',
             'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
             'conversions' => [['unit_code' => 'g']],
         ]);
         $this->assertConstraintViolation('23514', fn (Connection $connection) => $connection->table('raw_materials')
@@ -4650,6 +4693,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             $baseUnitCode,
             $baseUnitDimension,
             $description,
+            '1000',
+            '1000',
         );
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
         $this->rawMaterialService->approve($this->steward, $this->location, $materialId, 'Aktywacja testowa importu CSV', expectedVersion: $this->rawVersion($materialId));
@@ -4738,6 +4783,8 @@ class RawMaterialsTest extends AuthorizationTestCase
         string $baseUnitCode = 'g',
         string $baseUnitDimension = 'MASS',
         ?string $description = null,
+        ?string $nominalQuantity = null,
+        ?string $usableQuantity = null,
     ): string {
         $materialId = Str::uuid()->toString();
         $revisionId = Str::uuid()->toString();
@@ -4781,6 +4828,8 @@ class RawMaterialsTest extends AuthorizationTestCase
             $units,
             $aliases,
             $hash,
+            $nominalQuantity,
+            $usableQuantity,
             $baseUnitCode,
             $baseUnitDimension,
             $description,
@@ -4834,6 +4883,8 @@ class RawMaterialsTest extends AuthorizationTestCase
                 'description' => $description,
                 'base_unit_code' => $baseUnitCode,
                 'base_unit_dimension' => $baseUnitDimension,
+                'nominal_quantity' => $nominalQuantity,
+                'usable_quantity' => $usableQuantity,
                 'allergen_state' => 'DECLARED',
                 'critical_change' => false,
                 'created_by' => $this->steward->id,

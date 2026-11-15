@@ -24,6 +24,7 @@ trait RawFormWorkflowTests
             'category_id' => $category['id'],
             'name' => 'Kompletny surowiec',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
             'allergen_declaration' => ['status' => 'NO_KNOWN_ALLERGENS', 'catalog_version_id' => $catalog, 'items' => []],
         ];
         $url = '/api/v1/raw-materials/create-approved';

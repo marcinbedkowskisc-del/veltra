@@ -37,6 +37,7 @@ describe('walidacja formularza tworzenia surowca', () => {
       ...validValues(),
       nominalQuantity: '12,123456',
       usableQuantity: '10,5',
+      usableQuantityExplicit: true,
     }
 
     expect(validateRawMaterialCreate(values)).toEqual({})
@@ -50,9 +51,55 @@ describe('walidacja formularza tworzenia surowca', () => {
     const nominalOnly = { ...validValues(), nominalQuantity: '10' }
     expect(validateRawMaterialCreate(nominalOnly)).toEqual({})
     expect(buildRawMaterialCreatePayload(nominalOnly)).toHaveProperty('nominal_quantity', '10')
+    expect(buildRawMaterialCreatePayload(nominalOnly)).not.toHaveProperty('usable_quantity')
+    expect(validateRawMaterialCreate({
+      ...nominalOnly,
+      usableQuantity: '10',
+      usableQuantityExplicit: true,
+    })).toEqual({})
+    expect(buildRawMaterialCreatePayload({
+      ...nominalOnly,
+      usableQuantity: '10',
+      usableQuantityExplicit: true,
+    })).toHaveProperty('usable_quantity', '10')
     expect(validateRawMaterialCreate({ ...validValues(), usableQuantity: '8' }).nominalQuantity).toBeTruthy()
-    expect(validateRawMaterialCreate({ ...nominalOnly, usableQuantity: '0' }).usableQuantity).toBeTruthy()
-    expect(validateRawMaterialCreate({ ...nominalOnly, usableQuantity: '1.1234567' }).usableQuantity).toBeTruthy()
+    expect(validateRawMaterialCreate({
+      ...nominalOnly,
+      usableQuantity: '10.000001',
+      usableQuantityExplicit: true,
+    }).usableQuantity).toBeTruthy()
+    expect(validateRawMaterialCreate({ ...nominalOnly, usableQuantity: '0', usableQuantityExplicit: true }).usableQuantity).toBeTruthy()
+    expect(validateRawMaterialCreate({ ...nominalOnly, usableQuantity: '1.1234567', usableQuantityExplicit: true }).usableQuantity).toBeTruthy()
+  })
+
+  it('serializuje oba alternatywne sposoby wprowadzania ceny netto', () => {
+    const packagePrice = {
+      ...validValues(),
+      baseUnitCode: 'g' as const,
+      nominalQuantity: '2800',
+      pricingBasis: 'PACKAGE' as const,
+      pricingAmount: '28,00',
+    }
+    const nominalUnitPrice = {
+      ...packagePrice,
+      pricingBasis: 'NOMINAL_UNIT' as const,
+      pricingAmount: '10',
+      pricingUnitCode: 'kg' as const,
+    }
+
+    expect(validateRawMaterialCreate(packagePrice)).toEqual({})
+    expect(validateRawMaterialCreate(nominalUnitPrice)).toEqual({})
+    expect(buildRawMaterialCreatePayload(packagePrice).pricing).toEqual({
+      basis: 'PACKAGE',
+      amount: '28.00',
+    })
+    expect(buildRawMaterialCreatePayload(nominalUnitPrice).pricing).toEqual({
+      basis: 'NOMINAL_UNIT',
+      amount: '10',
+      unit_code: 'kg',
+    })
+    expect(validateRawMaterialCreate({ ...nominalUnitPrice, pricingUnitCode: 'l' }).pricingUnitCode).toBeTruthy()
+    expect(validateRawMaterialCreate({ ...packagePrice, pricingAmount: '1.123456789012345' }).pricingAmount).toBeTruthy()
   })
 
   it('wymaga liczb całkowitych dla jednostki pc', () => {
@@ -61,6 +108,7 @@ describe('walidacja formularza tworzenia surowca', () => {
       baseUnitCode: 'pc' as const,
       nominalQuantity: '10.5',
       usableQuantity: '9',
+      usableQuantityExplicit: true,
     }
 
     expect(validateRawMaterialCreate(values).nominalQuantity).toContain('całkowitą')
@@ -68,6 +116,7 @@ describe('walidacja formularza tworzenia surowca', () => {
       ...values,
       nominalQuantity: '10,000',
       usableQuantity: '9.0',
+      usableQuantityExplicit: true,
     })).toEqual({})
   })
 

@@ -101,6 +101,12 @@ describe('szczegóły surowca', () => {
       effective_from: '2025-02-01',
       net_pln_per_base_unit: '12.50000000',
       net_pln_per_package: '25.00000000',
+      pricing_input_basis: 'NOMINAL_UNIT',
+      pricing_input_amount: '10.00000000000000',
+      pricing_input_unit_code: 'kg',
+      pricing_nominal_quantity: '2800.000000',
+      pricing_usable_quantity: '1500.000000',
+      pricing_base_unit_code: 'g',
       currency_code: 'PLN',
     }, {
       id: 'price-event-2',
@@ -113,6 +119,11 @@ describe('szczegóły surowca', () => {
     }])
 
     expect(prices[0].netPlnPerBaseUnit).toBe('12.50000000')
+    expect(prices[0].pricingInputBasis).toBe('NOMINAL_UNIT')
+    expect(prices[0].pricingInputAmount).toBe('10.00000000000000')
+    expect(prices[0].pricingNominalQuantity).toBe('2800.000000')
+    expect(prices[0].pricingUsableQuantity).toBe('1500.000000')
+    expect(prices[0].pricingBaseUnitCode).toBe('g')
     expect(prices[1].netPlnPerBaseUnit).toBeNull()
     expect(prices[1].currencyCode).toBe('PLN')
   })

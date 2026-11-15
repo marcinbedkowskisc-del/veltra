@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
-import { RAW_UNITS, type CategoryOption } from './catalog'
+import { RAW_UNITS, supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
   emptyRawMaterialCreateValues,
@@ -25,11 +25,14 @@ import {
   type CreatedRawMaterial,
   type RawMaterialSkuReservation,
   type AllergenDeclaration,
+  fetchSuppliers,
 } from './api'
 
 type Props = {
   categories: CategoryOption[]
   canManageAllergens?: boolean
+  canManageReferencePrice?: boolean
+  canManageSuppliers?: boolean
   canCreateApproved?: boolean
   operatingLocationId: string
   returnFocus: HTMLElement | null
@@ -65,6 +68,8 @@ function serverFieldName(field: string): string {
     base_unit_code: 'baseUnitCode',
     nominal_quantity: 'nominalQuantity',
     usable_quantity: 'usableQuantity',
+    'pricing.amount': 'pricingAmount',
+    'pricing.unit_code': 'pricingUnitCode',
     'conversions.*.unit_code': 'conversions',
     'conversions.*.to_base_factor': 'conversions',
     'conversions.*.basis': 'conversions',
@@ -97,6 +102,8 @@ function isBusy(phase: Phase): boolean {
 export default function RawMaterialCreateForm({
   categories,
   canManageAllergens = false,
+  canManageReferencePrice = false,
+  canManageSuppliers = false,
   canCreateApproved = false,
   returnFocus,
   onClose,
@@ -116,6 +123,9 @@ export default function RawMaterialCreateForm({
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [created, setCreated] = useState<CreatedRawMaterial | null>(null)
+  const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
+  const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
+  const [supplierError, setSupplierError] = useState<string | null>(null)
   const [attempted, setAttempted] = useState(false)
   const [approving, setApproving] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
@@ -141,6 +151,21 @@ export default function RawMaterialCreateForm({
       if (returnFocus?.isConnected) returnFocus.focus()
     }
   }, [returnFocus])
+
+  useEffect(() => {
+    if (!canManageSuppliers) return
+    const controller = new AbortController()
+    void fetchSuppliers('', controller.signal).then((suppliers) => {
+      if (!active.current) return
+      setSupplierOptions(suppliers)
+      setSupplierOptionsLoaded(true)
+      setSupplierError(null)
+    }).catch((cause: unknown) => {
+      if (controller.signal.aborted || !active.current) return
+      setSupplierError(cause instanceof Error ? cause.message : 'Nie udało się wczytać biblioteki dostawców.')
+    })
+    return () => controller.abort()
+  }, [canManageSuppliers])
 
   useEffect(() => {
     if (focusError) dialogRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
@@ -184,6 +209,35 @@ export default function RawMaterialCreateForm({
       return next
     })
     setFormError(null)
+  }
+
+  function setNominalQuantity(value: string) {
+    setField('nominalQuantity', value)
+  }
+
+  function setUsableQuantity(value: string) {
+    setValues((current) => ({
+      ...current,
+      usableQuantity: value,
+      usableQuantityExplicit: value.trim() !== '',
+    }))
+    setValidationErrors((current) => {
+      const next = { ...current }
+      delete next.usableQuantity
+      return next
+    })
+    setServerErrors((current) => {
+      const next = { ...current }
+      delete next.usableQuantity
+      return next
+    })
+    setFormError(null)
+  }
+
+  function setBaseUnit(value: RawMaterialUnit) {
+    const pricingUnitCode = UNIT_DIMENSIONS[value] === 'MASS'
+      ? 'kg' : UNIT_DIMENSIONS[value] === 'VOLUME' ? 'l' : 'pc'
+    setValues((current) => ({ ...current, baseUnitCode: value, pricingUnitCode }))
   }
 
   function setAlias(index: number, value: string) {
@@ -350,7 +404,7 @@ export default function RawMaterialCreateForm({
     setAttempted(true)
     setFormError(null)
     setServerErrors({})
-    const errors = validateRawMaterialCreate(values)
+    const errors = validateRawMaterialCreate(values, true)
     const submitter = (event.nativeEvent as SubmitEvent).submitter
     const approve = submitter instanceof HTMLButtonElement && submitter.value === 'approve'
     const declarationError = allergenError(allergens, approve)
@@ -361,7 +415,7 @@ export default function RawMaterialCreateForm({
       return
     }
 
-    const payload = { ...buildRawMaterialCreatePayload(values),
+    const payload = { ...buildRawMaterialCreatePayload(values, canManageSuppliers && supplierOptionsLoaded),
       ...(allergens.status !== 'UNKNOWN' ? { allergen_declaration: allergens } : {}) }
     const key = reservationKey.current ?? crypto.randomUUID()
     reservationKey.current = key
@@ -467,6 +521,24 @@ export default function RawMaterialCreateForm({
             <button type="button" className="button button-primary" onClick={retrySameAttempt}>Ponów bezpiecznie</button>
           </div>
         )}
+        {canManageSuppliers && (
+          <label className="create-form-field create-form-field-wide" htmlFor="create-suppliers">
+            Dostawcy — powiązania informacyjne
+            {supplierOptionsLoaded ? (
+              <select id="create-suppliers" multiple value={values.supplierIds}
+                onChange={(event) => setField('supplierIds',
+                  Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
+                {supplierOptions.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>{supplierLabel(supplier)}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="field-hint">Wczytywanie wspólnej biblioteki dostawców…</span>
+            )}
+            <span className="field-hint">Powiązanie nie wyznacza ceny i nie pobiera ofert.</span>
+            {supplierError && <span className="field-error" role="alert">{supplierError}</span>}
+          </label>
+        )}
         {phase === 'creation-uncertain' && (
           <div className="create-form-notice" role="alert">
             <strong>Nie udało się potwierdzić zapisu.</strong>
@@ -539,7 +611,7 @@ export default function RawMaterialCreateForm({
                     id="create-base-unit"
                     value={values.baseUnitCode}
                     required
-                    onChange={(event) => setField('baseUnitCode', event.target.value as RawMaterialUnit)}
+                    onChange={(event) => setBaseUnit(event.target.value as RawMaterialUnit)}
                     {...fieldProps('baseUnitCode')}
                   >
                     {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
@@ -549,16 +621,17 @@ export default function RawMaterialCreateForm({
                 </label>
 
                 <div className="create-form-field create-quantity-group">
-                  <span>Ilości <span className="field-hint">(opcjonalnie)</span></span>
+                  <span>Ilości</span>
                   <div className="create-form-grid create-form-grid-inline">
-                    <label htmlFor="create-nominal-quantity">Nominalna</label>
+                    <label htmlFor="create-nominal-quantity">Nominalna <span className="required-mark">(wymagane)</span></label>
                     <input
                       id="create-nominal-quantity"
                       type="text"
                       inputMode="decimal"
                       value={values.nominalQuantity}
                       maxLength={25}
-                      onChange={(event) => setField('nominalQuantity', event.target.value)}
+                      required
+                      onChange={(event) => setNominalQuantity(event.target.value)}
                       {...fieldProps('nominalQuantity')}
                       aria-describedby={firstQuantityError ? 'quantity-error' : 'quantity-hint'}
                     />
@@ -569,15 +642,39 @@ export default function RawMaterialCreateForm({
                       inputMode="decimal"
                       value={values.usableQuantity}
                       maxLength={25}
-                      onChange={(event) => setField('usableQuantity', event.target.value)}
+                      onChange={(event) => setUsableQuantity(event.target.value)}
                       {...fieldProps('usableQuantity')}
                       aria-describedby={firstQuantityError ? 'quantity-error' : 'quantity-hint'}
                     />
                   </div>
                   <span id={firstQuantityError ? 'quantity-error' : 'quantity-hint'} className={firstQuantityError ? 'field-error' : 'field-hint'}>
-                    {firstQuantityError ?? 'Jeśli podasz tylko ilość nominalną, ilość użytkowa przyjmie tę samą wartość. Dozwolone jest 6 miejsc po przecinku; ilość w sztukach musi być całkowita.'}
+                    {firstQuantityError ?? 'Pozostaw ilość użytkową pustą, aby automatycznie użyć ilości nominalnej. Dozwolone jest 6 miejsc po przecinku; ilość w sztukach musi być całkowita.'}
                   </span>
                 </div>
+                {canManageReferencePrice && (
+                  <section className="create-form-field create-form-field-wide" aria-labelledby="create-pricing-title">
+                    <h3 id="create-pricing-title">Średnia cena netto</h3>
+                    <p className="field-hint">Wprowadź średnią obliczoną poza VELTRA. Cena nie jest wyliczana z ofert dostawców.</p>
+                    <div className="create-form-grid">
+                      <label className="create-form-field" htmlFor="create-pricing-basis">Podstawa ceny
+                        <select id="create-pricing-basis" value={values.pricingBasis}
+                          onChange={(event) => setField('pricingBasis', event.target.value as RawMaterialCreateValues['pricingBasis'])}>
+                          <option value="PACKAGE">Całe opakowanie</option>
+                          <option value="NOMINAL_UNIT">Jednostka nominalna</option>
+                        </select>
+                      </label>
+                      <label className="create-form-field" htmlFor="create-pricing-amount">
+                        {values.pricingBasis === 'PACKAGE'
+                          ? 'Średnia cena netto opakowania (PLN)'
+                          : `Średnia cena netto za ${values.pricingUnitCode} (PLN)`}
+                        <input id="create-pricing-amount" inputMode="decimal" value={values.pricingAmount}
+                          onChange={(event) => setField('pricingAmount', event.target.value)}
+                          {...fieldProps('pricingAmount')} />
+                        {getError('pricingAmount') && <span className="field-error">{getError('pricingAmount')}</span>}
+                      </label>
+                    </div>
+                  </section>
+                )}
               </div>
             </fieldset>
               ) },

@@ -30,6 +30,7 @@ final class RawMaterialCsvImportWorkflow
         private readonly RawMaterialCsvImportPersistenceService $persistence,
         private readonly RawMaterialAuthorization $authorization,
         private readonly RawMaterialLocationSharePolicy $sharePolicy,
+        private readonly RawMaterialPricingService $pricing,
     ) {}
 
     public function upload(User $actor, Location $context, UploadedFile $file): array
@@ -269,6 +270,8 @@ final class RawMaterialCsvImportWorkflow
                     'revisions.name',
                     'revisions.base_unit_code',
                     'revisions.base_unit_dimension',
+                    'revisions.nominal_quantity',
+                    'revisions.usable_quantity',
                 ])
                 ->first();
 
@@ -276,6 +279,7 @@ final class RawMaterialCsvImportWorkflow
                 $this->sharePolicy->assertCanConsume($actor, $context, $material->id);
             }
 
+            $price = null;
             $normalPrice = '0';
             $revisionId = $material?->approved_revision_id;
             $error = null;
@@ -307,16 +311,25 @@ final class RawMaterialCsvImportWorkflow
                     ])->all();
                 $sourceUnit = $row['unit'] === 'szt.' ? 'pc' : $row['unit'];
                 $approvedUnit = collect($revisionUnits)->firstWhere('unit_code', $sourceUnit);
-                if ($material->base_unit_dimension !== $unitDimension || ! $approvedUnit
+                if ($material->nominal_quantity === null || $material->usable_quantity === null) {
+                    $error = ['code' => 'NOMINAL_QUANTITY_REQUIRED', 'message' => 'CSV z ceną wymaga ilości nominalnej i użytkowej surowca.'];
+                } elseif ($material->base_unit_dimension !== $unitDimension || ! $approvedUnit
                     || $approvedUnit['dimension'] !== $unitDimension
                     || ! in_array($approvedUnit['conversion_kind'], ['BASE', 'METRIC'], true)) {
                     $error = ['code' => 'UNIT_NOT_COMPATIBLE', 'message' => 'Jednostka z pliku nie jest zatwierdzoną jednostką tego samego wymiaru dla bieżącej rewizji.'];
                 } else {
-                    $unitFactor = $approvedUnit['to_base_factor'];
-                    $normalPrice = (string) DB::scalar(
-                        'SELECT raw_materials_round_half_even_v1(CAST(? AS numeric) / CAST(? AS numeric), 14)::text',
-                        [$row['price_net'], $unitFactor],
+                    $sourceUnit = $row['unit'] === 'szt.' ? 'pc' : $row['unit'];
+                    $price = $this->pricing->normalizeCsvPrice(
+                        $row['price_net'],
+                        $sourceUnit,
+                        (string) $material->nominal_quantity,
+                        (string) $material->usable_quantity,
+                        $material->base_unit_code,
+                        $revisionId,
+                        $actor->organization_id,
+                        $approvedUnit['to_base_factor'],
                     );
+                    $normalPrice = $price['net_pln_per_base_unit'];
                 }
             }
 
@@ -329,6 +342,8 @@ final class RawMaterialCsvImportWorkflow
                     'revision_name' => $material->name,
                     'base_unit_code' => $material->base_unit_code,
                     'base_unit_dimension' => $material->base_unit_dimension,
+                    'nominal_quantity' => $material->nominal_quantity,
+                    'usable_quantity' => $material->usable_quantity,
                     'revision_units' => $revisionUnits,
                 ];
             } else {
@@ -342,6 +357,13 @@ final class RawMaterialCsvImportWorkflow
                 'ingredient_name' => $row['ingredient_name'],
                 'price_net' => $row['price_net'],
                 'normalized_net_pln_per_base_unit' => $normalPrice,
+                'net_pln_per_package' => $price['net_pln_per_package'] ?? null,
+                'pricing_input_basis' => $price['pricing_input_basis'] ?? null,
+                'pricing_input_amount' => $price['pricing_input_amount'] ?? null,
+                'pricing_input_unit_code' => $price['pricing_input_unit_code'] ?? null,
+                'pricing_nominal_quantity' => $price['pricing_nominal_quantity'] ?? null,
+                'pricing_usable_quantity' => $price['pricing_usable_quantity'] ?? null,
+                'pricing_revision_id' => $price['pricing_revision_id'] ?? null,
                 'vat_rate' => $row['vat_rate'],
                 'unit' => $row['unit'],
                 'effective_date' => $row['effective_date'],

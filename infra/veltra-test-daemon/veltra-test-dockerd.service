@@ -1,0 +1,16 @@
+[Unit]
+Description=VELTRA disposable-test rootless Docker daemon
+Documentation=https://docs.docker.com/engine/security/rootless/
+After=network.target
+
+[Service]
+RuntimeDirectory=veltra-test-docker
+RuntimeDirectoryMode=0700
+Delegate=yes
+KillMode=mixed
+Restart=on-failure
+RestartSec=2
+ExecStart=/usr/bin/dockerd-rootless.sh --host=unix://%t/veltra-test-docker/docker.sock --data-root=%h/.local/share/veltra-test-docker --exec-root=%t/veltra-test-docker/exec --pidfile=%t/veltra-test-docker/docker.pid --label=com.veltra.daemon-role=disposable-test
+
+[Install]
+WantedBy=default.target

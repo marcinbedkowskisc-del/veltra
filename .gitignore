@@ -4,6 +4,7 @@
 **/vendor/
 **/node_modules/
 **/dist/
+/tests/compose/test.env
 frontend/interactive-preview-dist/
 *.log
 .DS_Store

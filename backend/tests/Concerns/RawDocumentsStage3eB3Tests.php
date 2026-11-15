@@ -159,7 +159,7 @@ trait RawDocumentsStage3eB3Tests
         $this->b3Storage();
         $upload = $this->b3Upload();
         $reservation = app(RawMaterialSkuReservationService::class)->reserve($this->steward, $this->location, 'b3-create-reservation');
-        $input = ['category_id' => $this->category()['id'], 'name' => 'Utworzenie z dokumentem', 'base_unit_code' => 'g', 'sku_reservation_id' => $reservation['reservation_id'], 'document_upload_ids' => [$upload['upload_id']]];
+        $input = ['category_id' => $this->category()['id'], 'name' => 'Utworzenie z dokumentem', 'base_unit_code' => 'g', 'nominal_quantity' => '1000', 'sku_reservation_id' => $reservation['reservation_id'], 'document_upload_ids' => [$upload['upload_id']]];
         $created = $this->rawMaterialService->create($this->steward, $this->location, $input);
         $this->assertEquals($created, $this->rawMaterialService->create($this->steward, $this->location, $input));
         $this->assertSame(1, DB::table('raw_material_document_versions')->count());
@@ -233,7 +233,7 @@ trait RawDocumentsStage3eB3Tests
         $this->b3Storage();
         $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF";
         $upload = $this->b3Upload('pdf', 'instrukcja.pdf', $pdf);
-        $input = ['category_id' => $this->category()['id'], 'name' => 'PDF', 'base_unit_code' => 'g', 'document_upload_ids' => [$upload['upload_id']]];
+        $input = ['category_id' => $this->category()['id'], 'name' => 'PDF', 'base_unit_code' => 'g', 'nominal_quantity' => '1000', 'document_upload_ids' => [$upload['upload_id']]];
         $material = $this->rawMaterialService->create($this->steward, $this->location, $input);
         $versionId = DB::table('raw_material_document_versions')->value('id');
         app(RawMaterialDocumentScanService::class)->scanVersion($versionId);
@@ -501,6 +501,7 @@ trait RawDocumentsStage3eB3Tests
             'category_id' => $categoryId,
             'name' => 'Szkic niekwalifikujący się do archiwizacji',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $this->selectRawMaterialApiContext($this->steward);
 
@@ -829,7 +830,7 @@ trait RawDocumentsStage3eB3Tests
         $ids = [];
         foreach (range(1, 51) as $index) {
             $material = $this->rawMaterialService->create($this->steward, $this->location, [
-                'category_id' => $category['id'], 'name' => sprintf('Eksport %02d', $index), 'base_unit_code' => 'g',
+                'category_id' => $category['id'], 'name' => sprintf('Eksport %02d', $index), 'base_unit_code' => 'g', 'nominal_quantity' => '1000',
                 'allergen_declaration' => ['status' => 'NO_KNOWN_ALLERGENS', 'catalog_version_id' => $catalog, 'items' => []],
             ]);
             $this->b3Approve($material['id']);
@@ -860,7 +861,7 @@ trait RawDocumentsStage3eB3Tests
         $this->getJson($base)->assertOk()->assertJsonCount(0, 'data.documents');
         $this->get($base.'/'.$document['version']['id'].'/download')->assertNotFound();
         $material = $this->rawMaterialService->create($this->steward, $this->location, [
-            'category_id' => DB::table('raw_material_categories')->value('id'), 'name' => 'Niepowiązany szkic', 'base_unit_code' => 'g',
+            'category_id' => DB::table('raw_material_categories')->value('id'), 'name' => 'Niepowiązany szkic', 'base_unit_code' => 'g', 'nominal_quantity' => '1000',
         ]);
         $this->get('/api/v1/raw-materials/'.$material['id'].'/documents/'.$document['version']['id'].'/download')->assertNotFound();
     }
@@ -952,7 +953,7 @@ trait RawDocumentsStage3eB3Tests
     private function b3DraftWithDocument(bool $declared = false): array
     {
         $upload = $this->b3Upload('b3-claimed');
-        $input = ['category_id' => $this->category()['id'], 'name' => 'Dokumenty B3', 'base_unit_code' => 'g'];
+        $input = ['category_id' => $this->category()['id'], 'name' => 'Dokumenty B3', 'base_unit_code' => 'g', 'nominal_quantity' => '1000'];
         if ($declared) {
             $input['allergen_declaration'] = ['status' => 'NO_KNOWN_ALLERGENS', 'catalog_version_id' => $this->publishedAllergenCatalogFixture(), 'items' => []];
         }

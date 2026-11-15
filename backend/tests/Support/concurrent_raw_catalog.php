@@ -26,7 +26,8 @@ $location = Location::findOrFail($locationId);
 $result = match ($operation) {
     'reserve' => app(RawMaterialSkuReservationService::class)->reserve($actor, $location, $key),
     'create', 'create-distinct' => app(RawMaterialService::class)->create($actor, $location, [
-        'category_id' => $categoryId, 'name' => 'Równoległy surowiec '.$key, 'base_unit_code' => 'g', 'sku_reservation_id' => $key,
+        'category_id' => $categoryId, 'name' => 'Równoległy surowiec '.$key, 'base_unit_code' => 'g',
+        'nominal_quantity' => '1000', 'sku_reservation_id' => $key,
     ]),
     default => throw new InvalidArgumentException('Invalid operation.'),
 };

@@ -61,6 +61,12 @@ export type RawMaterialReferencePrice = {
   effectiveFrom: string
   netPlnPerBaseUnit: string | null
   netPlnPerPackage: string | null
+  pricingInputBasis: 'PACKAGE' | 'NOMINAL_UNIT' | 'LEGACY_BASE_UNIT' | null
+  pricingInputAmount: string | null
+  pricingInputUnitCode: string | null
+  pricingNominalQuantity: string | null
+  pricingUsableQuantity: string | null
+  pricingBaseUnitCode: string | null
   currencyCode: 'PLN'
 }
 
@@ -210,6 +216,39 @@ export function parseRawMaterialReferencePrices(value: unknown): RawMaterialRefe
       if (typeof item !== 'string' || !DECIMAL.test(item)) throw invalidPriceHistory()
       return item
     }
+    const pricingInputBasis = event.pricing_input_basis ?? null
+    if (pricingInputBasis !== null
+      && !['PACKAGE', 'NOMINAL_UNIT', 'LEGACY_BASE_UNIT'].includes(String(pricingInputBasis))) {
+      throw invalidPriceHistory()
+    }
+    const pricingInputUnitCode = event.pricing_input_unit_code ?? null
+    if (pricingInputUnitCode !== null
+      && (typeof pricingInputUnitCode !== 'string'
+        || !['mg', 'g', 'kg', 'ml', 'l', 'pc'].includes(pricingInputUnitCode))) {
+      throw invalidPriceHistory()
+    }
+    const pricingBaseUnitCode = event.pricing_base_unit_code ?? null
+    if (pricingBaseUnitCode !== null
+      && !['mg', 'g', 'kg', 'ml', 'l', 'pc'].includes(String(pricingBaseUnitCode))) {
+      throw invalidPriceHistory()
+    }
+    const pricingInputAmount = priceDecimal(event.pricing_input_amount ?? null)
+    const pricingNominalQuantity = priceDecimal(event.pricing_nominal_quantity ?? null)
+    const pricingUsableQuantity = priceDecimal(event.pricing_usable_quantity ?? null)
+    if ((pricingInputBasis === 'PACKAGE' && pricingInputUnitCode !== null)
+      || (pricingInputBasis === 'NOMINAL_UNIT'
+        && !['kg', 'l', 'pc'].includes(String(pricingInputUnitCode)))) {
+      throw invalidPriceHistory()
+    }
+    if (pricingInputBasis !== null && (
+      pricingInputAmount === null
+      || pricingNominalQuantity === null
+      || pricingUsableQuantity === null
+      || pricingBaseUnitCode === null
+      || (pricingInputBasis !== 'PACKAGE' && pricingInputUnitCode === null)
+    )) {
+      throw invalidPriceHistory()
+    }
     const effectiveFrom = priceString(event.effective_from)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
       throw new Error('Backend zwrócił nieprawidłową datę obowiązywania ceny.')
@@ -221,6 +260,12 @@ export function parseRawMaterialReferencePrices(value: unknown): RawMaterialRefe
       effectiveFrom,
       netPlnPerBaseUnit: priceDecimal(event.net_pln_per_base_unit),
       netPlnPerPackage: priceDecimal(event.net_pln_per_package),
+      pricingInputBasis: pricingInputBasis as RawMaterialReferencePrice['pricingInputBasis'],
+      pricingInputAmount,
+      pricingInputUnitCode: pricingInputUnitCode as string | null,
+      pricingNominalQuantity,
+      pricingUsableQuantity,
+      pricingBaseUnitCode: pricingBaseUnitCode as string | null,
       currencyCode: 'PLN',
     }
   })

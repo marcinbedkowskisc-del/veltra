@@ -30,6 +30,7 @@ $material = app(RawMaterialService::class)->create($actor, $location, [
     'category_id' => $categoryId,
     'name' => $name,
     'base_unit_code' => 'kg',
+    'nominal_quantity' => '1000',
     'conversions' => [['unit_code' => 'g']],
 ]);
 

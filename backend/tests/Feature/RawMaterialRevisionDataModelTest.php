@@ -91,7 +91,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         $this->assertRevisionHashMatches($noKnownRevision);
     }
 
-    public function test_version_two_hash_covers_declarations_storage_and_is_preserved_when_revising(): void
+    public function test_version_three_hash_covers_declarations_storage_and_is_preserved_when_revising(): void
     {
         $catalogVersionId = $this->publishedCatalog([
             ['allergen_code' => 'TEST_WHEAT', 'name_pl' => 'Pszenica'],
@@ -111,7 +111,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         $revisionId = $material['revision']['id'];
         $revision = DB::table('raw_material_revisions')->where('id', $revisionId)->first();
 
-        $this->assertSame(2, (int) $revision->content_hash_version);
+        $this->assertSame(3, (int) $revision->content_hash_version);
         $this->assertSame(2, DB::table('raw_material_revision_allergen_declarations')
             ->where('revision_id', $revisionId)->count());
         $this->assertSame(1, DB::table('raw_material_revision_storage_variants')
@@ -130,6 +130,92 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         $this->assertSame(1, DB::table('raw_material_revision_storage_variants')
             ->where('revision_id', $revisedId)->count());
         $this->assertRevisionHashMatches($revisedRevision);
+    }
+
+    public function test_package_and_nominal_unit_prices_normalize_to_equivalent_usable_costs(): void
+    {
+        $this->role($this->steward, BusinessRole::Administrator);
+        $catalogVersionId = $this->publishedCatalog([]);
+        $materials = [];
+        foreach ([
+            ['Cena opakowania', ['basis' => 'PACKAGE', 'amount' => '28']],
+            ['Cena za kilogram', ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg']],
+        ] as [$name, $pricing]) {
+            $material = $this->createMaterial($name, [
+                'nominal_quantity' => '2800',
+                'usable_quantity' => '1500',
+                'conversions' => [['unit_code' => 'kg']],
+                'pricing' => $pricing,
+                'allergen_declaration' => [
+                    'status' => 'NO_KNOWN_ALLERGENS',
+                    'catalog_version_id' => $catalogVersionId,
+                    'items' => [],
+                ],
+            ]);
+            $revision = DB::table('raw_material_revisions')->where('id', $material['revision']['id'])->first();
+            $this->assertSame(3, (int) $revision->content_hash_version);
+            $this->assertRevisionHashMatches($revision);
+
+            $this->rawMaterials->submit(
+                $this->steward,
+                $this->location,
+                $material['id'],
+                expectedVersion: $this->rawVersion($material['id']),
+            );
+            $this->rawMaterials->approve(
+                $this->steward,
+                $this->location,
+                $material['id'],
+                'Zatwierdzenie ceny testowej',
+                expectedVersion: $this->rawVersion($material['id']),
+            );
+            $materials[] = DB::table('raw_material_reference_price_events')
+                ->where('raw_material_id', $material['id'])->first();
+        }
+
+        $this->assertSame('28.00000000000000', (string) $materials[0]->net_pln_per_package);
+        $this->assertSame($materials[0]->net_pln_per_package, $materials[1]->net_pln_per_package);
+        $this->assertSame('PACKAGE', $materials[0]->pricing_input_basis);
+        $this->assertSame('NOMINAL_UNIT', $materials[1]->pricing_input_basis);
+        foreach ($materials as $event) {
+            $this->assertSame('2800.000000', (string) $event->pricing_nominal_quantity);
+            $this->assertSame('1500.000000', (string) $event->pricing_usable_quantity);
+            $this->assertSame('1.86666666666667', (string) DB::scalar(
+                'SELECT raw_materials_round_half_even_v1(CAST(? AS numeric) / CAST(? AS numeric) * 100, 14)::text',
+                [$event->net_pln_per_package, $event->pricing_usable_quantity],
+            ));
+        }
+    }
+
+    public function test_omitted_usable_quantity_defaults_to_nominal_and_does_not_keep_stale_yield(): void
+    {
+        $material = $this->createMaterial('Wydajność domyślna', ['nominal_quantity' => '2800']);
+        $revision = DB::table('raw_material_revisions')->where('id', $material['revision']['id'])->first();
+        $this->assertFalse((bool) $revision->usable_quantity_explicit);
+        $this->assertSame('2800.000000', (string) $revision->usable_quantity);
+
+        $revised = $this->rawMaterials->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $this->categoryId,
+            'name' => 'Wydajność nominalna zmieniona',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '3000',
+        ], expectedVersion: $this->rawVersion($material['id']));
+        $defaultedRevision = DB::table('raw_material_revisions')->where('id', $revised['revision']['id'])->first();
+        $this->assertFalse((bool) $defaultedRevision->usable_quantity_explicit);
+        $this->assertSame('3000.000000', (string) $defaultedRevision->usable_quantity);
+        $this->assertRevisionHashMatches($defaultedRevision);
+
+        $explicit = $this->rawMaterials->revise($this->steward, $this->location, $material['id'], [
+            'category_id' => $this->categoryId,
+            'name' => 'Wydajność jawna',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '3000',
+            'usable_quantity' => '1500',
+        ], expectedVersion: $this->rawVersion($material['id']));
+        $explicitRevision = DB::table('raw_material_revisions')->where('id', $explicit['revision']['id'])->first();
+        $this->assertTrue((bool) $explicitRevision->usable_quantity_explicit);
+        $this->assertSame('1500.000000', (string) $explicitRevision->usable_quantity);
+        $this->assertRevisionHashMatches($explicitRevision);
     }
 
     public function test_database_rejects_duplicate_and_invalid_declarations_and_storage_bounds(): void
@@ -244,7 +330,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         ], expectedVersion: $this->rawVersion($legacy['material_id']));
         $v2RevisionId = $v2['revision']['id'];
         $v2Revision = DB::table('raw_material_revisions')->where('id', $v2RevisionId)->first();
-        $this->assertSame(2, (int) $v2Revision->content_hash_version);
+        $this->assertSame(3, (int) $v2Revision->content_hash_version);
         $this->assertSame('DECLARED', $v2Revision->allergen_state);
         $this->assertSame(0, DB::table('raw_material_revision_allergen_attestations')
             ->where('revision_id', $v2RevisionId)->count());
@@ -483,6 +569,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => $name,
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
             ...$extra,
         ]);
     }

@@ -77,15 +77,19 @@ kontekstu transakcji dla wszystkich mutowalnych tabel aplikacji. Tabele
 referencyjne walut i rejestr operacji sa tylko do odczytu dla runtime; nowe
 obiekty nie otrzymuja domyslnie praw DML.
 
-Profil `testing` uzywa osobnej bazy `veltra_testing`. Migracje wykonuje
-`veltra_migrator`, a PHPUnit laczy sie domyslnie jako ograniczona rola
-`veltra_app`. Jawne fixture'y, asercje integralnosci i czyszczenie bazy uzywaja
-oddzielnego polaczenia `pgsql_setup` jako `veltra_migrator`; to polaczenie nie
-staje sie domyslne dla aplikacji. Testy koncza sie bledem, jesli role, wlasciciel
-schematu, baza lub wymagane dane setup nie zgadzaja sie z ta konfiguracja.
-Nie uruchamiaj testow na bazie produkcyjnej ani nie przekazuj do nich
-produkcyjnych sekretow. Skrypt PostgreSQL przygotowuje role i ich domyslne
-granty tylko przy inicjalizacji pustego wolumenu. Skrypty
+Testy backendu korzystaja z osobnego [Compose testowego](compose.testing.yaml)
+i projektu `veltra-test-application`. PostgreSQL i Redis przechowuja dane
+wylacznie w `tmpfs`, a uslugi sa podlaczone tylko do wewnetrznej sieci testowej.
+W glownym Compose nie ma juz profili `backend-test`/`migrate-test`, ktore
+wspoldzielily siec i PostgreSQL instalacji. PHPUnit laczy sie jako ograniczona
+rola `veltra_app`; migracje i jawne fixture'y korzystaja z roli
+`veltra_migrator`. Testy koncza sie bledem, jesli role, baza lub wymagane dane
+setup nie zgadzaja sie z konfiguracja. Nie uzywaj sekretow instalacji.
+Compose testowy wymaga pliku `tests/compose/test.env` zawierajacego wylacznie
+syntetyczne zmienne `TEST_*`; wrapper sprawdza jego
+zawartosc i nie dziedziczy `.env`, `COMPOSE_*` ani `DOCKER_*`.
+Skrypt PostgreSQL przygotowuje role i granty dla nowej, nietrwalej bazy.
+Skrypty
 `docker-entrypoint-initdb.d` nie sa uruchamiane ponownie na istniejacym
 wolumenie. Przy istniejacej instalacji administrator musi jawnie uzupelnic
 `.env` o `APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD`, a nastepnie
@@ -238,74 +242,50 @@ nie jest potrzebny w tym srodowisku.
 
 ## Testowanie
 
-Po uruchomieniu kontenerow przygotuj **osobna baze testowa**:
+Przygotuj ignorowany plik z syntetycznymi danymi testowymi; nie kopiuj wartosci
+z `.env` ani pliku Stage:
 
 ```bash
-# Jednorazowo; przy ponownym wykonaniu sprawdz, czy baza juz istnieje.
-docker compose exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" veltra_testing'
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d veltra_testing \
-  --set=migration_username="$APP_DB_MIGRATION_USERNAME" \
-  --set=app_db_username="$APP_DB_USERNAME"' <<'SQL'
-GRANT CONNECT, CREATE ON DATABASE veltra_testing TO :"migration_username";
-ALTER SCHEMA public OWNER TO :"migration_username";
-GRANT CONNECT ON DATABASE veltra_testing TO :"app_db_username";
-GRANT USAGE ON SCHEMA public TO :"app_db_username";
-ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_username" IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"app_db_username";
-ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_username" IN SCHEMA public
-  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"app_db_username";
-SQL'
-docker compose run --rm migrate-test
+cp tests/compose/test.env.example tests/compose/test.env
+# Ustaw TEST_APP_KEY, TEST_MUTATION_SIGNING_KEY i trzy TEST_*_PASSWORD
+# na losowe, syntetyczne wartosci.
 ```
 
-Jesli `veltra_testing` juz istnieje, przed migracja testowa uruchom skrypt
-provisioningu na tej bazie osobno:
-
-```bash
-docker compose exec -T postgres sh -c 'POSTGRES_DB=veltra_testing sh /docker-entrypoint-initdb.d/10-create-runtime-role.sh'
-```
-
-Usługa `migrate-test` stosuje migracje jako `veltra_migrator`. Usługa
-`backend-test` ustawia runtime na `veltra_app`, a dane setup pobiera z
-`APP_DB_MIGRATION_USERNAME` i `APP_DB_MIGRATION_PASSWORD` przez zmienne
-`TEST_DB_SETUP_USERNAME` i `TEST_DB_SETUP_PASSWORD`. Testy domenowe sprawdzaja
-nazwe bazy, role runtime i wlasciciela tabel przed zapisem. Nie uzywaj
-`veltra_testing` dla danych rzeczywistych. Fixture'y sa zatwierdzane przez
-`pgsql_setup`, a aplikacyjne operacje testu pozostaja na `pgsql` jako
-`veltra_app`. Reset `TRUNCATE organizations CASCADE` jest wykonywany wylacznie
-przez setup role w tej bazie przed i po testach. Testy wspolbieznosci uruchamiaj
-sekwencyjnie, nie przez `--parallel`, poniewaz korzystaja z tej samej bazy
-testowej. Baza instalacji `veltra` nie jest czyszczona przez testy.
-
-Nastepnie:
+Uruchamiaj testy przez wrapper — nie przez bazowy `docker compose`:
 
 ```bash
 # Izolowane przypadki health oraz testy z prawdziwym PostgreSQL i Redis.
-docker compose run --rm backend-test php artisan test --filter=Health
+scripts/compose-test run --build --rm backend-test php artisan test --filter=Health
 
 # Cala podstawowa suita Laravel.
-docker compose run --rm backend-test composer test
+scripts/compose-test run --build --rm backend-test composer test
 
 # Testy Stage 1B: domena, API, rzeczywiste ograniczenia PostgreSQL i wspolbieznosc.
-docker compose run --rm backend-test php artisan test --filter='Installation|ManagementConcurrency'
+scripts/compose-test run --build --rm backend-test php artisan test --filter='Installation|ManagementConcurrency'
 
 # Testy Stage 1C: sesje, CSRF, konta, przypisania i interaktywne CLI.
-docker compose run --rm backend-test php artisan test --filter='Identity|Membership'
+scripts/compose-test run --build --rm backend-test php artisan test --filter='Identity|Membership'
 
 # Format PHP oraz walidacja metadanych zaleznosci.
-docker compose exec -T backend vendor/bin/pint --test
-docker compose exec -T backend composer validate --strict
+scripts/compose-test run --build --rm backend-test vendor/bin/pint --test
+scripts/compose-test run --build --rm backend-test composer validate --strict
 
 # TypeScript, build Vite i lint frontendu.
 docker compose exec -T frontend npm run build
 docker compose exec -T frontend npm run lint
 
-# Kontrola Compose bez wypisywania sekretow.
-docker compose config --quiet
+# Kontrola Compose testowego bez wypisywania sekretow.
+scripts/compose-test config --quiet
 
 curl --fail-with-body http://localhost:8000/api/health
 curl --fail-with-body http://localhost:5173/api/health
 ```
+
+`scripts/compose-test` ustala projekt, katalog, plik env i Compose jawnie,
+usuwa odziedziczone zmienne Docker/Compose oraz blokuje polecenia teardown.
+Testy integracyjne korzystaja z osobnego PostgreSQL i Redis w `tmpfs`; reset
+fixture'ow moze dotyczyc tylko tej bazy. Testy wspolbieznosci uruchamiaj
+sekwencyjnie, nie przez `--parallel`.
 
 `HealthTest` sprawdza poprawna odpowiedz, awarie PostgreSQL, Redis, obu zaleznosci,
 nieprawidlowy PING oraz logowanie bledow i brak szczegolow wyjatkow w JSON.
@@ -319,12 +299,24 @@ Regresja przeslaniania walidatora uprawnien przez `pg_temp` musi byc uruchomiona
 z rzeczywistym kontem runtime, aby testowac efektywne ograniczenia PostgreSQL:
 
 ```bash
-docker compose run --rm \
-  -e DB_USERNAME="${APP_DB_USERNAME:-veltra_app}" \
-  -e DB_PASSWORD="${APP_DB_PASSWORD:?Uruchom inicjalizacje srodowiska opisana w README}" \
-  backend-test php artisan test \
+scripts/compose-test run --build --rm backend-test \
+  php artisan test \
   --filter=test_runtime_cannot_shadow_bootstrap_validation_relations_with_temporary_tables
 ```
+
+Specjalistyczne testy infrastrukturalne B.1/B.2/B.3/B.4.1 uruchamiaj na
+`veltra-test-isolated`. `scripts/compose-test-clean` domyslnie wykonuje tylko
+odczytowa weryfikacje:
+
+```bash
+scripts/compose-test-clean --target stage3e-b2 --env-file tests/compose/test.env
+# Dopiero po provisioningu odrebnego daemonu i osobnej zgodzie:
+scripts/compose-test-clean --target stage3e-b2 --env-file tests/compose/test.env \
+  --execute --confirm-project veltra-test-stage3e-b2
+```
+
+Usuwa wyłącznie kontenery i sieć; nie używa `--volumes` ani
+`--remove-orphans`. Odrzuca zwykly, glowny oraz Stage Docker context.
 
 Migracja `021` blokuje zapisy grantow podczas rekonsyliacji ledgeru. Jesli
 wykryje osierocone wpisy, duplikaty lub granty bez zgodnej historii audytowej,

@@ -1,0 +1,102 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+env_file=${VELTRA_TEST_ENV_FILE:-"$root/tests/compose/test.env"}
+
+if [ "$#" -lt 1 ]; then
+    printf '%s\n' "Usage: scripts/compose-test {config|build|run|exec|ps|logs|up} [Compose arguments...]" >&2
+    exit 2
+fi
+
+command=$1
+shift
+case "$command" in
+    config|build|run|exec|ps|logs|up) ;;
+    *)
+        printf '%s\n' "Refusing '$command'; use scripts/compose-test-clean for guarded cleanup." >&2
+        exit 2
+        ;;
+esac
+
+service_is_allowed() {
+    case "$1" in
+        postgres|redis|clamav|backend-test|migrate-test) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+reject() {
+    printf '%s\n' "Refusing unsafe Compose arguments for '$command'." >&2
+    exit 2
+}
+
+validate_service_command() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --build|--rm|--no-deps|-T|--interactive=false)
+                shift
+                ;;
+            -*)
+                reject
+                ;;
+            *)
+                service_is_allowed "$1" || reject
+                return 0
+                ;;
+        esac
+    done
+    reject
+}
+
+case "$command" in
+    run|exec)
+        validate_service_command "$@"
+        ;;
+    up)
+        for argument in "$@"; do
+            case "$argument" in
+                -d|--detach) ;;
+                *) service_is_allowed "$argument" || reject ;;
+            esac
+        done
+        ;;
+    build)
+        for argument in "$@"; do
+            service_is_allowed "$argument" || reject
+        done
+        ;;
+    ps|logs)
+        for argument in "$@"; do
+            case "$argument" in
+                -a|--all|-q|--quiet) ;;
+                *) service_is_allowed "$argument" || reject ;;
+            esac
+        done
+        ;;
+    config)
+        for argument in "$@"; do
+            case "$argument" in
+                --quiet|--format|json) ;;
+                *) reject ;;
+            esac
+        done
+        ;;
+esac
+
+python3 "$root/scripts/compose_test_cleanup.py" \
+    --target application \
+    --env-file "$env_file" \
+    --validate-only
+
+exec env -i \
+    PATH="${PATH:-/usr/bin:/bin}" \
+    HOME="${HOME:?HOME must be set}" \
+    DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}" \
+    XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+    docker compose \
+    --project-name veltra-test-application \
+    --project-directory "$root" \
+    --env-file "$env_file" \
+    -f "$root/compose.testing.yaml" \
+    "$command" "$@"

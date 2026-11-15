@@ -89,6 +89,7 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
             'category_id' => $this->categoryId,
             'name' => 'Surowiec testowy do dokumentów',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $this->materialId = $material['id'];
         $this->revisionId = $material['revision']['id'];

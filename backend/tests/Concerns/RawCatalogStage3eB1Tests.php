@@ -288,9 +288,9 @@ trait RawCatalogStage3eB1Tests
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
         $reservation = app(RawMaterialSkuReservationService::class)->reserve($this->steward, $this->location, 'stage3e-import-form');
-        $csv = "sku;entity_type;name;description;base_unit_code;category_code\n"
-            ."RAW-1000000;RAW;Za duży;;g;{$category['code']}\n"
-            ."{$reservation['sku']};RAW;Rezerwacja formularza;;g;{$category['code']}\n";
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."RAW-1000000;RAW;Za duży;;g;{$category['code']};1;\n"
+            ."{$reservation['sku']};RAW;Rezerwacja formularza;;g;{$category['code']};1;\n";
         $result = app(RawMaterialCatalogCsvImportWorkflow::class)->upload(
             $this->steward, $this->location, UploadedFile::fake()->createWithContent('range.csv', $csv),
         );
@@ -308,7 +308,8 @@ trait RawCatalogStage3eB1Tests
         $second = $service->reserve($this->steward, $this->location, 'stage3e-reserve-second');
         $this->assertSame('RAW-000002', $second['sku']);
         $input = [
-            'category_id' => $this->category()['id'], 'name' => 'Rezerwacja', 'base_unit_code' => 'g', 'sku_reservation_id' => $second['reservation_id'],
+            'category_id' => $this->category()['id'], 'name' => 'Rezerwacja', 'base_unit_code' => 'g',
+            'nominal_quantity' => '1000', 'sku_reservation_id' => $second['reservation_id'],
             'conversions' => [['unit_code' => 'kg', 'to_base_factor' => '1000']],
         ];
         $created = $this->rawMaterialService->create($this->steward, $this->location, $input);
@@ -326,7 +327,13 @@ trait RawCatalogStage3eB1Tests
     {
         $service = app(RawMaterialSkuReservationService::class);
         $first = $service->reserve($this->steward, $this->location, 'stage3e-expiry-first');
-        $input = ['category_id' => $this->category()['id'], 'name' => 'Wygasły', 'base_unit_code' => 'g', 'sku_reservation_id' => $first['reservation_id']];
+        $input = [
+            'category_id' => $this->category()['id'],
+            'name' => 'Wygasły',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'sku_reservation_id' => $first['reservation_id'],
+        ];
         $this->travel(25)->hours();
         try {
             $this->assertSame('EXPIRED', $service->reserve($this->steward, $this->location, 'stage3e-expiry-first')['status']);
@@ -376,7 +383,10 @@ trait RawCatalogStage3eB1Tests
         $this->assertSame('MEN-000001', SkuPrefix::Menu->format(1));
         try {
             $this->rawMaterialService->create($this->steward, $this->location, [
-                'category_id' => $this->category()['id'], 'name' => 'Brak numeru', 'base_unit_code' => 'g',
+                'category_id' => $this->category()['id'],
+                'name' => 'Brak numeru',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
             ]);
             $this->fail('Zapis ominął wyczerpanie zakresu RAW.');
         } catch (RawMaterialException $exception) {

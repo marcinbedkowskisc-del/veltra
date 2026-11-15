@@ -100,6 +100,7 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             'category_id' => $category['id'],
             'name' => 'Surowiec testowy do oceny zgodności',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
         ]);
         $this->materialId = $material['id'];
         $catalogVersionId = $this->publishedCatalog();
@@ -418,6 +419,7 @@ class RawMaterialCompatibilityAssessmentTest extends AuthorizationTestCase
             'category_id' => $categoryId,
             'name' => 'Surowiec historii zgodności',
             'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
             'allergen_state' => 'DECLARED',
             'allergen_declaration' => [
                 'status' => 'DECLARED',

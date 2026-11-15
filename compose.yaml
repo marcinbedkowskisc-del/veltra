@@ -1,4 +1,4 @@
-name: ${COMPOSE_PROJECT_NAME:-veltra}
+name: veltra
 
 x-backend-environment: &backend-environment
   APP_NAME: VELTRA 2.0
@@ -71,21 +71,6 @@ services:
       retries: 3
       start_period: 20s
 
-  backend-test:
-    <<: *backend
-    profiles: ["testing"]
-    environment:
-      <<: *backend-environment
-      DB_DATABASE: veltra_testing
-      DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
-      DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
-      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
-      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Run the environment initialization command from README}
-      TEST_DB_SETUP_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
-      TEST_DB_SETUP_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
-    command: ["php", "artisan", "test"]
-
   migrate:
     <<: *backend
     profiles: ["migrations"]
@@ -96,21 +81,6 @@ services:
       APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
       APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
       APP_DB_AUTHORIZATION_HISTORY_ATTESTATION: ${APP_DB_AUTHORIZATION_HISTORY_ATTESTATION:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    command: ["php", "artisan", "migrate", "--force"]
-
-  migrate-test:
-    <<: *backend
-    profiles: ["testing"]
-    environment:
-      <<: *backend-environment
-      DB_DATABASE: veltra_testing
-      DB_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
-      DB_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
-      APP_DB_USERNAME: ${APP_DB_USERNAME:-veltra_app}
-      APP_DB_MIGRATION_USERNAME: ${APP_DB_MIGRATION_USERNAME:-veltra_migrator}
     depends_on:
       postgres:
         condition: service_healthy

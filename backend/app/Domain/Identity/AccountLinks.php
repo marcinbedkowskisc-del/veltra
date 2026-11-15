@@ -135,17 +135,12 @@ class AccountLinks
         Organization $organization,
         string $kind,
     ): bool {
-        $primary = $organization->primaryCentralKitchen()->first();
-
         return $actor !== null && $context !== null && $actor->is($target)
-            && $target->is_initial_identity && $target->is_active && $target->email_verified_at === null
+            && $target->is_active && $target->email_verified_at === null
             && $kind === 'activation' && $organization->is_active && $organization->authorization_initialized
-            && ! $organization->primary_central_kitchen_unresolved
-            && $primary !== null && $primary->is_active
             && $context->organization_id === $organization->id && $context->is_active
             && RoleAssignment::where('organization_id', $organization->id)->where('user_id', $target->id)
                 ->where('role', BusinessRole::Administrator)->whereNull('revoked_at')->exists()
-            && app(MembershipService::class)->available($target)->where('location_id', $primary->id)->exists()
             && app(MembershipService::class)->available($target)->where('location_id', $context->id)->exists();
     }
 

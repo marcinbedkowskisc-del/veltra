@@ -11,7 +11,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use SensitiveParameter;
 
-final class SuperAdminProfileAdministration
+final class AdministratorProfileAdministration
 {
     public function __construct(
         private BusinessAuthorization $authorization,
@@ -47,11 +47,11 @@ final class SuperAdminProfileAdministration
         ): bool {
             $user = User::whereKey($actor->id)->lockForUpdate()->firstOrFail();
             if (! $this->authorization->eligible($user, $context)
-                || ! $this->authorization->isSuperAdmin($user)) {
+                || ! $this->authorization->hasRole($user, BusinessRole::Administrator)) {
                 throw new AuthorizationException(__('messages.unauthorized'));
             }
 
-            $key = 'super-admin-profile-confirm:'.$user->id.'|'.request()->ip();
+            $key = 'administrator-profile-confirm:'.$user->id.'|'.request()->ip();
             if (RateLimiter::tooManyAttempts($key, 5)) {
                 throw new AuthorizationException(__('messages.fresh_password_confirmation_rate_limited'));
             }
@@ -72,6 +72,9 @@ final class SuperAdminProfileAdministration
             }
 
             $emailChanged = isset($changes['email']) && $changes['email'] !== $user->email;
+            if ($emailChanged) {
+                app(RoleAdministration::class)->requireOtherAdministrator($user);
+            }
             $changes = array_filter($changes, fn (mixed $value, string $key): bool => $value !== $user->{$key}, ARRAY_FILTER_USE_BOTH);
             if ($changes !== []) {
                 $user->fill($changes)->save();

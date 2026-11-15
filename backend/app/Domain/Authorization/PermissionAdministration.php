@@ -19,6 +19,9 @@ class PermissionAdministration
     public function grant(User $actor, Location $context, User $target, Location $location, Permission $permission, ?CarbonImmutable $from = null, ?CarbonImmutable $until = null): PermissionGrant
     {
         return $this->mutations->run($actor, $target, $location, 'permission.grant.'.$permission->value, function () use ($actor, $context, $target, $location, $permission, $from, $until): PermissionGrant {
+            if ($actor->is($target)) {
+                throw new AuthorizationException;
+            }
             $this->authorize($actor, $context, $target, $location, $permission);
             $membership = app(MembershipService::class)->available($target)->where('location_id', $location->id)->first();
             if (! $membership || ! $target->fresh()->is_active) {

@@ -27,7 +27,7 @@ class RoleAdministration
             return false;
         }
         if ($this->authorization->hasRole($actor, BusinessRole::Administrator)) {
-            return $role !== BusinessRole::Administrator || $this->authorization->isSuperAdmin($actor);
+            return true;
         }
         if ($role->organizationWide() || $role === BusinessRole::CentralKitchenChef
             || ! $location || $location->type !== LocationType::Restaurant) {
@@ -51,6 +51,9 @@ class RoleAdministration
     public function grant(User $actor, Location $context, User $target, BusinessRole $role, ?Location $location, #[SensitiveParameter] ?string $password = null): RoleAssignment
     {
         return $this->mutations->run($actor, $target, $location, 'role.grant.'.$role->value, function () use ($actor, $context, $target, $role, $location, $password): RoleAssignment {
+            if ($actor->is($target)) {
+                throw new AuthorizationException;
+            }
             $this->authorize($actor, $context, $target, $role, $location, $password);
             if (! $target->fresh()->is_active) {
                 throw new BusinessRuleViolation(__('messages.active_target_account_required'));
@@ -80,9 +83,6 @@ class RoleAdministration
             if ($assignment->revoked_at !== null) {
                 throw new BusinessRuleViolation(__('messages.already_revoked'));
             }
-            if ($target->is_initial_identity && $assignment->role === BusinessRole::Administrator) {
-                throw new AuthorizationException;
-            }
             if ($assignment->role === BusinessRole::Administrator) {
                 $this->requireOtherAdministrator($target);
             }
@@ -95,8 +95,7 @@ class RoleAdministration
         $this->mutations->run($actor, $target, null, $active ? 'account.reactivate' : 'account.deactivate', function () use ($actor, $context, $target, $active): void {
             if (! $this->authorization->eligible($actor, $context) || ! $this->authorization->hasRole($actor, BusinessRole::Administrator)
                 || $actor->organization_id !== $target->organization_id
-                || ! $this->authorization->canManageAccount($actor, $target)
-                || ($target->is_initial_identity && ! $active)) {
+                || ! $this->authorization->canManageAccount($actor, $target)) {
                 throw new AuthorizationException;
             }
             if (! $active) {

@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
-use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\LocationType;
@@ -3774,7 +3773,6 @@ class RawMaterialsTest extends AuthorizationTestCase
             'role' => BusinessRole::Administrator,
         ]);
 
-        $this->assertFalse(app(BusinessAuthorization::class)->isSuperAdmin($this->bootstrapAdministrator));
         $this->assertFalse($policy->canConsume($this->steward, $restaurant, $material['id']));
         $financialGrantCount = DB::table('organization_permission_grants')
             ->where('user_id', $this->steward->id)

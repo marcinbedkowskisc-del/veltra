@@ -60,7 +60,7 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->assertSame(1, (int) $role->can_create_schema_objects);
     }
 
-    public function test_ordinary_administrator_cannot_bootstrap_permissions_for_another_administrator(): void
+    public function test_administrator_can_bootstrap_permissions_for_another_administrator(): void
     {
         $location = $this->activeRestaurant();
         $administrator = $this->user('bootstrap-ordinary-admin@example.test');
@@ -71,19 +71,17 @@ class RawMaterialPermissionBootstrapTest extends AuthorizationTestCase
         $this->role($targetAdministrator, BusinessRole::Administrator);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
 
-        try {
-            app(RawMaterialPermissionBootstrap::class)->grantInitial(
-                $administrator->id,
-                $targetAdministrator->id,
-                [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
-                'Niedozwolone początkowe nadanie administratorowi',
-                self::PASSWORD,
-            );
-            $this->fail('An ordinary administrator bootstrapped permissions for another administrator.');
-        } catch (AuthorizationException) {
-            $this->assertSame(0, DB::table('organization_permission_grants')
-                ->where('organization_id', $administrator->organization_id)->count());
-        }
+        app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $administrator->id,
+            $targetAdministrator->id,
+            [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+            'Początkowe nadanie drugiemu administratorowi',
+            self::PASSWORD,
+        );
+        $this->assertSame(2, DB::table('organization_permission_grants')
+            ->where('organization_id', $administrator->organization_id)
+            ->where('user_id', $targetAdministrator->id)
+            ->where('granted_by', $administrator->id)->count());
     }
 
     public function test_runtime_cannot_write_to_permission_operation_ledger_directly(): void

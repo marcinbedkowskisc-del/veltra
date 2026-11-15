@@ -62,14 +62,14 @@ class Stage6a1IdentityRecoveryTest extends AuthorizationTestCase
             'organization_id' => $this->initial->organization_id,
             'user_id' => $this->initial->id,
             'database_oid' => '16384',
-            'server_address' => '172.22.0.4',
+            'server_address' => gethostbyname('postgres'),
             'mailpit_address' => gethostbyname('mailpit'),
         ];
         // Only attested container/database metadata is simulated; all writes use isolated PostgreSQL.
         $this->command->database = (object) [
             'configured_name' => 'veltra_stage6a1', 'name' => 'veltra_stage6a1',
             'role' => 'veltra_app', 'oid' => '16384',
-            'server_address' => '172.22.0.4', 'server_port' => 5432,
+            'server_address' => gethostbyname('postgres'), 'server_port' => 5432,
         ];
     }
 
@@ -190,7 +190,6 @@ class Stage6a1IdentityRecoveryTest extends AuthorizationTestCase
     {
         $this->initial = $this->updateFixture($this->initial, ['email_verified_at' => now()]);
         $this->assertSame(1, $this->execute()->getStatusCode());
-        $this->initial = $this->updateFixture($this->initial, ['email_verified_at' => null]);
         $this->updateFixture(Organization::firstOrFail(), ['authorization_initialized' => true]);
         $this->assertSame(1, $this->execute()->getStatusCode());
         Mail::assertNothingSent();

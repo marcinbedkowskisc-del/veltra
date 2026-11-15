@@ -5,7 +5,6 @@ namespace App\Domain\Authorization;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\LocationType;
 use App\Models\Location;
-use App\Models\LocationMembership;
 use App\Models\PermissionGrant;
 use App\Models\RoleAssignment;
 use App\Models\User;
@@ -36,31 +35,10 @@ class BusinessAuthorization
             ->where('role', BusinessRole::Administrator)->whereNull('revoked_at')->exists();
     }
 
-    public function isSuperAdmin(User $user): bool
-    {
-        $user = $user->fresh();
-        $organization = $user?->organization;
-        $primary = $organization?->primaryCentralKitchen()->first();
-
-        return $user !== null && $user->is_initial_identity && $user->is_active
-            && $organization->is_active && $organization->authorization_initialized
-            && ! $organization->primary_central_kitchen_unresolved
-            && $primary !== null && $primary->is_active
-            && $this->isAdministratorAccount($user)
-            && LocationMembership::where('organization_id', $organization->id)->where('user_id', $user->id)
-                ->where('location_id', $primary->id)->where('is_active', true)->exists();
-    }
-
     public function canManageAccount(User $actor, User $target): bool
     {
-        if ($target->is_initial_identity) {
-            return $actor->is($target) && $this->isSuperAdmin($actor);
-        }
-        if ($actor->is($target)) {
-            return true;
-        }
-
-        return ! $this->isAdministratorAccount($target) || $this->isSuperAdmin($actor);
+        return $actor->is($target) || ! $this->isAdministratorAccount($target)
+            || $this->hasRole($actor, BusinessRole::Administrator);
     }
 
     public function manages(User $actor, Location $context, Location $target): bool

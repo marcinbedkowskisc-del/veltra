@@ -27,27 +27,27 @@ use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
 use Tests\AuthorizationTestCase;
 
-class SuperAdminAuthorizationTest extends AuthorizationTestCase
+class AdministratorAuthorizationTest extends AuthorizationTestCase
 {
-    public function test_initial_identity_is_the_only_super_admin_and_is_not_a_seventh_role(): void
+    public function test_initial_and_subsequent_administrators_have_the_same_role(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $secondAdmin = $this->createAdministrator($superAdmin, $primary, 'second@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $secondAdmin = $this->createAdministrator($initialAdministrator, $primary, 'second@example.test');
         $authorization = app(BusinessAuthorization::class);
 
         $this->assertCount(6, BusinessRole::cases());
-        $this->assertTrue($superAdmin->fresh()->is_initial_identity);
-        $this->assertTrue($authorization->isSuperAdmin($superAdmin));
-        $this->assertFalse($authorization->isSuperAdmin($secondAdmin));
+        $this->assertTrue($initialAdministrator->fresh()->is_initial_identity);
+        $this->assertTrue($authorization->hasRole($initialAdministrator, BusinessRole::Administrator));
+        $this->assertTrue($authorization->hasRole($secondAdmin, BusinessRole::Administrator));
         $this->assertSame(
             [BusinessRole::Administrator],
-            RoleAssignment::where('user_id', $superAdmin->id)->whereNull('revoked_at')->pluck('role')->all(),
+            RoleAssignment::where('user_id', $initialAdministrator->id)->whereNull('revoked_at')->pluck('role')->all(),
         );
-        $this->assertSame(0, PermissionGrant::where('user_id', $superAdmin->id)->count());
-        $this->assertSame(0, DB::table('organization_permission_grants')->where('user_id', $superAdmin->id)->count());
+        $this->assertSame(0, PermissionGrant::where('user_id', $initialAdministrator->id)->count());
+        $this->assertSame(0, DB::table('organization_permission_grants')->where('user_id', $initialAdministrator->id)->count());
     }
 
-    public function test_super_admin_status_fails_closed_when_legacy_primary_identity_is_unresolved(): void
+    public function test_legacy_unresolved_primary_kitchen_does_not_prevent_initial_administrator_bootstrap(): void
     {
         $initial = app(IdentityService::class)->provisionInitial([
             'first_name' => 'Initial',
@@ -58,164 +58,101 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
         app(RoleAdministration::class)->bootstrapInitial($initial);
 
         $this->assertTrue($initial->fresh()->is_initial_identity);
-        $this->assertFalse(app(BusinessAuthorization::class)->isSuperAdmin($initial));
+        $this->assertTrue(RoleAssignment::where('user_id', $initial->id)->where('role', BusinessRole::Administrator)->exists());
         $this->assertTrue($initial->organization->fresh()->primary_central_kitchen_unresolved);
     }
 
-    public function test_only_super_admin_manages_other_administrators_while_ordinary_accounts_remain_manageable(): void
+    public function test_administrators_can_manage_other_administrators_and_ordinary_accounts(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $ordinaryAdmin = $this->createAdministrator($superAdmin, $primary, 'ordinary-admin@example.test');
-        $targetAdmin = $this->createAdministrator($superAdmin, $primary, 'target-admin@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'ordinary-admin@example.test');
+        $targetAdmin = $this->createAdministrator($initialAdministrator, $primary, 'target-admin@example.test');
         $restaurant = $this->activeRestaurant();
-        app(PersonnelAdministration::class)->assignMembership($superAdmin, $primary, $targetAdmin, $restaurant);
+        app(PersonnelAdministration::class)->assignMembership($initialAdministrator, $primary, $targetAdmin, $restaurant);
         $employee = $this->user('employee@example.test');
         app(MembershipService::class)->assign($employee, $restaurant);
 
-        try {
-            app(RoleAdministration::class)->grant($ordinaryAdmin, $primary, $targetAdmin, BusinessRole::Boss, null);
-            $this->fail('Ordinary administrator changed another administrator role.');
-        } catch (AuthorizationException) {
-            $this->assertSame(0, RoleAssignment::where('user_id', $targetAdmin->id)->where('role', BusinessRole::Boss)->count());
-        }
-
-        try {
-            app(RoleAdministration::class)->setAccountActive($ordinaryAdmin, $primary, $targetAdmin, false);
-            $this->fail('Ordinary administrator changed another administrator status.');
-        } catch (AuthorizationException) {
-            $this->assertTrue($targetAdmin->fresh()->is_active);
-        }
-
-        try {
-            app(PermissionAdministration::class)->grant(
-                $ordinaryAdmin, $primary, $targetAdmin, $restaurant, Permission::FoodcostView,
-            );
-            $this->fail('Ordinary administrator granted a permission to another administrator.');
-        } catch (AuthorizationException) {
-            $this->assertSame(0, PermissionGrant::where('user_id', $targetAdmin->id)->count());
-        }
-
-        try {
-            app(PersonnelAdministration::class)->removeMembership(
-                $ordinaryAdmin,
-                $primary,
-                $targetAdmin->memberships()->where('location_id', $restaurant->id)->firstOrFail(),
-            );
-            $this->fail('Ordinary administrator removed another administrator membership.');
-        } catch (AuthorizationException) {
-            $this->assertTrue($targetAdmin->memberships()->where('location_id', $restaurant->id)->where('is_active', true)->exists());
-        }
-
-        app(RoleAdministration::class)->grant($superAdmin, $primary, $targetAdmin, BusinessRole::Boss, null);
+        app(RoleAdministration::class)->grant($ordinaryAdmin, $primary, $targetAdmin, BusinessRole::Boss, null);
         app(PermissionAdministration::class)->grant(
-            $superAdmin, $primary, $targetAdmin, $restaurant, Permission::FoodcostView,
+            $ordinaryAdmin, $primary, $targetAdmin, $restaurant, Permission::FoodcostView,
         );
-        app(RoleAdministration::class)->setAccountActive($superAdmin, $primary, $targetAdmin, false);
+        app(RoleAdministration::class)->setAccountActive($ordinaryAdmin, $primary, $targetAdmin, false);
 
         $this->assertFalse($targetAdmin->fresh()->is_active);
         $this->assertSame(1, RoleAssignment::where('user_id', $targetAdmin->id)->where('role', BusinessRole::Boss)->whereNull('revoked_at')->count());
         $this->assertSame(1, PermissionGrant::where('user_id', $targetAdmin->id)->where('permission', Permission::FoodcostView)->whereNull('revoked_at')->count());
         $this->assertGreaterThan(0, DB::table('security_events')->where('actor_id', $ordinaryAdmin->id)
-            ->where('target_id', $targetAdmin->id)->where('outcome', 'rejected')->count());
-        $this->assertGreaterThan(0, DB::table('security_events')->where('actor_id', $superAdmin->id)
             ->where('target_id', $targetAdmin->id)->where('outcome', 'accepted')->count());
 
         app(RoleAdministration::class)->grant($ordinaryAdmin, $primary, $employee, BusinessRole::RestaurantChef, $restaurant);
         $this->assertTrue(RoleAssignment::where('user_id', $employee->id)->where('role', BusinessRole::RestaurantChef)->whereNull('revoked_at')->exists());
     }
 
-    public function test_administrators_cannot_modify_super_admin_and_super_admin_cannot_remove_protected_identity(): void
+    public function test_another_administrator_can_manage_the_initial_administrator(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $ordinaryAdmin = $this->createAdministrator($superAdmin, $primary, 'ordinary@example.test');
-        $superRole = RoleAssignment::where('user_id', $superAdmin->id)->where('role', BusinessRole::Administrator)->firstOrFail();
-
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->setAccountActive($ordinaryAdmin, $primary, $superAdmin, false));
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->changeEmail($ordinaryAdmin, $primary, $superAdmin, 'blocked@example.test'));
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->revoke($ordinaryAdmin, $primary, $superRole));
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->setAccountActive($superAdmin, $primary, $superAdmin, false));
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->revoke($superAdmin, $primary, $superRole));
-        $this->assertUnauthorized(fn () => app(PersonnelAdministration::class)->removeMembership(
-            $superAdmin,
-            $primary,
-            $superAdmin->memberships()->where('location_id', $primary->id)->firstOrFail(),
-        ));
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'ordinary@example.test');
+        $initialRole = RoleAssignment::where('user_id', $initialAdministrator->id)->where('role', BusinessRole::Administrator)->firstOrFail();
 
         $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('users')
-            ->where('id', $superAdmin->id)->update(['is_active' => false]));
+            ->where('id', $initialAdministrator->id)->update(['is_active' => false]));
         $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('role_assignments')
-            ->where('id', $superRole->id)->update(['revoked_at' => now(), 'revoked_by' => $superAdmin->id]));
-        $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::accountDeactivate(),
-            $superAdmin->id,
-            fn () => DB::table('users')->where('id', $superAdmin->id)->update(['is_active' => false]),
+            ->where('id', $initialRole->id)->update(['revoked_at' => now(), 'revoked_by' => $initialAdministrator->id]));
+        app(RoleAdministration::class)->revoke($ordinaryAdmin, $primary, $initialRole, self::PASSWORD);
+        $this->assertNotNull($initialRole->fresh()->revoked_at);
+        app(RoleAdministration::class)->setAccountActive($ordinaryAdmin, $primary, $initialAdministrator, false);
+        $this->assertFalse($initialAdministrator->fresh()->is_active);
+        $this->assertTrue(app(BusinessAuthorization::class)->hasRole($ordinaryAdmin, BusinessRole::Administrator));
+    }
+
+    public function test_administrator_cannot_grant_themselves_roles_or_permissions(): void
+    {
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'self-role@example.test');
+        $restaurant = $this->activeRestaurant();
+        $membership = app(MembershipService::class)->assign($ordinaryAdmin, $restaurant, $initialAdministrator->id);
+
+        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->grant(
+            $ordinaryAdmin, $primary, $ordinaryAdmin, BusinessRole::Boss, null,
+        ));
+        $this->assertUnauthorized(fn () => app(PermissionAdministration::class)->grant(
+            $ordinaryAdmin, $primary, $ordinaryAdmin, $restaurant, Permission::FoodcostView,
         ));
         $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::roleRevoke(BusinessRole::Administrator),
-            $superAdmin->id,
-            fn () => DB::table('role_assignments')->where('id', $superRole->id)
-                ->update(['revoked_at' => now(), 'revoked_by' => $superAdmin->id]),
-        ));
-        $primaryMembership = $superAdmin->memberships()->where('location_id', $primary->id)->firstOrFail();
-        $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::membershipDeactivate(),
-            $superAdmin->id,
-            fn () => DB::table('location_memberships')->where('id', $primaryMembership->id)->update([
-                'is_active' => false,
-                'deactivated_at' => now(),
-                'deactivation_reason' => 'Test-only attempt',
+            AuthorizationMutationScope::roleGrant(BusinessRole::Boss),
+            $ordinaryAdmin->id,
+            fn () => DB::table('role_assignments')->insert([
+                'id' => Str::uuid()->toString(), 'organization_id' => $ordinaryAdmin->organization_id,
+                'user_id' => $ordinaryAdmin->id, 'role' => BusinessRole::Boss->value,
+                'granted_by' => $ordinaryAdmin->id,
             ]),
         ));
         $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::identityDisable(),
-            null,
-            fn () => app(IdentityService::class)->disable($superAdmin),
-        ));
-        $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::identityDisable(),
-            null,
-            fn () => DB::table('users')->where('id', $superAdmin->id)->delete(),
-        ));
-
-        $this->assertTrue($superAdmin->fresh()->is_active);
-        $this->assertNull($superRole->fresh()->revoked_at);
-        $this->assertTrue(app(BusinessAuthorization::class)->isSuperAdmin($superAdmin));
-    }
-
-    public function test_ordinary_administrator_cannot_revoke_its_own_administrator_role_even_with_a_signed_mutation(): void
-    {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $ordinaryAdmin = $this->createAdministrator($superAdmin, $primary, 'self-role@example.test');
-        $role = RoleAssignment::where('user_id', $ordinaryAdmin->id)
-            ->where('role', BusinessRole::Administrator)->firstOrFail();
-
-        $this->assertUnauthorized(fn () => app(RoleAdministration::class)->revoke(
-            $ordinaryAdmin, $primary, $role,
-        ));
-        $this->assertSignedRuntimeMutationRejects('23514', fn () => app(AuthorizationMutationContext::class)->run(
-            AuthorizationMutationScope::roleRevoke(BusinessRole::Administrator),
+            AuthorizationMutationScope::permissionGrant(Permission::FoodcostView),
             $ordinaryAdmin->id,
-            fn () => DB::table('role_assignments')->where('id', $role->id)
-                ->update(['revoked_at' => now(), 'revoked_by' => $ordinaryAdmin->id]),
+            fn () => DB::table('permission_grants')->insert([
+                'id' => Str::uuid()->toString(), 'organization_id' => $ordinaryAdmin->organization_id,
+                'user_id' => $ordinaryAdmin->id, 'location_id' => $restaurant->id,
+                'membership_id' => $membership->id, 'permission' => Permission::FoodcostView->value,
+                'granted_by' => $ordinaryAdmin->id, 'valid_from' => now(),
+            ]),
         ));
-
-        $this->assertNull($role->fresh()->revoked_at);
-        $this->assertTrue($ordinaryAdmin->fresh()->is_active);
     }
 
-    public function test_super_admin_can_edit_own_profile_only_after_password_confirmation_and_email_reverification(): void
+    public function test_administrator_can_edit_own_profile_with_password_and_email_reverification(): void
     {
         Mail::fake();
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $this->selectContext($superAdmin, $primary);
-        $version = $superAdmin->auth_version;
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $this->createAdministrator($initialAdministrator, $primary, 'second-profile@example.test');
+        $this->selectContext($initialAdministrator, $primary);
+        $version = $initialAdministrator->auth_version;
 
         $this->patchJson('/api/v1/security/me/profile', [
             'first_name' => 'Updated',
             'email' => 'updated-super@example.test',
             'current_password' => 'wrong-password',
         ])->assertForbidden();
-        $this->assertSame('Initial', $superAdmin->fresh()->first_name);
+        $this->assertSame('Initial', $initialAdministrator->fresh()->first_name);
 
         $this->patchJson('/api/v1/security/me/profile', [
             'first_name' => 'Updated',
@@ -224,8 +161,8 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
             'current_password' => self::PASSWORD,
         ])->assertAccepted();
 
-        $updated = $superAdmin->fresh();
-        $this->assertSame($superAdmin->id, $updated->id);
+        $updated = $initialAdministrator->fresh();
+        $this->assertSame($initialAdministrator->id, $updated->id);
         $this->assertSame('updated-super@example.test', $updated->email);
         $this->assertSame('Updated', $updated->first_name);
         $this->assertNull($updated->email_verified_at);
@@ -242,61 +179,76 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
             'email' => $updated->email,
             'password' => 'Updated-Password!42',
         ])->assertOk();
-        $this->assertTrue(app(BusinessAuthorization::class)->isSuperAdmin($updated));
+        $this->assertTrue(app(BusinessAuthorization::class)->hasRole($updated, BusinessRole::Administrator));
     }
 
-    public function test_super_admin_profile_endpoint_does_not_allow_another_administrator_to_edit_it(): void
+    public function test_profile_endpoint_changes_only_the_authenticated_administrator(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $ordinaryAdmin = $this->createAdministrator($superAdmin, $primary, 'ordinary-profile@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'ordinary-profile@example.test');
         $this->selectContext($ordinaryAdmin, $primary);
 
         $this->patchJson('/api/v1/security/me/profile', [
             'first_name' => 'Changed',
             'current_password' => self::PASSWORD,
-        ])->assertForbidden();
-        $this->assertSame('Initial', $superAdmin->fresh()->first_name);
+        ])->assertAccepted();
+        $this->assertSame('Initial', $initialAdministrator->fresh()->first_name);
+        $this->assertSame('Changed', $ordinaryAdmin->fresh()->first_name);
+    }
+
+    public function test_last_administrator_cannot_invalidate_their_verified_email(): void
+    {
+        [$administrator, $primary] = $this->createInitialAdministrator();
+        $this->selectContext($administrator, $primary);
+
+        $this->patchJson('/api/v1/security/me/profile', [
+            'email' => 'new@example.test',
+            'current_password' => self::PASSWORD,
+        ])->assertConflict();
+
+        $this->assertNotNull($administrator->fresh()->email_verified_at);
+        $this->assertSame('initial-admin@example.test', $administrator->fresh()->email);
     }
 
     public function test_ordinary_administrator_cannot_deactivate_primary_but_can_deactivate_secondary_kitchen(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $ordinaryAdmin = $this->createAdministrator($superAdmin, $primary, 'primary-disable@example.test');
-        $this->createAdministrator($superAdmin, $primary, 'primary-disable-second@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'primary-disable@example.test');
+        $this->createAdministrator($initialAdministrator, $primary, 'primary-disable-second@example.test');
         $secondaryKitchen = $this->kitchen('SECONDARY');
-        app(MembershipService::class)->assign($ordinaryAdmin, $secondaryKitchen, $superAdmin->id);
+        app(MembershipService::class)->assign($ordinaryAdmin, $secondaryKitchen, $initialAdministrator->id);
 
         $this->selectContext($ordinaryAdmin, $secondaryKitchen);
         $this->patchJson("/api/v1/security/locations/{$primary->id}", ['is_active' => false])->assertConflict();
 
         $this->assertTrue($primary->fresh()->is_active);
-        $this->assertTrue(app(BusinessAuthorization::class)->isSuperAdmin($superAdmin));
+        $this->assertTrue(app(BusinessAuthorization::class)->hasRole($initialAdministrator, BusinessRole::Administrator));
 
         $this->patchJson("/api/v1/security/locations/{$secondaryKitchen->id}", ['is_active' => false])
             ->assertOk()->assertJsonPath('data.is_active', false);
         $this->assertFalse($secondaryKitchen->fresh()->is_active);
     }
 
-    public function test_super_admin_cannot_deactivate_primary_central_kitchen(): void
+    public function test_administrator_cannot_deactivate_primary_central_kitchen(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $targetAdmin = $this->createAdministrator($superAdmin, $primary, 'primary-disable-target@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $targetAdmin = $this->createAdministrator($initialAdministrator, $primary, 'primary-disable-target@example.test');
         $secondaryKitchen = $this->kitchen('SECONDARY');
-        app(MembershipService::class)->assign($superAdmin, $secondaryKitchen, $superAdmin->id);
+        app(MembershipService::class)->assign($initialAdministrator, $secondaryKitchen, $initialAdministrator->id);
 
-        $this->selectContext($superAdmin, $secondaryKitchen);
+        $this->selectContext($initialAdministrator, $secondaryKitchen);
         $this->patchJson("/api/v1/security/locations/{$primary->id}", ['is_active' => false])->assertConflict();
 
         $this->assertTrue($primary->fresh()->is_active);
-        $this->assertTrue(app(BusinessAuthorization::class)->isSuperAdmin($superAdmin));
-        app(RoleAdministration::class)->grant($superAdmin, $primary, $targetAdmin, BusinessRole::Boss, null);
+        $this->assertTrue(app(BusinessAuthorization::class)->hasRole($initialAdministrator, BusinessRole::Administrator));
+        app(RoleAdministration::class)->grant($initialAdministrator, $primary, $targetAdmin, BusinessRole::Boss, null);
         $this->assertTrue(RoleAssignment::where('user_id', $targetAdmin->id)
             ->where('role', BusinessRole::Boss)->whereNull('revoked_at')->exists());
     }
 
     public function test_non_administrator_cannot_deactivate_primary_central_kitchen(): void
     {
-        [, $primary] = $this->createSuperAdmin();
+        [, $primary] = $this->createInitialAdministrator();
         $secondaryKitchen = $this->kitchen('SECONDARY');
         $nonAdministrator = $this->user('primary-disable-nonadmin@example.test');
         $this->role($nonAdministrator, BusinessRole::CentralKitchenChef, $secondaryKitchen);
@@ -308,7 +260,7 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
 
     public function test_database_rejects_primary_kitchen_deactivation_and_identity_changes(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
 
         $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('locations')
             ->where('id', $primary->id)->update(['is_active' => false]));
@@ -337,22 +289,22 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
 
         $this->assertTrue($primary->fresh()->is_active);
         $this->assertTrue($primary->fresh()->is_primary_central_kitchen);
-        $this->assertTrue(app(BusinessAuthorization::class)->isSuperAdmin($superAdmin));
+        $this->assertTrue(app(BusinessAuthorization::class)->hasRole($initialAdministrator, BusinessRole::Administrator));
     }
 
-    public function test_concurrent_super_admin_role_grants_are_serialized_and_audited(): void
+    public function test_concurrent_administrator_role_grants_are_serialized_and_audited(): void
     {
-        [$superAdmin, $primary] = $this->createSuperAdmin();
-        $target = $this->createAdministrator($superAdmin, $primary, 'concurrent-target@example.test');
+        [$initialAdministrator, $primary] = $this->createInitialAdministrator();
+        $target = $this->createAdministrator($initialAdministrator, $primary, 'concurrent-target@example.test');
         $process = null;
         DB::beginTransaction();
         try {
-            app(RoleAdministration::class)->grant($superAdmin, $primary, $target, BusinessRole::Boss, null);
-            $name = 'veltra-super-admin-'.bin2hex(random_bytes(6));
+            app(RoleAdministration::class)->grant($initialAdministrator, $primary, $target, BusinessRole::Boss, null);
+            $name = 'veltra-administrator-'.bin2hex(random_bytes(6));
             $process = new Process([
                 PHP_BINARY,
                 base_path('tests/Support/concurrent_super_admin_mutation.php'),
-                $superAdmin->id,
+                $initialAdministrator->id,
                 $target->id,
                 $primary->id,
                 $name,
@@ -389,7 +341,7 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
         }
     }
 
-    private function createSuperAdmin(): array
+    private function createInitialAdministrator(): array
     {
         $primary = $this->kitchen('PRIMARY');
         $user = app(IdentityService::class)->provisionInitial([
@@ -405,11 +357,11 @@ class SuperAdminAuthorizationTest extends AuthorizationTestCase
         return [$user->fresh(), $primary];
     }
 
-    private function createAdministrator(User $superAdmin, Location $primary, string $email): User
+    private function createAdministrator(User $initialAdministrator, Location $primary, string $email): User
     {
         $user = $this->user($email);
-        app(MembershipService::class)->assign($user, $primary, $superAdmin->id);
-        app(RoleAdministration::class)->grant($superAdmin, $primary, $user, BusinessRole::Administrator, null, self::PASSWORD);
+        app(MembershipService::class)->assign($user, $primary, $initialAdministrator->id);
+        app(RoleAdministration::class)->grant($initialAdministrator, $primary, $user, BusinessRole::Administrator, null, self::PASSWORD);
 
         return $user->fresh();
     }

@@ -63,7 +63,7 @@ class RoleAdministrationTest extends AuthorizationTestCase
         try {
             $roles->revoke($actor, $context, $role, self::PASSWORD);
             $this->fail('An ordinary administrator revoked their own administrator role.');
-        } catch (AuthorizationException) {
+        } catch (BusinessRuleViolation) {
             $this->assertNull($role->fresh()->revoked_at);
         }
         try {

@@ -1,0 +1,344 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\RoleAdministration;
+use App\Domain\Authorization\SystemPermissionManifest;
+use App\Domain\Authorization\SystemPermissionProvisioningException;
+use App\Domain\Identity\IdentityService;
+use App\Domain\Identity\MembershipService;
+use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Models\Location;
+use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Tests\AuthorizationTestCase;
+use Tests\Support\SystemPermissionProvisioningFixture;
+
+class SystemPermissionProvisionerTest extends AuthorizationTestCase
+{
+    private User $administrator;
+
+    private Location $primary;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->primary = $this->kitchen();
+        $initial = app(IdentityService::class)->provisionInitial([
+            'first_name' => 'Fixture', 'last_name' => 'Administrator', 'email' => 'provisioning@example.test',
+        ], self::PASSWORD);
+        $this->administrator = $this->updateFixture($initial, ['email_verified_at' => now()]);
+        app(MembershipService::class)->assign($this->administrator, $this->primary);
+        app(RoleAdministration::class)->bootstrapInitial($this->administrator);
+    }
+
+    public function test_approved_execution_is_audited_atomic_and_idempotent(): void
+    {
+        $manifest = $this->manifest();
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($manifest);
+        [$first, $second] = $this->asMigrator(function () use ($manifest, $provisioner): array {
+            $approval = $provisioner->releaseDigest($manifest->id, $manifest->version);
+
+            return [
+                $provisioner->execute($manifest->id, $manifest->version, $approval),
+                $provisioner->execute($manifest->id, $manifest->version, $approval),
+            ];
+        });
+
+        $this->assertSame($first, $second);
+        $grants = DB::table('organization_permission_grants')->where('system_provisioning_operation_id', $first)
+            ->orderBy('permission')->get();
+        $this->assertSame(['RAW_MATERIALS_CREATE', 'RAW_MATERIALS_VIEW'], $grants->pluck('permission')->all());
+        foreach ($grants as $grant) {
+            $this->assertSame('SYSTEM_PROVISIONING', $grant->grant_origin);
+            $this->assertNull($grant->granted_by);
+            $this->assertSame($manifest->id, $grant->system_manifest_id);
+            $this->assertSame($manifest->version, $grant->system_manifest_version);
+        }
+        $audit = DB::table('raw_material_audit_events')->where('operation_id', $first)
+            ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'ACCEPTED')->get();
+        $this->assertCount(1, $audit);
+        $this->assertNull($audit[0]->actor_user_id);
+        $this->assertSame($manifest->contentHash(), json_decode($audit[0]->metadata, true, flags: JSON_THROW_ON_ERROR)['manifest_hash']);
+        $this->assertTrue(app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->administrator, RawMaterialPermission::View));
+        $this->assertTrue(app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->administrator, RawMaterialPermission::Create));
+    }
+
+    public function test_missing_approval_is_rejected_and_audited(): void
+    {
+        $manifest = $this->manifest();
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($manifest);
+        try {
+            $this->asMigrator(fn () => $provisioner->execute($manifest->id, $manifest->version, 'unapproved'));
+            $this->fail('Unapproved execution must be rejected.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')
+                ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'REJECTED')->count());
+        }
+    }
+
+    public function test_wrong_installation_and_unregistered_manifest_are_rejected(): void
+    {
+        $manifest = $this->manifest(database: 'another_database');
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($manifest);
+        try {
+            $this->asMigrator(fn () => $provisioner->execute($manifest->id, $manifest->version, 'invalid'));
+            $this->fail('Wrong installation must be rejected.');
+        } catch (BusinessRuleViolation) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+        }
+        $this->expectException(SystemPermissionProvisioningException::class);
+        $this->asMigrator(fn () => $provisioner->execute('unregistered', 1, 'invalid'));
+    }
+
+    public function test_runtime_database_role_cannot_execute_an_approved_manifest(): void
+    {
+        $manifest = $this->manifest();
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($manifest);
+        $approval = $this->asMigrator(fn () => $provisioner->releaseDigest($manifest->id, $manifest->version));
+
+        try {
+            $provisioner->execute($manifest->id, $manifest->version, $approval);
+            $this->fail('The runtime database role must not execute provisioning.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+            $this->assertSame(0, $this->asMigrator(fn () => DB::table('system_permission_provisioning_operations')->count()));
+        }
+    }
+
+    public function test_invalid_scope_is_rejected(): void
+    {
+        $base = $this->manifest();
+        $manifest = new SystemPermissionManifest(
+            id: $base->id, version: $base->version, module: $base->module, permissions: $base->permissions,
+            eligibleRole: $base->eligibleRole, grantScope: 'LOCATION', applicability: $base->applicability,
+            databaseName: $base->databaseName, organizationId: $base->organizationId,
+            administratorId: $base->administratorId, locationId: $base->locationId,
+        );
+
+        $this->expectException(SystemPermissionProvisioningException::class);
+        $this->asMigrator(fn () => SystemPermissionProvisioningFixture::provisioner($manifest)
+            ->releaseDigest($manifest->id, $manifest->version));
+    }
+
+    public function test_modified_content_under_the_same_version_is_rejected(): void
+    {
+        $manifest = $this->manifest();
+        $this->executeApproved($manifest);
+        $changed = $this->manifest(permissions: [RawMaterialPermission::View]);
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($changed);
+
+        try {
+            $this->asMigrator(function () use ($changed, $provisioner): void {
+                $approval = $provisioner->releaseDigest($changed->id, $changed->version);
+                $provisioner->execute($changed->id, $changed->version, $approval);
+            });
+            $this->fail('Modified contents must be rejected.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(2, DB::table('organization_permission_grants')->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')
+                ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'REJECTED')->count());
+        }
+    }
+
+    public function test_approval_is_bound_to_the_exact_manifest_content(): void
+    {
+        $original = $this->manifest();
+        $changed = $this->manifest(permissions: [RawMaterialPermission::View]);
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($changed);
+        $approval = $this->asMigrator(fn () => SystemPermissionProvisioningFixture::provisioner($original)
+            ->releaseDigest($original->id, $original->version));
+
+        try {
+            $this->asMigrator(fn () => $provisioner->execute($changed->id, $changed->version, $approval));
+            $this->fail('Approval of different manifest contents must be rejected.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')
+                ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'REJECTED')->count());
+        }
+    }
+
+    public function test_retry_does_not_restore_a_revoked_system_grant(): void
+    {
+        $manifest = $this->manifest();
+        $operation = $this->executeApproved($manifest);
+        $grant = DB::table('organization_permission_grants')->where('system_provisioning_operation_id', $operation)
+            ->where('permission', RawMaterialPermission::View->value)->first();
+        $this->asMigrator(fn () => DB::table('organization_permission_grant_events')->insert([
+            'id' => (string) Str::uuid(), 'organization_id' => $manifest->organizationId,
+            'grant_id' => $grant->id, 'event_type' => 'REVOKED', 'actor_user_id' => $this->administrator->id,
+            'reason_code' => 'FIXTURE',
+        ]));
+
+        $this->assertSame($operation, $this->executeApproved($manifest));
+        $this->assertFalse(app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->administrator, RawMaterialPermission::View));
+        $this->assertTrue(app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->administrator, RawMaterialPermission::Create));
+    }
+
+    public function test_wrong_administrator_and_invalid_permissions_are_rejected(): void
+    {
+        $other = $this->user('not-administrator@example.test');
+        $manifest = $this->manifest(administrator: $other->id);
+        try {
+            $this->executeApproved($manifest);
+            $this->fail('A user without the administrator role must not receive the grants.');
+        } catch (AuthorizationException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+        }
+
+        $invalid = $this->manifest(permissions: ['UNREGISTERED_PERMISSION']);
+        $this->expectException(SystemPermissionProvisioningException::class);
+        $this->asMigrator(fn () => SystemPermissionProvisioningFixture::provisioner($invalid)->releaseDigest($invalid->id, $invalid->version));
+    }
+
+    public function test_cross_organization_location_is_rejected(): void
+    {
+        $this->withForeignOrganizationFixture(function (Location $foreign): void {
+            $base = $this->manifest();
+            $manifest = new SystemPermissionManifest(
+                id: $base->id, version: $base->version, module: $base->module, permissions: $base->permissions,
+                eligibleRole: $base->eligibleRole, grantScope: $base->grantScope, applicability: $base->applicability,
+                databaseName: $base->databaseName, organizationId: $base->organizationId,
+                administratorId: $base->administratorId, locationId: $foreign->id,
+            );
+            try {
+                $this->executeApproved($manifest);
+                $this->fail('A foreign organization location must be rejected.');
+            } catch (AuthorizationException) {
+                $this->assertSame(0, DB::table('organization_permission_grants')->count());
+            }
+        });
+    }
+
+    public function test_concurrent_retries_serialize_to_one_operation(): void
+    {
+        $manifest = $this->manifest();
+        $setup = $this->setupConnection();
+        $setup->beginTransaction();
+        $setup->select('SELECT pg_advisory_xact_lock(hashtextextended(?, 0))', [
+            'system-permission:'.$manifest->id.':'.$manifest->version,
+        ]);
+        $workers = [];
+        try {
+            foreach ([1, 2] as $number) {
+                $pipes = [];
+                $process = proc_open([
+                    PHP_BINARY, base_path('tests/Support/system_permission_provisioner_worker.php'),
+                    $manifest->id, $manifest->organizationId, $manifest->administratorId,
+                    $manifest->locationId, 'veltra-provision-fixture-'.$number,
+                ], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+                $this->assertIsResource($process);
+                fclose($pipes[0]);
+                $workers[] = [$process, $pipes];
+            }
+            $waiting = 0;
+            for ($attempt = 0; $attempt < 100; $attempt++) {
+                $setup->select('SELECT pg_stat_clear_snapshot()');
+                $waiting = (int) $setup->scalar(<<<'SQL'
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE application_name IN ('veltra-provision-fixture-1', 'veltra-provision-fixture-2')
+                        AND wait_event_type = 'Lock'
+                    SQL);
+                if ($waiting === 2) {
+                    break;
+                }
+                usleep(100000);
+            }
+        } finally {
+            $setup->rollBack();
+        }
+
+        $operations = [];
+        foreach ($workers as [$process, $pipes]) {
+            $output = trim(stream_get_contents($pipes[1]));
+            $errors = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $this->assertSame(0, proc_close($process), $errors);
+            $operations[] = $output;
+        }
+        $this->assertSame(2, $waiting, 'Both workers must contend for the same transaction lock.');
+        $this->assertSame($operations[0], $operations[1]);
+        $this->assertSame(2, DB::table('organization_permission_grants')->where('system_provisioning_operation_id', $operations[0])->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('operation_id', $operations[0])->where('outcome', 'ACCEPTED')->count());
+    }
+
+    public function test_failed_second_grant_rolls_back_first_grant_operation_and_accepted_audit(): void
+    {
+        $other = $this->user('grantor@example.test');
+        $this->asMigrator(function () use ($other): void {
+            DB::transaction(function () use ($other): void {
+                $operation = (string) Str::uuid();
+                DB::table('raw_material_audit_events')->insert([
+                    'id' => (string) Str::uuid(), 'organization_id' => $this->administrator->organization_id,
+                    'operation_id' => $operation, 'actor_user_id' => $other->id, 'subject_type' => 'ORGANIZATION',
+                    'event_code' => 'PERMISSION_BOOTSTRAP', 'outcome' => 'ACCEPTED',
+                    'metadata' => json_encode([
+                        'recipient_user_id' => $this->administrator->id, 'permissions' => ['RAW_MATERIALS_CREATE'],
+                    ], JSON_THROW_ON_ERROR),
+                ]);
+                DB::table('organization_permission_grants')->insert([
+                    'id' => (string) Str::uuid(), 'organization_id' => $this->administrator->organization_id,
+                    'user_id' => $this->administrator->id, 'permission' => 'RAW_MATERIALS_CREATE',
+                    'granted_by' => $other->id, 'valid_from' => now(), 'bootstrap_operation_id' => $operation,
+                    'reason_code' => 'FIXTURE',
+                ]);
+            });
+        });
+
+        try {
+            $this->executeApproved($this->manifest());
+            $this->fail('The conflicting second grant must abort the whole operation.');
+        } catch (QueryException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->where('grant_origin', 'SYSTEM_PROVISIONING')->count());
+            $this->assertSame(0, $this->asMigrator(fn () => DB::table('system_permission_provisioning_operations')->count()));
+            $this->assertSame(0, DB::table('raw_material_audit_events')->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'ACCEPTED')->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'REJECTED')->count());
+        }
+    }
+
+    private function executeApproved(SystemPermissionManifest $manifest): string
+    {
+        $provisioner = SystemPermissionProvisioningFixture::provisioner($manifest);
+
+        return $this->asMigrator(function () use ($manifest, $provisioner): string {
+            return $provisioner->execute(
+                $manifest->id, $manifest->version, $provisioner->releaseDigest($manifest->id, $manifest->version),
+            );
+        });
+    }
+
+    private function manifest(
+        ?string $administrator = null,
+        string $database = 'veltra_testing',
+        array $permissions = [RawMaterialPermission::View, RawMaterialPermission::Create],
+    ): SystemPermissionManifest {
+        return new SystemPermissionManifest(
+            id: 'synthetic-raw-'.str_replace('-', '', $this->administrator->id),
+            version: 1, module: 'RAW_MATERIALS', permissions: $permissions,
+            eligibleRole: BusinessRole::Administrator, grantScope: 'ORGANIZATION', applicability: 'UPGRADE',
+            databaseName: $database, organizationId: $this->administrator->organization_id,
+            administratorId: $administrator ?? $this->administrator->id, locationId: $this->primary->id,
+        );
+    }
+
+    private function asMigrator(callable $operation): mixed
+    {
+        $this->setupConnection();
+        DB::setDefaultConnection('pgsql_setup');
+        try {
+            return $operation();
+        } finally {
+            DB::setDefaultConnection('pgsql');
+        }
+    }
+}

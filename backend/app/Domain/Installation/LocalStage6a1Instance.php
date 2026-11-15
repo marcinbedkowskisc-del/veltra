@@ -2,6 +2,7 @@
 
 namespace App\Domain\Installation;
 
+use App\Domain\Authorization\SystemPermissionManifest;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -43,11 +44,11 @@ class LocalStage6a1Instance
         }
     }
 
-    public function assertDatabase(array $identity, object $actual): void
+    public function assertDatabase(array $identity, object $actual, string $expectedRole = 'veltra_app'): void
     {
         if ($actual->configured_name !== 'veltra_stage6a1'
             || $actual->name !== 'veltra_stage6a1'
-            || $actual->role !== 'veltra_app'
+            || $actual->role !== $expectedRole
             || $actual->oid !== $identity['database_oid']
             || $actual->server_address !== $identity['server_address']
             || (int) $actual->server_port !== 5432) {
@@ -88,6 +89,27 @@ class LocalStage6a1Instance
         $identity->configured_name = DB::connection()->getDatabaseName();
 
         return $identity;
+    }
+
+    /**
+     * @return array{database_oid: string, server_address: string}
+     */
+    public function verifyProvisioningTarget(SystemPermissionManifest $manifest): array
+    {
+        $identity = $this->readIdentity('/run/veltra-stage6a1-raw.json');
+        $this->assertConfiguration($identity, $this->insideContainer());
+        $role = (string) env('APP_DB_MIGRATION_USERNAME', 'veltra_migrator');
+        if ($role === '' || ($identity['organization_id'] ?? null) !== $manifest->organizationId
+            || ($identity['user_id'] ?? null) !== $manifest->administratorId) {
+            throw new BusinessRuleViolation('Poświadczenie nie odpowiada celowi manifestu.');
+        }
+        $actual = $this->databaseIdentity();
+        $this->assertDatabase($identity, $actual, $role);
+        if ($actual->name !== $manifest->databaseName) {
+            throw new BusinessRuleViolation('Baza nie odpowiada instalacji wskazanej w manifeście.');
+        }
+
+        return ['database_oid' => $actual->oid, 'server_address' => $actual->server_address];
     }
 
     public function rawIntegrationEnabled(): bool

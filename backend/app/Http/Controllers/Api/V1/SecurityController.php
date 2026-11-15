@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domain\Authorization\AdministratorProfileAdministration;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\Permission;
@@ -9,7 +10,6 @@ use App\Domain\Authorization\PermissionAdministration;
 use App\Domain\Authorization\PersonnelAdministration;
 use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Authorization\SecurityMutation;
-use App\Domain\Authorization\SuperAdminProfileAdministration;
 use App\Domain\Identity\AccountLinks;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Http\Controllers\Controller;
@@ -59,7 +59,7 @@ class SecurityController extends Controller
         return $this->accepted();
     }
 
-    public function updateMyProfile(SecurityRequest $request, SuperAdminProfileAdministration $service): JsonResponse
+    public function updateMyProfile(SecurityRequest $request, AdministratorProfileAdministration $service): JsonResponse
     {
         $actor = $request->user();
         $emailChanged = $service->update(

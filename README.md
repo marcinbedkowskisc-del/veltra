@@ -612,6 +612,29 @@ Po jawnej inicjalizacji organizacji oraz utworzeniu pierwszej tozsamosci:
 docker compose exec backend php artisan veltra:bootstrap-authorization
 ```
 
+ADMINISTRATOR jest najwyzsza z szesciu rol. Znacznik pierwszej tozsamosci
+sluzy wylacznie procedurom instalacyjnym i nie nadaje dodatkowych uprawnien.
+Zwykle nadawanie rol i uprawnien samemu sobie jest zabronione; musi pozostac
+co najmniej jeden aktywny, zweryfikowany administrator z aktywnym przypisaniem.
+
+Walidator zadania sprawdza jedynie cele i wskazane uprawnienia; nie stanowi
+autoryzacji. Kontrolowany, zatwierdzony proces instalacji lub aktualizacji jest
+zaufana granica administracyjna: kazdy, kto nim zarzadza, ma uprzywilejowana
+wladze wdrozeniowa. Sam manifest ani sesja aplikacji nie sa zatwierdzeniem.
+Rejestr zawiera wylacznie manifest `stage6a1-raw-administrator` w wersji 1:
+organizacyjne `RAW_MATERIALS_VIEW` i `RAW_MATERIALS_CREATE` dla wskazanego
+administratora i instalacji Stage 6A.1. Wskazana kuchnia jest kontekstem
+kwalifikacji, a nie ograniczeniem organizacyjnego zasiegu grantu. Rejestr i hash
+manifestu nie sa zatwierdzeniem wdrozenia ani mechanizmem nadawania uprawnien.
+Po zastosowaniu migracji 047–048 dedykowana komenda
+`veltra:provision-stage6a1-raw-permissions` jest uruchamiana w procesie
+migracyjnym tylko po weryfikacji poświadczenia izolowanej instalacji; wymaga
+jawnego `--approve-release` z dokładnym skrótem wydania i instalacji. Opcja
+`--show-release` wyświetla ten skrót bez wykonywania grantu. Nie podaje się
+użytkownika, lokalizacji ani uprawnień jako argumentów. Powtórzenie nie
+przywraca cofniętych grantów. Dostępność RAW i aktywacja lokalizacji pozostają
+oddzielnymi bramkami, a globalny status RAW pozostaje `NOT_READY`.
+
 Komenda tworzy potrzebna poczatkowa kuchnie/przypisanie i oczekujaca role
 ADMINISTRATOR. Nie wypisuje hasla ani linku. Otworz Mailpit lokalnie i uzyj
 wiadomosci aktywacyjnej; odbiorca ustawia wlasne nowe haslo. Dopiero wtedy rola

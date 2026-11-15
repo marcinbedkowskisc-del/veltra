@@ -125,8 +125,7 @@ class PersonnelAdministration
             if (! $this->authorization->eligible($actor, $context, $location)) {
                 throw new AuthorizationException;
             }
-            if (! $this->authorization->canManageAccount($actor, $target)
-                || ($target->is_initial_identity && $location->is_primary_central_kitchen)) {
+            if (! $this->authorization->canManageAccount($actor, $target)) {
                 throw new AuthorizationException;
             }
             $administrator = $this->authorization->hasRole($actor, BusinessRole::Administrator);

@@ -32,9 +32,9 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
     {
         parent::setUp();
         $this->administrator = app(IdentityService::class)->provisionInitial([
-            'first_name' => 'Local', 'last_name' => 'Fixture', 'email' => 'developer@veltra.test',
+            'first_name' => 'Local', 'last_name' => 'Fixture', 'email' => 'owner-fixture@example.test',
         ], self::PASSWORD);
-        $this->location = $this->kitchen('VELTRA_KUCHNIA');
+        $this->location = $this->kitchen('PRIMARY_TEST_KITCHEN');
         app(RoleAdministration::class)->bootstrapInitial($this->administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location);
         $this->administrator = $this->updateFixture($this->administrator, ['email_verified_at' => now()]);

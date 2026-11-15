@@ -114,9 +114,14 @@ class LocalStage6a1Instance
 
     public function rawIntegrationEnabled(): bool
     {
+        return $this->rawConfigurationIdentity() !== null;
+    }
+
+    public function rawConfigurationIdentity(): ?array
+    {
         $identity = $this->rawIdentity();
         if ($identity === null) {
-            return false;
+            return null;
         }
         $this->assertConfiguration($identity, $this->insideContainer());
         if (($identity['raw_integration_enabled'] ?? null) !== true) {
@@ -131,7 +136,7 @@ class LocalStage6a1Instance
             throw new BusinessRuleViolation('Odmowa: poświadczenie RAW nie odpowiada aktywnej lokalnej instalacji.');
         }
 
-        return true;
+        return $identity;
     }
 
     protected function rawIdentity(): ?array

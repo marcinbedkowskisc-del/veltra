@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Domain\Installation\LocalStage6a1Instance;
+use App\Domain\Installation\LocationType;
 use App\Domain\Modules\ModuleConfigurationService;
 use App\Models\Location;
 use App\Models\User;
@@ -27,19 +28,25 @@ class ConfigureStage6a1Raw extends Command
             return self::FAILURE;
         }
         try {
-            if (! $instance->rawIntegrationEnabled()) {
+            $identity = $instance->rawConfigurationIdentity();
+            if ($identity === null) {
                 throw new BusinessRuleViolation('Brak zweryfikowanego lokalnego opt-in RAW.');
             }
-            $actor = User::where('email', 'developer@veltra.test')->where('is_initial_identity', true)->firstOrFail();
-            $location = Location::where('organization_id', $actor->organization_id)
-                ->where('code', 'VELTRA_KUCHNIA')->where('is_primary_central_kitchen', true)->firstOrFail();
-            $this->line('Lokalna baza veltra_stage6a1; administrator developer@veltra.test; lokalizacja VELTRA_KUCHNIA.');
+            $actor = User::whereKey($identity['user_id'])->where('organization_id', $identity['organization_id'])->firstOrFail();
+            $locations = Location::where('organization_id', $identity['organization_id'])
+                ->where('type', LocationType::CentralKitchen->value)
+                ->where('is_active', true)->where('is_primary_central_kitchen', true)->limit(2)->get();
+            if ($locations->count() !== 1) {
+                throw new BusinessRuleViolation('Nie znaleziono jednej aktywnej głównej kuchni centralnej.');
+            }
+            $location = $locations->first();
+            $this->line("Lokalna baza veltra_stage6a1; administrator {$actor->id}; kuchnia {$location->id}.");
             $this->warn('Tylko lokalne testy RAW. Produkcyjny katalog pozostaje NOT_READY. Ta komenda nie nadaje uprawnień RAW.');
             if (! $this->confirm('Włączyć RAW w kuchni deweloperskiej?', false)) {
                 return self::FAILURE;
             }
             $password = $this->secret('Potwierdź hasło administratora', false);
-            if (! is_string($password) || ! $instance->rawIntegrationEnabled()) {
+            if (! is_string($password) || $instance->rawConfigurationIdentity() !== $identity) {
                 throw new BusinessRuleViolation('Nie potwierdzono operacji i lokalnej instancji.');
             }
             $result = $modules->configure($actor, $location, [

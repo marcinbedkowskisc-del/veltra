@@ -733,12 +733,12 @@ Backend sprawdza `local`, kontener, hostname, rzeczywiste PostgreSQL
 oraz aktywna, zainicjowana organizacje i pierwsza aktywowana tozsamosc.
 Bledne lub wygasle poswiadczenie powoduje jawna odmowe, nie fallback.
 
-Po aktywacji odrebnego opiekuna administrator wykonuje interaktywnie:
-`docker exec -it veltra-stage6a1-backend-1 php artisan veltra:configure-stage6a1-raw`
-oraz istniejace `veltra:bootstrap-raw-material-permissions`. Pierwsza komenda
-wywoluje standardowy `ModuleConfigurationService`, wymaga hasla administratora
-i zapisuje audyt. Druga nadaje jawnie wybrane granty odrebnemu uzytkownikowi.
-Nie przyznaje sie automatycznych praw administratorowi ani praw finansowych.
+Administrator wykonuje interaktywnie:
+`docker exec -it veltra-stage6a1-backend-1 php artisan veltra:configure-stage6a1-raw`.
+Komenda wybiera uzytkownika z poświadczenia oraz jedyna aktywna glowna kuchnie tej
+organizacji, wywoluje standardowy `ModuleConfigurationService`, wymaga hasla administratora
+i zapisuje audyt. Nie nadaje uprawnien; granty Stage sa inicjalizowane osobnym
+zatwierdzonym manifestem opisanym powyzej.
 Sesje, CSRF, RBAC, stany lokalizacji i guard dostepnosci pozostaja obowiazkowe.
 Normalna aplikacja: <http://localhost:5174/>. Katalog zawiera zatwierdzone
 rewizje; CREATE tworzy szkic i nie publikuje go automatycznie.

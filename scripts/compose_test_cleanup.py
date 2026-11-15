@@ -134,6 +134,8 @@ def validate_compose_config(config: dict[str, Any], target: Target) -> None:
     for service_name, service in services.items():
         if not isinstance(service, dict):
             raise SafetyError(f"Invalid service configuration: {service_name}")
+        if service.get("env_file"):
+            raise SafetyError(f"Service-level env files are forbidden: {service_name}")
         forbidden_service_options = (
             "container_name",
             "hostname",
@@ -198,7 +200,12 @@ def validate_compose_config(config: dict[str, Any], target: Target) -> None:
                     raise SafetyError("The backend test env overlay must be a regular, empty env file.")
                 safe_env_overlay_targets.add(mount.get("target", ""))
         for mount in mounts:
-            if mount.get("target") in {"/var/lib/postgresql/data", "/data"}:
+            target_path = mount.get("target")
+            if any(
+                isinstance(target_path, str)
+                and (target_path == data_path or target_path.startswith(f"{data_path}/"))
+                for data_path in ("/var/lib/postgresql/data", "/data")
+            ):
                 raise SafetyError("Database and Redis data paths must be tmpfs, not volumes or binds.")
             if mount.get("type") == "bind":
                 source_value = mount.get("source")
@@ -245,12 +252,22 @@ def validate_compose_config(config: dict[str, Any], target: Target) -> None:
     postgres_env = postgres.get("environment", {})
     if postgres_env.get("POSTGRES_DB") != "veltra_testing":
         raise SafetyError("Test PostgreSQL must use only veltra_testing.")
+    if postgres_env.get("PGDATA") not in (None, "/var/lib/postgresql/data"):
+        raise SafetyError("Test PostgreSQL data directory must remain on its default tmpfs path.")
     if "/var/lib/postgresql/data" not in postgres.get("tmpfs", []):
         raise SafetyError("Test PostgreSQL data must be held in tmpfs.")
 
     redis = services.get("redis")
     if not isinstance(redis, dict) or "/data" not in redis.get("tmpfs", []):
         raise SafetyError("Test Redis data must be held in tmpfs.")
+    redis_command = redis.get("command", [])
+    if not isinstance(redis_command, list):
+        raise SafetyError("Redis command must be an unambiguous argument list.")
+    for index, argument in enumerate(redis_command):
+        if argument == "--dir" and (index + 1 >= len(redis_command) or redis_command[index + 1] != "/data"):
+            raise SafetyError("Test Redis data directory must remain on its default tmpfs path.")
+        if argument.startswith("--dir=") and argument != "--dir=/data":
+            raise SafetyError("Test Redis data directory must remain on its default tmpfs path.")
 
     for service_name in {"backend-test", "migrate-test", "runner", "test-runner"} & set(services):
         environment = services[service_name].get("environment", {})

@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -487,10 +488,24 @@ def verify_resources(
 
 def acquire_lock() -> int:
     LOCK_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    flags = os.O_CREAT | os.O_RDWR
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    directory_stat = LOCK_PATH.parent.lstat()
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or directory_stat.st_uid != os.getuid()
+        or directory_stat.st_mode & 0o077
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise SafetyError("Cleanup lock directory is not private and owned by the current user.")
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
     descriptor = os.open(LOCK_PATH, flags, 0o600)
+    lock_stat = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(lock_stat.st_mode)
+        or lock_stat.st_uid != os.getuid()
+        or lock_stat.st_mode & 0o077
+    ):
+        os.close(descriptor)
+        raise SafetyError("Cleanup lock file is not private and owned by the current user.")
     fcntl.flock(descriptor, fcntl.LOCK_EX)
     return descriptor
 

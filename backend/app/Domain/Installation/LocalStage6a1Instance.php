@@ -10,6 +10,10 @@ use JsonException;
 
 class LocalStage6a1Instance
 {
+    private const RAW_DIRECTORY = '/run/veltra-stage6a1';
+
+    private const RAW_IDENTITY = self::RAW_DIRECTORY.'/raw.json';
+
     public function assertConfiguration(array $identity, bool $container): void
     {
         if (! app()->environment('local') || ! $container
@@ -96,7 +100,8 @@ class LocalStage6a1Instance
      */
     public function verifyProvisioningTarget(SystemPermissionManifest $manifest): array
     {
-        $identity = $this->readIdentity('/run/veltra-stage6a1-raw.json');
+        $this->assertRawDirectory();
+        $identity = $this->readIdentity(self::RAW_IDENTITY);
         $this->assertConfiguration($identity, $this->insideContainer());
         $role = (string) env('APP_DB_MIGRATION_USERNAME', 'veltra_migrator');
         if ($role === '' || ($identity['organization_id'] ?? null) !== $manifest->organizationId
@@ -141,10 +146,25 @@ class LocalStage6a1Instance
 
     protected function rawIdentity(): ?array
     {
-        $path = '/run/veltra-stage6a1-raw.json';
-        clearstatcache(true, $path);
+        clearstatcache(true, self::RAW_DIRECTORY);
+        if (! file_exists(self::RAW_DIRECTORY) && ! is_link(self::RAW_DIRECTORY)) {
+            return null;
+        }
 
-        return file_exists($path) || is_link($path) ? $this->readIdentity($path) : null;
+        $this->assertRawDirectory();
+        clearstatcache(true, self::RAW_IDENTITY);
+
+        return file_exists(self::RAW_IDENTITY) || is_link(self::RAW_IDENTITY)
+            ? $this->readIdentity(self::RAW_IDENTITY) : null;
+    }
+
+    private function assertRawDirectory(): void
+    {
+        clearstatcache(true, self::RAW_DIRECTORY);
+        if (is_link(self::RAW_DIRECTORY) || ! is_dir(self::RAW_DIRECTORY)
+            || fileowner(self::RAW_DIRECTORY) !== 0 || (fileperms(self::RAW_DIRECTORY) & 0022) !== 0) {
+            throw new BusinessRuleViolation('Niepoprawny katalog poświadczenia RAW.');
+        }
     }
 
     protected function insideContainer(): bool

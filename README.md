@@ -783,6 +783,47 @@ Wygasniecie lub odtworzenie kontenera rowniez nie pozwala kontynuowac testow
 bez ponownej weryfikacji instancji. Trwajaca transakcja nie jest anulowana
 przez usuniecie pliku. Odnowienie wymaga nowej kontroli izolacji przez hosta.
 
+#### Przygotowywany wariant katalogowy (niewdrozony)
+
+Biezaca zmiana kodu przenosi sciezke odczytu RAW do
+`/run/veltra-stage6a1/raw.json`, bez odczytu poprzedniej sciezki.
+Katalog musi nalezec do root, nie moze byc dowiazaniem ani byc zapisywalny
+przez grupe lub innych uzytkownikow; walidacja pliku i instancji pozostaje
+obowiazkowa. `compose.stage6a1-credentials.yaml` przewiduje montowanie tylko
+do odczytu katalogu wskazanego przez `VELTRA_STAGE6A1_CREDENTIAL_DIR`, wylacznie
+do backendu i migrate. Plik i katalog musza byc wczesniej przygotowane i
+zweryfikowane przez administratora hosta.
+
+Ten wariant nie zostal wdrozony. Do bezpiecznego odnowienia niezbedne jest
+jeszcze narzedzie weryfikujace izolacje i atomowo publikujace poswiadczenie,
+oraz testy jego zabezpieczen. Nie stosowac override'u samodzielnie ani nie
+laczyc go ze starym montowaniem bez zatwierdzonego planu migracji.
+Prototyp `scripts/stage6a1_renew.py` pozostaje celowo zablokowany do czasu
+pelnej walidacji izolacji i rzeczywistego guarda. Nie uzywac go na Stage.
+Protokol przygotowuje nowy plik w tym samym katalogu, synchronizuje go i
+publikuje atomowym `os.replace`, bez kopii ani dowiazan starego pliku.
+Przed zamiana obowiazuje stary plik, po niej nowy, takze gdy pozniejsza
+weryfikacja sie nie powiedzie; automatyczny rollback nie jest wykonywany.
+Po awarii zasilania przed synchronizacja katalogu trwalosc zmiany nie jest
+gwarantowana. Przerwanie moze pozostawic plik tymczasowy, ktorego guard nie
+odczytuje. Przy kolejnym uprawnionym uruchomieniu, po potwierdzeniu
+administratora, prototyp usuwa jedynie bezpieczne pliki z zastrzezonej
+przestrzeni nazw `.stage6a1-candidate-` w dedykowanym katalogu pod blokada.
+Nie nalezy umieszczac w tej przestrzeni nazw innych plikow. Podejrzane pliki
+powoduja odmowe i wymagaja recznego sprawdzenia.
+
+Weryfikacja uprawnien hosta w WSL, bez uzycia Docker ani danych Stage:
+
+```bash
+cd /home/veltra/projekty/veltra
+sudo /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v scripts.tests.test_stage6a1_host_root
+```
+
+Komenda uruchamia kod repozytorium z uprawnieniami root: administrator musi
+najpierw potwierdzic, ze repozytorium i osoby mogace je zmieniac sa zaufane.
+Test tworzy wlasny tymczasowy katalog pod `/run`. Test potwierdzenia symuluje
+terminal i Docker; nie stanowi pelnego testu rzeczywistej procedury odnowienia.
+
 ### Stage 6A.4: szkice i zatwierdzanie RAW
 
 Normalny katalog zachowuje zatwierdzone snapshoty. Zakladka

@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Console\Commands\ConfigureStage6a1Raw;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\RoleAdministration;
+use App\Domain\Authorization\SystemPermissionManifest;
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
@@ -42,19 +44,13 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
         $this->app->detectEnvironment(fn () => 'local');
         config([
             'app.url' => 'http://localhost:8001', 'app.frontend_url' => 'http://localhost:5174',
+            'app.local_stage_project' => 'veltra-stage6a1',
             'development.management_enabled' => false, 'mail.default' => 'smtp',
             'mail.mailers.smtp.transport' => 'smtp', 'mail.mailers.smtp.host' => 'mailpit',
             'mail.mailers.smtp.port' => 1025, 'mail.mailers.smtp.url' => null,
             'mail.mailers.smtp.scheme' => null, 'mail.mailers.smtp.username' => null, 'mail.mailers.smtp.password' => null,
         ]);
         $this->instance = new LocalRawInstanceFixture;
-        $this->instance->identity = [
-            'compose_project' => 'veltra-stage6a1', 'postgres_volume' => 'veltra-stage6a1_postgres-data',
-            'container_hostname' => gethostname(), 'expires_at' => now()->addHours(2)->timestamp,
-            'organization_id' => $this->administrator->organization_id, 'user_id' => $this->administrator->id,
-            'database_oid' => '16384', 'server_address' => gethostbyname('postgres'),
-            'mailpit_address' => gethostbyname('mailpit'), 'raw_integration_enabled' => true,
-        ];
         $this->instance->database = (object) [
             'configured_name' => 'veltra_stage6a1', 'name' => 'veltra_stage6a1', 'role' => 'veltra_app',
             'oid' => '16384', 'server_address' => gethostbyname('postgres'), 'server_port' => 5432,
@@ -88,23 +84,12 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
         return $tester;
     }
 
-    private function assertRejected(): void
-    {
-        try {
-            $this->instance->rawIntegrationEnabled();
-            $this->fail('Niepoprawna instancja nie może włączyć RAW.');
-        } catch (BusinessRuleViolation $exception) {
-            $this->assertNotSame('', $exception->getMessage());
-        }
-    }
-
-    public function test_default_off_and_removal_are_observed_by_the_same_catalog_instance(): void
+    public function test_only_local_stage_enables_raw_without_an_acceptance_credential(): void
     {
         $catalog = app(ModuleCatalog::class);
-        $identity = $this->instance->identity;
-        $this->instance->identity = null;
+        $this->app->detectEnvironment(fn () => 'production');
         $this->assertFalse($catalog->find('RAW_MATERIALS')->ready);
-        $this->instance->identity = $identity;
+        $this->app->detectEnvironment(fn () => 'local');
         $this->assertTrue($catalog->find('RAW_MATERIALS')->ready);
         foreach ((new DefinedModuleCatalog)->all() as $key => $definition) {
             if ($key !== 'RAW_MATERIALS') {
@@ -112,7 +97,7 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
             }
         }
         $this->assertFalse((new DefinedModuleCatalog)->find('RAW_MATERIALS')->ready);
-        $this->instance->identity = null;
+        $this->app->detectEnvironment(fn () => 'testing');
         $this->assertFalse($catalog->find('RAW_MATERIALS')->ready);
     }
 
@@ -120,41 +105,46 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
     {
         foreach (['production', 'staging', 'testing'] as $environment) {
             $this->app->detectEnvironment(fn () => $environment);
-            $this->assertRejected();
+            $this->assertFalse($this->instance->rawIntegrationEnabled());
         }
         $this->app->detectEnvironment(fn () => 'local');
         $this->instance->container = false;
-        $this->assertRejected();
+        $this->assertFalse($this->instance->rawIntegrationEnabled());
     }
 
-    public function test_wrong_attestation_database_network_and_expiration_are_rejected(): void
+    public function test_wrong_database_or_stage_urls_do_not_enable_raw(): void
     {
-        $original = $this->instance->identity;
-        foreach ([
-            'compose_project' => 'veltra', 'postgres_volume' => 'veltra_postgres-data',
-            'container_hostname' => 'other', 'database_oid' => '9999', 'server_address' => '192.0.2.1',
-            'mailpit_address' => '192.0.2.1', 'organization_id' => '00000000-0000-4000-8000-000000000001',
-            'user_id' => '00000000-0000-4000-8000-000000000002', 'raw_integration_enabled' => false,
-            'expires_at' => now()->subSecond()->timestamp,
-        ] as $key => $value) {
-            $this->instance->identity = array_replace($original, [$key => $value]);
-            $this->assertRejected();
-        }
-        $this->instance->identity = $original;
-        $this->travel(3)->hours();
-        $this->assertRejected();
-        $this->travelBack();
-        foreach (['configured_name', 'name', 'role', 'oid', 'server_address', 'server_port'] as $key) {
+        foreach (['configured_name', 'name', 'role', 'server_address', 'server_port'] as $key) {
             $before = $this->instance->database->$key;
             $this->instance->database->$key = 'unapproved';
-            $this->assertRejected();
+            $this->assertFalse($this->instance->rawIntegrationEnabled());
             $this->instance->database->$key = $before;
         }
-        config(['mail.mailers.smtp.url' => 'smtp://remote.example:1025']);
-        $this->assertRejected();
+        config(['app.url' => 'http://localhost:8000']);
+        $this->assertFalse($this->instance->rawIntegrationEnabled());
+        config(['app.url' => 'http://localhost:8001', 'app.local_stage_project' => null]);
+        $this->assertFalse($this->instance->rawIntegrationEnabled());
     }
 
-    public function test_missing_writable_symlinked_and_invalid_attestations_are_rejected(): void
+    public function test_provisioning_target_uses_local_database_and_manifest_without_raw_credential(): void
+    {
+        $manifest = new SystemPermissionManifest(
+            id: 'synthetic-stage', version: 1, module: 'RAW_MATERIALS',
+            permissions: [RawMaterialPermission::View], eligibleRole: BusinessRole::Administrator,
+            grantScope: 'ORGANIZATION', applicability: 'UPGRADE', databaseName: 'veltra_stage6a1',
+            organizationId: $this->administrator->organization_id, administratorId: $this->administrator->id,
+            locationId: $this->location->id,
+        );
+        $this->instance->database->role = 'veltra_migrator';
+        $this->assertSame([
+            'database_oid' => '16384', 'server_address' => gethostbyname('postgres'),
+        ], $this->instance->verifyProvisioningTarget($manifest));
+        $this->app->detectEnvironment(fn () => 'production');
+        $this->expectException(BusinessRuleViolation::class);
+        $this->instance->verifyProvisioningTarget($manifest);
+    }
+
+    public function test_recovery_identity_reader_still_rejects_invalid_files(): void
     {
         $instance = new LocalStage6a1Instance;
         $directory = sys_get_temp_dir().'/veltra-raw-'.bin2hex(random_bytes(6));
@@ -176,7 +166,7 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
                     chmod($path, 0644);
                 }
             }
-            file_put_contents($path, json_encode($this->instance->identity));
+            file_put_contents($path, '{"synthetic":true}');
             try {
                 $instance->readIdentity($path);
                 $this->fail('Zapisywalne poświadczenie zaakceptowano.');
@@ -225,7 +215,7 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
         $this->postJson('/api/v1/raw-materials', [
             'category_id' => $this->location->id, 'name' => 'Niedozwolony zapis', 'base_unit_code' => 'g',
         ])->assertForbidden();
-        $this->instance->identity = null;
+        $this->app->detectEnvironment(fn () => 'production');
         $this->getJson('/api/v1/raw-materials')->assertStatus(503);
     }
 
@@ -244,16 +234,9 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
 
 class LocalRawInstanceFixture extends LocalStage6a1Instance
 {
-    public ?array $identity = null;
-
     public object $database;
 
     public bool $container = true;
-
-    protected function rawIdentity(): ?array
-    {
-        return $this->identity;
-    }
 
     protected function insideContainer(): bool
     {

@@ -18,7 +18,7 @@ class ConfigureStage6a1Raw extends Command
 {
     protected $signature = 'veltra:configure-stage6a1-raw';
 
-    protected $description = 'Konfiguracja RAW w jednej lokalizacji poświadczonej lokalnej instancji Stage 6A.1';
+    protected $description = 'Konfiguracja RAW w jednej lokalizacji lokalnej instancji Stage 6A.1';
 
     public function handle(LocalStage6a1Instance $instance, ModuleConfigurationService $modules): int
     {

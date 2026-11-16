@@ -2,6 +2,7 @@
 
 return [
     'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    'local_stage_project' => env('VELTRA_LOCAL_STAGE_PROJECT'),
 
     /*
     |--------------------------------------------------------------------------

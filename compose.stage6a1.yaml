@@ -1,0 +1,25 @@
+name: veltra-stage6a1
+
+services:
+  backend:
+    image: veltra-stage6a1-backend:local
+    environment:
+      VELTRA_LOCAL_STAGE_PROJECT: veltra-stage6a1
+  migrate:
+    image: veltra-stage6a1-backend:local
+    environment:
+      VELTRA_LOCAL_STAGE_PROJECT: veltra-stage6a1
+  queue:
+    image: veltra-stage6a1-backend:local
+    environment:
+      VELTRA_LOCAL_STAGE_PROJECT: veltra-stage6a1
+  frontend:
+    image: veltra-stage6a1-frontend:local
+
+volumes:
+  postgres-data:
+    name: veltra-stage6a1_postgres-data
+    external: true
+  redis-data:
+    name: veltra-stage6a1_redis-data
+    external: true

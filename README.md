@@ -662,7 +662,7 @@ kwalifikacji, a nie ograniczeniem organizacyjnego zasiegu grantu. Rejestr i hash
 manifestu nie sa zatwierdzeniem wdrozenia ani mechanizmem nadawania uprawnien.
 Po zastosowaniu migracji 047–048 dedykowana komenda
 `veltra:provision-stage6a1-raw-permissions` jest uruchamiana w procesie
-migracyjnym tylko po weryfikacji poświadczenia izolowanej instalacji; wymaga
+migracyjnym dla lokalnej bazy Stage; wymaga
 jawnego `--approve-release` z dokładnym skrótem wydania i instalacji. Opcja
 `--show-release` wyświetla ten skrót bez wykonywania grantu. Nie podaje się
 użytkownika, lokalizacji ani uprawnień jako argumentów. Powtórzenie nie
@@ -754,22 +754,16 @@ Domyslnie wylaczone. `LocalRawMaterialCatalog` korzysta z tego samego katalogu
 i przeksztalcenia co fixture `readyWithRawMaterials()`, ale zmienia tylko RAW.
 Produkcyjne definicje pozostaja `NOT_READY`; zadne inne moduly nie sa wlaczane.
 
-Opt-in wymaga `/run/veltra-stage6a1-raw.json`: zwyklego pliku root, bez praw
-zapisu i dowiazan, maksymalnie 4096 bajtow. Administrator hosta przygotowuje
-go dopiero po sprawdzeniu izolacji projektu Docker `veltra-stage6a1`, sieci,
-wylacznego lokalnego wolumenu `veltra-stage6a1_postgres-data` i portow
-opublikowanych tylko na loopback. Nie kopiowac do innych instalacji.
-Pola: `compose_project`, `postgres_volume`, `container_hostname`, `expires_at`
-(Unix, najwyzej 24 godziny), `organization_id`, `user_id` pierwszej tozsamosci,
-`database_oid`, `server_address`, `mailpit_address`, `raw_integration_enabled: true`.
-Backend sprawdza `local`, kontener, hostname, rzeczywiste PostgreSQL
-`veltra_stage6a1`/OID/adres/role `veltra_app`, DNS, lokalne URL i SMTP Mailpit
-oraz aktywna, zainicjowana organizacje i pierwsza aktywowana tozsamosc.
-Bledne lub wygasle poswiadczenie powoduje jawna odmowe, nie fallback.
+Lokalny katalog RAW jest dostepny tylko w projekcie `veltra-stage6a1`
+uruchomionym z `compose.stage6a1.yaml`: aplikacja sprawdza lokalne srodowisko,
+konfiguracje URL, rzeczywista baze `veltra_stage6a1`, role runtime, adres
+PostgreSQL oraz aktywna, zainicjowana organizacje i pierwsza aktywowana
+tozsamosc. Nie wymaga pliku ani odnawiania poswiadczenia akceptacji RAW.
+Nie jest to przelacznik wylaczajacy autoryzacje ani konfiguracja produkcyjna.
 
 Administrator wykonuje interaktywnie:
 `docker exec -it veltra-stage6a1-backend-1 php artisan veltra:configure-stage6a1-raw`.
-Komenda wybiera uzytkownika z poświadczenia oraz jedyna aktywna glowna kuchnie tej
+Komenda wybiera pierwsza tozsamosc oraz jedyna aktywna glowna kuchnie tej
 organizacji, wywoluje standardowy `ModuleConfigurationService`, wymaga hasla administratora
 i zapisuje audyt. Nie nadaje uprawnien; granty Stage sa inicjalizowane osobnym
 zatwierdzonym manifestem opisanym powyzej.
@@ -777,52 +771,24 @@ Sesje, CSRF, RBAC, stany lokalizacji i guard dostepnosci pozostaja obowiazkowe.
 Normalna aplikacja: <http://localhost:5174/>. Katalog zawiera zatwierdzone
 rewizje; CREATE tworzy szkic i nie publikuje go automatycznie.
 
-Usuniecie wylacznie `/run/veltra-stage6a1-raw.json` natychmiast przywraca
-`NOT_READY` przy nastepnym odczycie katalogu, bez restartu i usuwania danych.
-Wygasniecie lub odtworzenie kontenera rowniez nie pozwala kontynuowac testow
-bez ponownej weryfikacji instancji. Trwajaca transakcja nie jest anulowana
-przez usuniecie pliku. Odnowienie wymaga nowej kontroli izolacji przez hosta.
-
-#### Przygotowywany wariant katalogowy (niewdrozony)
-
-Biezaca zmiana kodu przenosi sciezke odczytu RAW do
-`/run/veltra-stage6a1/raw.json`, bez odczytu poprzedniej sciezki.
-Katalog musi nalezec do root, nie moze byc dowiazaniem ani byc zapisywalny
-przez grupe lub innych uzytkownikow; walidacja pliku i instancji pozostaje
-obowiazkowa. `compose.stage6a1-credentials.yaml` przewiduje montowanie tylko
-do odczytu katalogu wskazanego przez `VELTRA_STAGE6A1_CREDENTIAL_DIR`, wylacznie
-do backendu i migrate. Plik i katalog musza byc wczesniej przygotowane i
-zweryfikowane przez administratora hosta.
-
-Ten wariant nie zostal wdrozony. Do bezpiecznego odnowienia niezbedne jest
-jeszcze narzedzie weryfikujace izolacje i atomowo publikujace poswiadczenie,
-oraz testy jego zabezpieczen. Nie stosowac override'u samodzielnie ani nie
-laczyc go ze starym montowaniem bez zatwierdzonego planu migracji.
-Prototyp `scripts/stage6a1_renew.py` pozostaje celowo zablokowany do czasu
-pelnej walidacji izolacji i rzeczywistego guarda. Nie uzywac go na Stage.
-Protokol przygotowuje nowy plik w tym samym katalogu, synchronizuje go i
-publikuje atomowym `os.replace`, bez kopii ani dowiazan starego pliku.
-Przed zamiana obowiazuje stary plik, po niej nowy, takze gdy pozniejsza
-weryfikacja sie nie powiedzie; automatyczny rollback nie jest wykonywany.
-Po awarii zasilania przed synchronizacja katalogu trwalosc zmiany nie jest
-gwarantowana. Przerwanie moze pozostawic plik tymczasowy, ktorego guard nie
-odczytuje. Przy kolejnym uprawnionym uruchomieniu, po potwierdzeniu
-administratora, prototyp usuwa jedynie bezpieczne pliki z zastrzezonej
-przestrzeni nazw `.stage6a1-candidate-` w dedykowanym katalogu pod blokada.
-Nie nalezy umieszczac w tej przestrzeni nazw innych plikow. Podejrzane pliki
-powoduja odmowe i wymagaja recznego sprawdzenia.
-
-Weryfikacja uprawnien hosta w WSL, bez uzycia Docker ani danych Stage:
+#### Lokalne wdrozenie Stage 6A.1
 
 ```bash
 cd /home/veltra/projekty/veltra
-sudo /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest -v scripts.tests.test_stage6a1_host_root
+python3 scripts/deploy_stage6a1.py --env-file /sciezka/do/stage.env \
+  --backup-dir /sciezka/do/prywatnych-kopii-stage
 ```
 
-Komenda uruchamia kod repozytorium z uprawnieniami root: administrator musi
-najpierw potwierdzic, ze repozytorium i osoby mogace je zmieniac sa zaufane.
-Test tworzy wlasny tymczasowy katalog pod `/run`. Test potwierdzenia symuluje
-terminal i Docker; nie stanowi pelnego testu rzeczywistej procedury odnowienia.
+Skrypt wymaga czystego, zatwierdzonego drzewa Git oraz istniejacych wolumenow
+Stage. Sprawdza kontekst `default`, projekt, konfiguracje, porty i rzeczywiste
+kontenery/wolumeny PostgreSQL i Redis; tworzy kopie `pg_dump` poza wolumenem,
+sprawdza jej odczyt przez `pg_restore` i wypisuje SHA-256. To nie jest test
+odtworzenia bazy. Nastepnie buduje obrazy, uruchamia migracje i odtwarza tylko
+backend, kolejke i frontend, bez odtwarzania PostgreSQL ani Redis. Dla nowych
+migracji wyswietla ich liste i wymaga recznego potwierdzenia po przegladzie
+ich skutkow. Operacje destrukcyjne wymagaja osobnej decyzji wlasciciela.
+Skrypt sprawdza zdrowie aplikacji i zaleznosci oraz podaje commit i URL.
+Przy bledzie przerywa; przed ponowieniem sprawdz stan i zachowana kopie.
 
 ### Stage 6A.4: szkice i zatwierdzanie RAW
 

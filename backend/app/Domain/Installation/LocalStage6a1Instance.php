@@ -10,10 +10,6 @@ use JsonException;
 
 class LocalStage6a1Instance
 {
-    private const RAW_DIRECTORY = '/run/veltra-stage6a1';
-
-    private const RAW_IDENTITY = self::RAW_DIRECTORY.'/raw.json';
-
     public function assertConfiguration(array $identity, bool $container): void
     {
         if (! app()->environment('local') || ! $container
@@ -100,17 +96,18 @@ class LocalStage6a1Instance
      */
     public function verifyProvisioningTarget(SystemPermissionManifest $manifest): array
     {
-        $this->assertRawDirectory();
-        $identity = $this->readIdentity(self::RAW_IDENTITY);
-        $this->assertConfiguration($identity, $this->insideContainer());
         $role = (string) env('APP_DB_MIGRATION_USERNAME', 'veltra_migrator');
-        if ($role === '' || ($identity['organization_id'] ?? null) !== $manifest->organizationId
-            || ($identity['user_id'] ?? null) !== $manifest->administratorId) {
-            throw new BusinessRuleViolation('Poświadczenie nie odpowiada celowi manifestu.');
+        if ($role === '' || ! $this->hasLocalStageConfiguration()
+            || $manifest->databaseName !== 'veltra_stage6a1') {
+            throw new BusinessRuleViolation('Baza nie odpowiada instalacji wskazanej w manifeście.');
         }
         $actual = $this->databaseIdentity();
-        $this->assertDatabase($identity, $actual, $role);
-        if ($actual->name !== $manifest->databaseName) {
+        if (! $this->isLocalStage($actual, $role)
+            || $actual->name !== $manifest->databaseName
+            || ! Organization::whereKey($manifest->organizationId)->where('is_active', true)
+                ->where('authorization_initialized', true)->exists()
+            || ! User::whereKey($manifest->administratorId)->where('organization_id', $manifest->organizationId)
+                ->where('is_initial_identity', true)->where('is_active', true)->whereNotNull('email_verified_at')->exists()) {
             throw new BusinessRuleViolation('Baza nie odpowiada instalacji wskazanej w manifeście.');
         }
 
@@ -124,47 +121,44 @@ class LocalStage6a1Instance
 
     public function rawConfigurationIdentity(): ?array
     {
-        $identity = $this->rawIdentity();
-        if ($identity === null) {
+        if (! $this->hasLocalStageConfiguration()) {
             return null;
         }
-        $this->assertConfiguration($identity, $this->insideContainer());
-        if (($identity['raw_integration_enabled'] ?? null) !== true) {
-            throw new BusinessRuleViolation('Brak jawnego opt-in lokalnych testów RAW w poświadczeniu instancji.');
+        if (! $this->isLocalStage($this->databaseIdentity(), 'veltra_app') || Organization::count() !== 1) {
+            return null;
         }
-        $this->assertDatabase($identity, $this->databaseIdentity());
-        if (Organization::count() !== 1
-            || ! Organization::whereKey($identity['organization_id'])->where('is_active', true)
-                ->where('authorization_initialized', true)->exists()
-            || ! User::whereKey($identity['user_id'])->where('organization_id', $identity['organization_id'])
-                ->where('is_initial_identity', true)->where('is_active', true)->whereNotNull('email_verified_at')->exists()) {
-            throw new BusinessRuleViolation('Odmowa: poświadczenie RAW nie odpowiada aktywnej lokalnej instalacji.');
+        $organization = Organization::where('is_active', true)->where('authorization_initialized', true)->first();
+        if (! $organization) {
+            return null;
         }
-
-        return $identity;
-    }
-
-    protected function rawIdentity(): ?array
-    {
-        clearstatcache(true, self::RAW_DIRECTORY);
-        if (! file_exists(self::RAW_DIRECTORY) && ! is_link(self::RAW_DIRECTORY)) {
+        $users = User::where('organization_id', $organization->id)->where('is_initial_identity', true)
+            ->where('is_active', true)->whereNotNull('email_verified_at')->limit(2)->get();
+        if ($users->count() !== 1) {
             return null;
         }
 
-        $this->assertRawDirectory();
-        clearstatcache(true, self::RAW_IDENTITY);
-
-        return file_exists(self::RAW_IDENTITY) || is_link(self::RAW_IDENTITY)
-            ? $this->readIdentity(self::RAW_IDENTITY) : null;
+        return ['organization_id' => $organization->id, 'user_id' => $users->first()->id];
     }
 
-    private function assertRawDirectory(): void
+    private function hasLocalStageConfiguration(): bool
     {
-        clearstatcache(true, self::RAW_DIRECTORY);
-        if (is_link(self::RAW_DIRECTORY) || ! is_dir(self::RAW_DIRECTORY)
-            || fileowner(self::RAW_DIRECTORY) !== 0 || (fileperms(self::RAW_DIRECTORY) & 0022) !== 0) {
-            throw new BusinessRuleViolation('Niepoprawny katalog poświadczenia RAW.');
-        }
+        return app()->environment('local') && $this->insideContainer()
+            && config('app.local_stage_project') === 'veltra-stage6a1'
+            && config('database.default') === 'pgsql'
+            && DB::connection()->getConfig('host') === 'postgres'
+            && (string) DB::connection()->getConfig('port') === '5432'
+            && config('app.url') === 'http://localhost:8001'
+            && config('app.frontend_url') === 'http://localhost:5174';
+    }
+
+    private function isLocalStage(object $database, string $role): bool
+    {
+        return $this->hasLocalStageConfiguration()
+            && $database->configured_name === 'veltra_stage6a1'
+            && $database->name === 'veltra_stage6a1'
+            && $database->role === $role
+            && $database->server_address === gethostbyname('postgres')
+            && (int) $database->server_port === 5432;
     }
 
     protected function insideContainer(): bool

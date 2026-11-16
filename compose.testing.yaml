@@ -28,6 +28,8 @@ x-test-environment: &test-environment
   REDIS_CLIENT: phpredis
   REDIS_HOST: redis
   REDIS_PORT: "6379"
+  TEST_REDIS_HOST: redis
+  TEST_REDIS_PORT: "6379"
   REDIS_DB: "0"
   REDIS_CACHE_DB: "1"
   CACHE_STORE: redis

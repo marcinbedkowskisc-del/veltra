@@ -10,6 +10,11 @@ Delegate=yes
 KillMode=mixed
 Restart=on-failure
 RestartSec=2
+Environment=PATH=%h/.local/lib/veltra-test-docker/bin:/usr/bin:/usr/sbin:/bin:/sbin
+Environment=DOCKERD=%h/.local/lib/veltra-test-docker/bin/dockerd
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_STATE_DIR=%t/veltra-test-docker/rootlesskit
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=builtin
 ExecStart=/usr/bin/dockerd-rootless.sh --host=unix://%t/veltra-test-docker/docker.sock --data-root=%h/.local/share/veltra-test-docker --exec-root=%t/veltra-test-docker/exec --pidfile=%t/veltra-test-docker/docker.pid --label=com.veltra.daemon-role=disposable-test
 
 [Install]

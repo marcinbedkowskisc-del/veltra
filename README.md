@@ -251,6 +251,36 @@ cp tests/compose/test.env.example tests/compose/test.env
 # na losowe, syntetyczne wartosci.
 ```
 
+TEST wymaga zarejestrowanego kontekstu `veltra-test-isolated` i dzialajacego
+rootless daemona. Wrapper zawsze wybiera ten kontekst jawnie i sprawdza jego
+socket, etykiete daemona oraz Docker Root Dir; nie uzywaj `docker context use`.
+Kontekst jest przechowywany w prywatnym katalogu
+`~/.config/veltra-test/docker`, niezaleznym od konfiguracji Docker Desktop.
+Brak lub niezgodnosc kontekstu zatrzymuje polecenie przed operacja na zasobach.
+
+```bash
+# Start testowych zaleznosci i migracje pustej bazy w tmpfs.
+scripts/compose-test up -d postgres redis clamav
+scripts/compose-test run --build --rm migrate-test
+
+# Testy aplikacji i logi.
+scripts/compose-test run --build --rm backend-test composer test
+scripts/compose-test ps
+scripts/compose-test logs postgres redis clamav
+
+# Reset bazy: usun zweryfikowany projekt TEST, po czym uruchom go ponownie.
+scripts/compose-test-clean --target application --env-file tests/compose/test.env
+scripts/compose-test-clean --target application --env-file tests/compose/test.env \
+  --execute --confirm-project veltra-test-application
+scripts/compose-test up -d postgres redis clamav
+scripts/compose-test run --build --rm migrate-test
+```
+
+Wszystkie powyzsze polecenia operujace na kontenerach wymagaja izolowanego
+kontekstu. `scripts/compose-test config --quiet` oraz
+`python3 scripts/compose_test_cleanup.py --target application --env-file tests/compose/test.env --validate-only`
+sprawdzaja konfiguracje bez laczenia z daemonem.
+
 Uruchamiaj testy przez wrapper — nie przez bazowy `docker compose`:
 
 ```bash
@@ -304,19 +334,9 @@ scripts/compose-test run --build --rm backend-test \
   --filter=test_runtime_cannot_shadow_bootstrap_validation_relations_with_temporary_tables
 ```
 
-Specjalistyczne testy infrastrukturalne B.1/B.2/B.3/B.4.1 uruchamiaj na
-`veltra-test-isolated`. `scripts/compose-test-clean` domyslnie wykonuje tylko
-odczytowa weryfikacje:
-
-```bash
-scripts/compose-test-clean --target stage3e-b2 --env-file tests/compose/test.env
-# Dopiero po provisioningu odrebnego daemonu i osobnej zgodzie:
-scripts/compose-test-clean --target stage3e-b2 --env-file tests/compose/test.env \
-  --execute --confirm-project veltra-test-stage3e-b2
-```
-
-Usuwa wyłącznie kontenery i sieć; nie używa `--volumes` ani
-`--remove-orphans`. Odrzuca zwykly, glowny oraz Stage Docker context.
+Profile testowe B.1/B.2/B.3/B.4.1 wymagaja osobnej konfiguracji Compose;
+nie uruchamiaj ich na projekcie Stage. Cleanup wrapper usuwa tylko kontenery i
+siec zweryfikowanego projektu, bez `--volumes` i `--remove-orphans`.
 
 Migracja `021` blokuje zapisy grantow podczas rekonsyliacji ledgeru. Jesli
 wykryje osierocone wpisy, duplikaty lub granty bez zgodnej historii audytowej,

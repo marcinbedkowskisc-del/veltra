@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_CONTEXT = "veltra-test-isolated"
 DAEMON_LABEL = "com.veltra.daemon-role=disposable-test"
 EXPECTED_SOCKET_NAME = "veltra-test-docker/docker.sock"
+TEST_DOCKER_CONFIG = Path.home() / ".config" / "veltra-test" / "docker"
 LOCK_PATH = Path.home() / ".cache" / "veltra" / "compose-test-clean.lock"
 FORBIDDEN_PROJECTS = {"veltra", "veltra-stage6a1"}
 REQUIRED_ENV_KEYS = {
@@ -279,6 +280,15 @@ def validate_compose_config(config: dict[str, Any], target: Target) -> None:
         ):
             raise SafetyError(f"Application service can target a non-test database: {service_name}")
 
+    if target.project == "veltra-test-application":
+        for service_name in ("backend-test", "migrate-test"):
+            environment = services[service_name].get("environment", {})
+            if (
+                environment.get("TEST_REDIS_HOST") != "redis"
+                or str(environment.get("TEST_REDIS_PORT")) != "6379"
+            ):
+                raise SafetyError(f"Application service can target a non-test Redis endpoint: {service_name}")
+
     rendered = json.dumps(config, sort_keys=True)
     forbidden_values = (
         "veltra_postgres-data",
@@ -292,14 +302,15 @@ def validate_compose_config(config: dict[str, Any], target: Target) -> None:
 
 
 def assert_test_context(
-    current: str | None,
+    context_name: str | None,
     endpoint: str | None,
     labels: list[str],
+    security_options: list[str],
     runtime_dir: str | None,
     data_root: str | None,
 ) -> None:
-    if current != TEST_CONTEXT:
-        raise SafetyError(f"Active Docker context must be {TEST_CONTEXT}.")
+    if context_name != TEST_CONTEXT:
+        raise SafetyError(f"Docker context must be explicitly selected as {TEST_CONTEXT}.")
     if not runtime_dir:
         raise SafetyError("XDG_RUNTIME_DIR is required for the isolated rootless daemon.")
     expected_endpoint = f"unix://{runtime_dir.rstrip('/')}/{EXPECTED_SOCKET_NAME}"
@@ -307,6 +318,11 @@ def assert_test_context(
         raise SafetyError("Test context endpoint does not match the dedicated rootless daemon socket.")
     if DAEMON_LABEL not in labels:
         raise SafetyError("Docker daemon is missing the disposable-test identity label.")
+    if not any(
+        isinstance(option, str) and "name=rootless" in option.lower().split(",")
+        for option in security_options
+    ):
+        raise SafetyError("Docker context is not connected to a rootless daemon.")
     expected_root = (Path.home() / ".local" / "share" / "veltra-test-docker").resolve()
     if not data_root or Path(data_root).resolve() != expected_root:
         raise SafetyError("Docker data root does not match the dedicated disposable-test directory.")
@@ -357,20 +373,36 @@ def verify_container(
 
 
 def sanitized_env() -> dict[str, str]:
-    allowed = {"PATH", "HOME", "DOCKER_CONFIG", "XDG_RUNTIME_DIR", "LANG", "LC_ALL"}
+    allowed = {"PATH", "HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL"}
     return {key: value for key, value in os.environ.items() if key in allowed}
 
 
+def verify_test_docker_config() -> None:
+    config_root = TEST_DOCKER_CONFIG.parents[1]
+    for path in (config_root, config_root / "veltra-test", TEST_DOCKER_CONFIG):
+        try:
+            path_stat = path.lstat()
+        except OSError as exc:
+            raise SafetyError("Private TEST Docker CLI configuration is missing.") from exc
+        if not stat.S_ISDIR(path_stat.st_mode) or path_stat.st_uid != os.getuid() or path.is_symlink():
+            raise SafetyError("TEST Docker CLI configuration path is not a user-owned directory.")
+    if path_stat.st_mode & 0o077:
+        raise SafetyError("TEST Docker CLI configuration must be private to the current user.")
+
+
 def docker_runner(context: str | None) -> Callable[[list[str]], str]:
+    verify_test_docker_config()
     base = ["docker"]
     if context:
         base += ["--context", context]
 
     def run(args: list[str]) -> str:
+        environment = sanitized_env()
+        environment["DOCKER_CONFIG"] = str(TEST_DOCKER_CONFIG)
         result = subprocess.run(
             base + args,
             cwd=ROOT,
-            env=sanitized_env(),
+            env=environment,
             capture_output=True,
             text=True,
             check=False,
@@ -407,23 +439,41 @@ def render_and_validate(run: Callable[[list[str]], str], env_file: Path, target:
     return config
 
 
-def verify_test_context(
-    run_current: Callable[[list[str]], str],
-    run_test: Callable[[list[str]], str],
-) -> None:
+def verify_test_context(run_test: Callable[[list[str]], str]) -> None:
     try:
-        current = run_current(["context", "show"]).strip()
-        context_data = json.loads(run_current(["context", "inspect", TEST_CONTEXT]))
+        context_data = json.loads(run_test(["context", "inspect", TEST_CONTEXT]))
         if not isinstance(context_data, list) or not context_data:
             raise SafetyError("Isolated Docker context is missing.")
         endpoint = context_data[0].get("Endpoints", {}).get("docker", {}).get("Host")
         labels_output = run_test(["info", "--format", "{{json .Labels}}"])
         labels = json.loads(labels_output)
+        security_output = run_test(["info", "--format", "{{json .SecurityOptions}}"])
+        security_options = json.loads(security_output)
         data_root = run_test(["info", "--format", "{{.DockerRootDir}}"]).strip()
-        if not isinstance(labels, list):
-            raise SafetyError("Docker daemon labels are unavailable.")
-        assert_test_context(current, endpoint, labels, os.environ.get("XDG_RUNTIME_DIR"), data_root)
-    except (OSError, json.JSONDecodeError, KeyError, IndexError) as exc:
+        if not isinstance(labels, list) or not isinstance(security_options, list):
+            raise SafetyError("Docker daemon labels or security options are unavailable.")
+        assert_test_context(
+            TEST_CONTEXT,
+            endpoint,
+            labels,
+            security_options,
+            os.environ.get("XDG_RUNTIME_DIR"),
+            data_root,
+        )
+        for resource_type, list_command in (
+            ("containers", ["ps", "-aq"]),
+            ("networks", ["network", "ls", "-q"]),
+            ("volumes", ["volume", "ls", "-q"]),
+        ):
+            for project in ("veltra", "veltra-stage6a1"):
+                resources = run_test(
+                    list_command + ["--filter", f"label=com.docker.compose.project={project}"]
+                )
+                if resources.strip():
+                    raise SafetyError(
+                        f"Isolated daemon exposes {resource_type} owned by protected project {project}."
+                    )
+    except (OSError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
         raise SafetyError("Unable to verify the isolated test Docker context.") from exc
 
 
@@ -437,7 +487,9 @@ def verify_resources(
 
     container_ids = [
         line
-        for line in run(["ps", "-aq", "--filter", f"label=com.docker.compose.project={target.project}"]).splitlines()
+        for line in run(
+            ["ps", "-aq", "--no-trunc", "--filter", f"label=com.docker.compose.project={target.project}"]
+        ).splitlines()
         if line
     ]
     for container_id in container_ids:
@@ -478,7 +530,7 @@ def verify_resources(
             raise SafetyError("A project volume is unknown or has ambiguous ownership.")
         attached_ids = [
             line
-            for line in run(["ps", "-aq", "--filter", f"volume={volume_name}"]).splitlines()
+            for line in run(["ps", "-aq", "--no-trunc", "--filter", f"volume={volume_name}"]).splitlines()
             if line
         ]
         if not set(attached_ids).issubset(set(container_ids)):
@@ -518,7 +570,7 @@ def execute_cleanup(target: Target, env_file: Path, confirm_project: str | None,
     lock_fd = acquire_lock()
     try:
         run = docker_runner(TEST_CONTEXT)
-        verify_test_context(docker_runner(None), run)
+        verify_test_context(run)
         config = render_and_validate(run, env_file, target)
         containers, networks, volumes = verify_resources(run, config, target)
         print(
@@ -557,6 +609,13 @@ def validate_only(target: Target, env_file: Path) -> int:
     return 0
 
 
+def verify_context_only(target: Target, env_file: Path) -> int:
+    render_and_validate(docker_runner(None), env_file, target)
+    verify_test_context(docker_runner(TEST_CONTEXT))
+    print(f"Verified Docker context {TEST_CONTEXT} for {target.project}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fail-closed cleanup for isolated VELTRA test projects.")
     parser.add_argument("--target", choices=sorted(TARGETS), required=True)
@@ -564,12 +623,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute", action="store_true", help="Actually remove verified containers and network.")
     parser.add_argument("--confirm-project")
     parser.add_argument("--validate-only", action="store_true", help="Render and validate configuration without contacting Docker.")
+    parser.add_argument("--verify-context", action="store_true", help="Verify the isolated daemon without changing the active context.")
     args = parser.parse_args(argv)
     try:
         env_file = validate_env_file(args.env_file)
-        if args.validate_only:
+        if args.validate_only and args.verify_context:
+            raise SafetyError("--validate-only and --verify-context cannot be combined.")
+        if args.validate_only or args.verify_context:
             if args.execute:
-                raise SafetyError("--validate-only cannot be combined with --execute.")
+                raise SafetyError("Validation options cannot be combined with --execute.")
+            if args.verify_context:
+                return verify_context_only(TARGETS[args.target], env_file)
             return validate_only(TARGETS[args.target], env_file)
         return execute_cleanup(TARGETS[args.target], env_file, args.confirm_project, args.execute)
     except (OSError, SafetyError, json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError) as exc:

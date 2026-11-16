@@ -655,7 +655,7 @@ Walidator zadania sprawdza jedynie cele i wskazane uprawnienia; nie stanowi
 autoryzacji. Kontrolowany, zatwierdzony proces instalacji lub aktualizacji jest
 zaufana granica administracyjna: kazdy, kto nim zarzadza, ma uprzywilejowana
 wladze wdrozeniowa. Sam manifest ani sesja aplikacji nie sa zatwierdzeniem.
-Rejestr zawiera wylacznie manifest `stage6a1-raw-administrator` w wersji 1:
+Rejestr zawiera manifest `stage6a1-raw-administrator` w wersji 1:
 organizacyjne `RAW_MATERIALS_VIEW` i `RAW_MATERIALS_CREATE` dla wskazanego
 administratora i instalacji Stage 6A.1. Wskazana kuchnia jest kontekstem
 kwalifikacji, a nie ograniczeniem organizacyjnego zasiegu grantu. Rejestr i hash
@@ -668,6 +668,33 @@ jawnego `--approve-release` z dokładnym skrótem wydania i instalacji. Opcja
 użytkownika, lokalizacji ani uprawnień jako argumentów. Powtórzenie nie
 przywraca cofniętych grantów. Dostępność RAW i aktywacja lokalizacji pozostają
 oddzielnymi bramkami, a globalny status RAW pozostaje `NOT_READY`.
+
+Wersja 2 tego samego manifestu jest jednorazowym, jawnym odzyskaniem
+uprawnień dla wskazanego pierwotnego administratora tej samej instalacji.
+Obejmuje `RAW_MATERIALS_EDIT`, `RAW_MATERIALS_CATEGORY_MANAGE`,
+`RAW_MATERIALS_REFERENCE_PRICE_VIEW`, `RAW_MATERIALS_REFERENCE_PRICE_MANAGE`,
+`RAW_MATERIALS_ALLERGEN_MANAGE`, `RAW_MATERIALS_SUBMIT` i
+`RAW_MATERIALS_APPROVE`. Nie nadaje delegacji ani nie zmienia `FOODCOST_VIEW`.
+Pierwsze wykonanie jest odrzucane, gdy istnieje odrębny aktywny, zweryfikowany
+administrator z aktywnym członkostwem i efektywnym niedelegowanym prawem
+delegacji RAW. Ponowienie potwierdza istniejącą operację bez przywracania
+cofniętych grantów. Dalsze zmiany podlegają zwykłym zasadom RBAC.
+
+Po odrębnym zatwierdzeniu i wdrożeniu właściwej wersji kodu operator procesu
+migracyjnego wybiera wersję 2, sprawdza cel, listę uprawnień i skrót, a następnie
+podaje dokładny wyświetlony skrót jako `--approve-release`. Oba polecenia należy
+wykonać z katalogu repozytorium i ze wskazaniem istniejącego pliku środowiska
+Stage, bez ujawniania jego zawartości:
+
+```bash
+docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --version=2 --show-release
+docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --version=2 --approve-release=SKROT_Z_POPRZEDNIEGO_POLECENIA
+```
+
+W audycie aktorem jest proces systemowy i rola sesji migracyjnej, nie
+uwierzytelniony użytkownik aplikacji; rejestrowane są cel, zakres, lista praw,
+przyczyna i czas. Skrót wybiera dokładne wydanie i instalację, ale nie jest
+samodzielnym poświadczeniem właściciela.
 
 Komenda tworzy potrzebna poczatkowa kuchnie/przypisanie i oczekujaca role
 ADMINISTRATOR. Nie wypisuje hasla ani linku. Otworz Mailpit lokalnie i uzyj

@@ -5,19 +5,24 @@ namespace Tests\Feature;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Authorization\SystemPermissionManifest;
+use App\Domain\Authorization\SystemPermissionManifestRegistry;
 use App\Domain\Authorization\SystemPermissionProvisioningException;
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
 use App\Models\Location;
+use App\Models\LocationModuleState;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
+use Tests\Support\ModuleCatalogFixtures;
 use Tests\Support\SystemPermissionProvisioningFixture;
 
 class SystemPermissionProvisionerTest extends AuthorizationTestCase
@@ -183,6 +188,131 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
         $this->assertTrue(app(RawMaterialAuthorization::class)->hasEffectiveGrant($this->administrator, RawMaterialPermission::Create));
     }
 
+    public function test_recovery_grants_only_the_pinned_acceptance_permissions_and_is_not_replayed(): void
+    {
+        $steward = $this->user('recovery-steward@example.test');
+        app(MembershipService::class)->assign($steward, $this->primary, $this->administrator->id);
+        app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $this->administrator->id, $steward->id,
+            [RawMaterialPermission::PermissionDelegate->value], 'Opiekun testowy', self::PASSWORD,
+        );
+        $this->executeApproved($this->manifest());
+        $manifest = $this->recoveryManifest();
+        $operation = $this->executeApproved($manifest);
+
+        $expected = array_map(fn (RawMaterialPermission $permission) => $permission->value, $manifest->permissions);
+        sort($expected);
+        $grants = DB::table('organization_permission_grants')->where('system_provisioning_operation_id', $operation)
+            ->orderBy('permission')->pluck('permission')->all();
+        $this->assertSame($expected, $grants);
+        $this->assertFalse(app(RawMaterialAuthorization::class)
+            ->hasEffectiveGrant($this->administrator, RawMaterialPermission::PermissionDelegate));
+        $audit = DB::table('raw_material_audit_events')->where('operation_id', $operation)
+            ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'ACCEPTED')->sole();
+        $metadata = json_decode($audit->metadata, true, flags: JSON_THROW_ON_ERROR);
+        $this->assertNull($audit->actor_user_id);
+        $this->assertSame('SYSTEM_PROVISIONER', $metadata['actor_type']);
+        $this->assertSame('veltra_migrator', $metadata['actor_database_role']);
+        $this->assertNotEmpty($metadata['reason']);
+        $this->assertSame('ORGANIZATION', $metadata['grant_scope']);
+        $this->assertSame($this->administrator->id, $metadata['recipient_user_id']);
+        $this->assertSame($this->primary->id, $metadata['location_id']);
+        $this->assertEqualsCanonicalizing($expected, $metadata['permissions']);
+        $this->assertNotNull($audit->occurred_at);
+
+        $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->administrator->organization_id, 'location_id' => $this->primary->id,
+            'module_key' => 'RAW_MATERIALS', 'enabled' => true,
+            'created_by' => $this->administrator->id, 'updated_by' => $this->administrator->id,
+        ]);
+        $this->actingAs($this->administrator, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->primary->id,
+        ])->assertOk();
+        $this->getJson('/api/v1/security/raw-materials/capabilities')->assertOk()
+            ->assertJsonPath('data.actions.edit', true)
+            ->assertJsonPath('data.actions.manage_categories', true)
+            ->assertJsonPath('data.actions.view_reference_price', true)
+            ->assertJsonPath('data.actions.manage_reference_price', true)
+            ->assertJsonPath('data.actions.view_usable_cost', true)
+            ->assertJsonPath('data.actions.create_and_approve', true);
+        $input = [
+            'base_unit_code' => 'g', 'nominal_quantity' => '2800', 'usable_quantity' => '1500',
+            'pricing' => ['basis' => 'PACKAGE', 'amount' => '28'],
+        ];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)->assertOk()
+            ->assertJsonPath('data.net_pln_per_package', '28.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '1.86666666666667');
+        $input['pricing'] = ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg'];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)->assertOk()
+            ->assertJsonPath('data.net_pln_per_package', '28.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '1.86666666666667');
+
+        $grantId = DB::table('organization_permission_grants')->where('system_provisioning_operation_id', $operation)
+            ->where('permission', RawMaterialPermission::Edit->value)->value('id');
+        $this->asMigrator(fn () => DB::table('organization_permission_grant_events')->insert([
+            'id' => (string) Str::uuid(), 'organization_id' => $manifest->organizationId,
+            'grant_id' => $grantId, 'event_type' => 'REVOKED', 'actor_user_id' => $this->administrator->id,
+            'reason_code' => 'FIXTURE',
+        ]));
+        $this->role($steward, BusinessRole::Administrator);
+        $this->assertSame($operation, $this->executeApproved($manifest));
+        $this->assertFalse(app(RawMaterialAuthorization::class)
+            ->hasEffectiveGrant($this->administrator, RawMaterialPermission::Edit));
+        $this->assertSame(1, DB::table('raw_material_audit_events')->where('operation_id', $operation)->count());
+    }
+
+    public function test_recovery_does_not_treat_the_recipient_as_a_delegating_administrator(): void
+    {
+        $this->executeApproved($this->manifest(permissions: [RawMaterialPermission::PermissionDelegate]));
+        $operation = $this->executeApproved($this->recoveryManifest());
+
+        $this->assertSame(7, DB::table('organization_permission_grants')
+            ->where('system_provisioning_operation_id', $operation)->count());
+    }
+
+    public function test_recovery_refuses_an_eligible_delegating_administrator(): void
+    {
+        $other = $this->user('other-delegating-admin@example.test');
+        app(MembershipService::class)->assign($other, $this->primary, $this->administrator->id);
+        $this->role($other, BusinessRole::Administrator);
+        app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $this->administrator->id, $other->id,
+            [RawMaterialPermission::PermissionDelegate->value], 'Delegacja testowa', self::PASSWORD,
+        );
+
+        try {
+            $this->executeApproved($this->recoveryManifest());
+            $this->fail('Recovery must not bypass an eligible delegating administrator.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')
+                ->where('grant_origin', 'SYSTEM_PROVISIONING')->count());
+            $this->assertSame(1, DB::table('raw_material_audit_events')
+                ->where('event_code', 'SYSTEM_PERMISSION_PROVISIONING')->where('outcome', 'REJECTED')->count());
+        }
+    }
+
+    public function test_registered_recovery_manifest_is_bound_to_the_original_stage_target(): void
+    {
+        $registry = new SystemPermissionManifestRegistry;
+        $original = $registry->find('stage6a1-raw-administrator', 1);
+        $recovery = $registry->find('stage6a1-raw-administrator', 2);
+        $this->assertNotNull($original);
+        $this->assertNotNull($recovery);
+        $this->assertSame('RECOVERY', $recovery->applicability);
+        $this->assertSame($original->databaseName, $recovery->databaseName);
+        $this->assertSame($original->organizationId, $recovery->organizationId);
+        $this->assertSame($original->administratorId, $recovery->administratorId);
+        $this->assertSame($original->locationId, $recovery->locationId);
+        $this->assertSame([
+            RawMaterialPermission::Edit, RawMaterialPermission::CategoryManage,
+            RawMaterialPermission::ReferencePriceView, RawMaterialPermission::ReferencePriceManage,
+            RawMaterialPermission::AllergenManage, RawMaterialPermission::Submit, RawMaterialPermission::Approve,
+        ], $recovery->permissions);
+        $this->assertNull($registry->find('stage6a1-raw-administrator', 3));
+        $this->assertNull($registry->find('other', 2));
+    }
+
     public function test_wrong_administrator_and_invalid_permissions_are_rejected(): void
     {
         $other = $this->user('not-administrator@example.test');
@@ -328,6 +458,19 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
             eligibleRole: BusinessRole::Administrator, grantScope: 'ORGANIZATION', applicability: 'UPGRADE',
             databaseName: $database, organizationId: $this->administrator->organization_id,
             administratorId: $administrator ?? $this->administrator->id, locationId: $this->primary->id,
+        );
+    }
+
+    private function recoveryManifest(): SystemPermissionManifest
+    {
+        $base = $this->manifest();
+
+        return new SystemPermissionManifest(
+            id: $base->id, version: 2, module: $base->module,
+            permissions: SystemPermissionManifest::stage6a1RawAcceptanceRecovery()->permissions,
+            eligibleRole: $base->eligibleRole, grantScope: $base->grantScope, applicability: 'RECOVERY',
+            databaseName: $base->databaseName, organizationId: $base->organizationId,
+            administratorId: $base->administratorId, locationId: $base->locationId,
         );
     }
 

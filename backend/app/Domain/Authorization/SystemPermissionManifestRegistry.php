@@ -6,8 +6,12 @@ class SystemPermissionManifestRegistry
 {
     public function find(string $id, int $version): ?SystemPermissionManifest
     {
-        $manifest = SystemPermissionManifest::stage6a1RawUpgrade();
+        $manifest = match ($version) {
+            1 => SystemPermissionManifest::stage6a1RawUpgrade(),
+            2 => SystemPermissionManifest::stage6a1RawAcceptanceRecovery(),
+            default => null,
+        };
 
-        return $manifest->id === $id && $manifest->version === $version ? $manifest : null;
+        return $manifest?->id === $id ? $manifest : null;
     }
 }

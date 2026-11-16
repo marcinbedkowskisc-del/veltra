@@ -2,11 +2,14 @@
 
 namespace App\Domain\Authorization;
 
+use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Domain\Installation\LocalStage6a1Instance;
+use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use App\Models\Organization;
+use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
@@ -86,6 +89,10 @@ final class SystemPermissionProvisioner
                     return $existing->id;
                 }
 
+                if ($manifest->applicability === 'RECOVERY') {
+                    $this->assertNoDelegatingAdministrator($organization, $administrator);
+                }
+
                 DB::table('system_permission_provisioning_operations')->insert([
                     'id' => $operationId,
                     'organization_id' => $organization->id,
@@ -155,7 +162,7 @@ final class SystemPermissionProvisioner
     private function permissions(SystemPermissionManifest $manifest): array
     {
         if ($manifest->module !== 'RAW_MATERIALS' || $manifest->eligibleRole !== BusinessRole::Administrator
-            || $manifest->grantScope !== 'ORGANIZATION' || ! in_array($manifest->applicability, ['INSTALLATION', 'UPGRADE'], true)
+            || $manifest->grantScope !== 'ORGANIZATION' || ! in_array($manifest->applicability, ['INSTALLATION', 'UPGRADE', 'RECOVERY'], true)
             || $manifest->permissions === []) {
             throw new SystemPermissionProvisioningException('Niedozwolony moduł, rola, zakres lub warunek manifestu.');
         }
@@ -171,6 +178,25 @@ final class SystemPermissionProvisioner
         }
 
         return $permissions;
+    }
+
+    private function assertNoDelegatingAdministrator(Organization $organization, User $recipient): void
+    {
+        $administratorIds = RoleAssignment::effective()->where('organization_id', $organization->id)
+            ->where('role', BusinessRole::Administrator)->whereNull('location_id')
+            ->where('user_id', '!=', $recipient->id)->pluck('user_id');
+        $authorization = app(RawMaterialAuthorization::class);
+        foreach (User::whereIn('id', $administratorIds)->where('organization_id', $organization->id)
+            ->where('is_active', true)->whereNotNull('email_verified_at')->get() as $administrator) {
+            if (! app(MembershipService::class)->available($administrator)->exists()) {
+                continue;
+            }
+            $ids = $authorization->effectiveGrantIds($administrator, RawMaterialPermission::PermissionDelegate);
+            if (DB::table('organization_permission_grants')->whereIn('id', $ids)
+                ->whereNull('delegation_source_id')->exists()) {
+                throw new SystemPermissionProvisioningException('Odmowa: istnieje administrator uprawniony do delegowania RAW.');
+            }
+        }
     }
 
     /** @param array{database_oid: string, server_address: string} $identity */
@@ -269,6 +295,11 @@ final class SystemPermissionProvisioner
                 'location_id' => $manifest->locationId,
                 'grant_scope' => $manifest->grantScope,
                 'permissions' => $this->permissions($manifest),
+                'actor_type' => 'SYSTEM_PROVISIONER',
+                'actor_database_role' => (string) DB::scalar('SELECT session_user'),
+                'reason' => $manifest->applicability === 'RECOVERY'
+                    ? 'Odzyskanie uprawnień administratora do odbioru RAW Stage.'
+                    : 'Jawne zatwierdzenie wydania uprawnień systemowych.',
                 ...$extra,
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES),
         ]);

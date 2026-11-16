@@ -40,6 +40,33 @@ final readonly class SystemPermissionManifest
         );
     }
 
+    public static function stage6a1RawAcceptanceRecovery(): self
+    {
+        $original = self::stage6a1RawUpgrade();
+
+        return new self(
+            id: $original->id,
+            version: 2,
+            module: $original->module,
+            permissions: [
+                RawMaterialPermission::Edit,
+                RawMaterialPermission::CategoryManage,
+                RawMaterialPermission::ReferencePriceView,
+                RawMaterialPermission::ReferencePriceManage,
+                RawMaterialPermission::AllergenManage,
+                RawMaterialPermission::Submit,
+                RawMaterialPermission::Approve,
+            ],
+            eligibleRole: $original->eligibleRole,
+            grantScope: $original->grantScope,
+            applicability: 'RECOVERY',
+            databaseName: $original->databaseName,
+            organizationId: $original->organizationId,
+            administratorId: $original->administratorId,
+            locationId: $original->locationId,
+        );
+    }
+
     public function matchesTarget(
         string $databaseName,
         string $organizationId,

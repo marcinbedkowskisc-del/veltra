@@ -94,3 +94,100 @@ At the end of a stage, or before continuing work in a fresh Copilot chat:
 In a new chat, read these instructions, the latest stage report, relevant approved specifications, and the actual working tree first. Historical chat memory is not a substitute for those sources.
 
 **Default final status until explicitly changed by owner: `RAW_MATERIALS = NOT_READY`; no deployment, commit, or push.**
+
+## Mandatory Git Commit Policy — VELTRA 2.0
+
+This policy applies to all GitHub Copilot development sessions and tasks within the VELTRA 2.0 repository.
+
+### 1. Before making changes
+
+- Always inspect `git status` and the current branch.
+- Identify existing staged and unstaged changes.
+- Preserve all unrelated changes made by the user or previous sessions.
+- Never assume that an uncommitted change belongs to the current task.
+
+### 2. Mandatory commits
+
+- Create a Git commit after every significant, logically complete and successfully validated change.
+- Prefer small, atomic commits over large commits containing unrelated modifications.
+- Run all relevant available tests and validation checks before committing.
+- Do not automatically commit failing or unverified changes.
+- If required tests cannot run, report the limitation and request approval before committing.
+- Do not create commits for trivial intermediate edits unless they form a meaningful checkpoint.
+
+### 3. Commit scope and naming
+
+- Stage only files directly related to the completed task.
+- Review the staged diff before committing.
+- Never use blanket staging commands such as `git add .` or `git add -A` when unrelated changes may be present.
+- Follow the Conventional Commits format.
+
+Examples:
+
+`feat(raw): implement material category management`
+
+`fix(raw): correct usable quantity cost calculation`
+
+`fix(infra): isolate Docker test environments`
+
+`test(raw): add pricing regression tests`
+
+`docs: update deployment instructions`
+
+### 4. Security and data protection
+
+Never commit:
+
+- `.env` files containing secrets
+- API keys, passwords or authentication tokens
+- Private keys or certificates
+- Database dumps or backups
+- Runtime data or Docker volumes
+- Temporary credentials or sensitive logs
+
+Inspect changes for accidentally exposed secrets before committing.
+
+Git commits do not replace PostgreSQL backups or infrastructure recovery procedures.
+
+### 5. Prohibited Git operations
+
+Without explicit owner authorization, never:
+
+- Force-push
+- Rewrite Git history
+- Delete branches or tags
+- Perform destructive resets
+- Discard uncommitted user changes
+- Amend existing commits
+- Automatically push commits to remote repositories
+
+Local commits are authorized under this policy. Remote pushes require separate authorization.
+
+### 6. Deployment requirements
+
+- Every deployment must reference an exact Git commit hash.
+- Never deploy uncommitted or unverified changes unless explicitly authorized.
+- A successful commit does not automatically authorize deployment.
+- Database migrations, infrastructure cleanup and destructive operations still require their own authorization and safety checks.
+- After a major module is fully tested and explicitly approved by the owner, propose a version tag.
+
+### 7. Completion reports
+
+After every significant task, report:
+
+- Summary of implemented changes
+- Files changed
+- Tests executed and results
+- Commit hash and message
+- Remaining issues or limitations
+- Whether any deployment was performed
+
+If no commit was created, explain why.
+
+### 8. Priority
+
+This policy is mandatory for VELTRA 2.0 development.
+
+It must not override existing security requirements, environment isolation rules, RBAC restrictions or explicit task-specific prohibitions.
+
+If a specific task explicitly forbids commits, follow that restriction and report the pending changes instead.

@@ -13,14 +13,14 @@ use Illuminate\Validation\ValidationException;
 
 class ProvisionStage6a1RawPermissions extends Command
 {
-    protected $signature = 'veltra:provision-stage6a1-raw-permissions {--version=1} {--show-release} {--approve-release=}';
+    protected $signature = 'veltra:provision-stage6a1-raw-permissions {--manifest-version=1} {--show-release} {--approve-release=}';
 
     protected $description = 'Jawny provisioning zatwierdzonego manifestu RAW dla izolowanej instalacji Stage 6A.1';
 
     public function handle(SystemPermissionProvisioner $provisioner, SystemPermissionManifestRegistry $registry): int
     {
         $id = 'stage6a1-raw-administrator';
-        $versionOption = $this->option('version');
+        $versionOption = $this->option('manifest-version');
         if (! is_string($versionOption) || ! in_array($versionOption, ['1', '2'], true)) {
             $this->error('Nieznana wersja manifestu.');
 

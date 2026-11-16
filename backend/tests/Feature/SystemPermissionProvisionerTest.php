@@ -313,6 +313,16 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
         $this->assertNull($registry->find('other', 2));
     }
 
+    public function test_command_selects_the_recovery_manifest_without_shadowing_the_framework_version_flag(): void
+    {
+        $this->artisan('veltra:provision-stage6a1-raw-permissions', [
+            '--manifest-version' => '2', '--show-release' => true,
+        ])->expectsOutputToContain('wersja: 2')->assertExitCode(1);
+        $this->artisan('veltra:provision-stage6a1-raw-permissions', [
+            '--manifest-version' => '3', '--show-release' => true,
+        ])->expectsOutput('Nieznana wersja manifestu.')->assertExitCode(1);
+    }
+
     public function test_wrong_administrator_and_invalid_permissions_are_rejected(): void
     {
         $other = $this->user('not-administrator@example.test');

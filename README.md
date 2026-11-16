@@ -687,8 +687,8 @@ wykonać z katalogu repozytorium i ze wskazaniem istniejącego pliku środowiska
 Stage, bez ujawniania jego zawartości:
 
 ```bash
-docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --version=2 --show-release
-docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --version=2 --approve-release=SKROT_Z_POPRZEDNIEGO_POLECENIA
+docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --manifest-version=2 --show-release
+docker compose -p veltra-stage6a1 --profile migrations --env-file /sciezka/do/stage.env -f compose.yaml -f compose.stage6a1.yaml run --rm --no-deps migrate php artisan veltra:provision-stage6a1-raw-permissions --manifest-version=2 --approve-release=SKROT_Z_POPRZEDNIEGO_POLECENIA
 ```
 
 W audycie aktorem jest proces systemowy i rola sesji migracyjnej, nie

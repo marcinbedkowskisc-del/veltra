@@ -65,7 +65,12 @@ final class RawMaterialCatalogValues
 
     public static function costExpression(): string
     {
-        return '('.self::packageExpression().' / NULLIF(revisions.usable_quantity, 0) * CASE revisions.base_unit_code
+        return self::usableCostExpression(self::packageExpression(), 'revisions.usable_quantity', 'revisions.base_unit_code');
+    }
+
+    public static function usableCostExpression(string $package, string $usable, string $baseUnit): string
+    {
+        return '('.$package.' / NULLIF('.$usable.', 0) * CASE '.$baseUnit.'
             WHEN \'mg\' THEN 100000 WHEN \'g\' THEN 100 WHEN \'kg\' THEN 0.1
             WHEN \'ml\' THEN 100 WHEN \'l\' THEN 0.1 WHEN \'pc\' THEN 1 END)';
     }

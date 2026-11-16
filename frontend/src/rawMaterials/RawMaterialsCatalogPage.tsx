@@ -932,6 +932,8 @@ export default function RawMaterialsCatalogPage({
           categories={categories}
           canManageAllergens={capabilities.actions.editAllergens === true}
           canManageReferencePrice={capabilities.actions.manageReferencePrice === true}
+          canViewReferencePrice={capabilities.actions.viewReferencePrice === true}
+          canViewUsableCost={capabilities.actions.viewUsableCost === true}
           canManageSuppliers={capabilities.actions.manageSuppliers === true}
           canCreateApproved={capabilities.actions.createAndApprove === true}
           operatingLocationId={createFormLocationId}

@@ -47,6 +47,17 @@ export type RawMaterialCreatePayload = {
   }>
 }
 
+export function withPricingUnit(
+  conversions: NonNullable<RawMaterialCreatePayload['conversions']>,
+  values: RawMaterialCreateValues,
+  includePricing: boolean,
+): NonNullable<RawMaterialCreatePayload['conversions']> {
+  if (!includePricing || !normalizeDecimalInput(values.pricingAmount) || values.pricingBasis !== 'NOMINAL_UNIT'
+    || values.pricingUnitCode === values.baseUnitCode
+    || conversions.some((conversion) => conversion.unit_code === values.pricingUnitCode)) return conversions
+  return [...conversions, { unit_code: values.pricingUnitCode }]
+}
+
 export const UNIT_DIMENSIONS: Record<RawMaterialUnit, 'MASS' | 'VOLUME' | 'COUNT'> = {
   mg: 'MASS',
   g: 'MASS',
@@ -279,11 +290,12 @@ export function validateRawMaterialCreate(
 export function buildRawMaterialCreatePayload(
   values: RawMaterialCreateValues,
   includeSupplierIds = false,
+  includePricing = true,
 ): RawMaterialCreatePayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
   const aliases = values.aliases.map((alias) => alias.trim()).filter(Boolean)
-  const conversions = values.conversions.map((conversion) => {
+  const conversions = withPricingUnit(values.conversions.map((conversion) => {
     const unitCode = conversion.unitCode as RawMaterialUnit
     if (UNIT_DIMENSIONS[unitCode] === UNIT_DIMENSIONS[values.baseUnitCode]) {
       return { unit_code: unitCode }
@@ -293,7 +305,7 @@ export function buildRawMaterialCreatePayload(
       to_base_factor: normalizeDecimalInput(conversion.toBaseFactor),
       basis: conversion.basis.trim(),
     }
-  })
+  }), values, includePricing)
 
   return {
     category_id: values.categoryId,
@@ -302,7 +314,7 @@ export function buildRawMaterialCreatePayload(
     base_unit_code: values.baseUnitCode,
     ...(nominal ? { nominal_quantity: nominal } : {}),
     ...(values.usableQuantityExplicit && usable ? { usable_quantity: usable } : {}),
-    ...(normalizeDecimalInput(values.pricingAmount) ? {
+    ...(includePricing && normalizeDecimalInput(values.pricingAmount) ? {
       pricing: {
         basis: values.pricingBasis,
         amount: normalizeDecimalInput(values.pricingAmount),

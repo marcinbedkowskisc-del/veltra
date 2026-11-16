@@ -123,7 +123,7 @@ describe('fetchRawMaterialCapabilities', () => {
         },
         actions: {
           create: true, edit: true, manage_categories: true, edit_allergens: true, create_and_approve: true,
-          view_reference_price: false, manage_reference_price: false, manage_suppliers: false,
+          view_reference_price: false, view_usable_cost: true, manage_reference_price: false, manage_suppliers: false,
         },
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
@@ -139,7 +139,7 @@ describe('fetchRawMaterialCapabilities', () => {
       },
       actions: {
         create: true, edit: true, manageCategories: true, editAllergens: true, createAndApprove: true,
-        viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
+        viewReferencePrice: false, viewUsableCost: true, manageReferencePrice: false, manageSuppliers: false,
       },
     })
     expect(fetchMock).toHaveBeenCalledWith(

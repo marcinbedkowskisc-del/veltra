@@ -146,6 +146,92 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertForbidden();
     }
 
+    public function test_pricing_preview_uses_authoritative_normalization_and_cost_rules(): void
+    {
+        $this->prepareReadyModule();
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->selectContext($this->steward, $this->location);
+        $this->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()->assertJsonPath('data.actions.manage_reference_price', true)
+            ->assertJsonPath('data.actions.view_usable_cost', true);
+
+        $input = [
+            'base_unit_code' => 'g', 'nominal_quantity' => '2800', 'usable_quantity' => '1500',
+            'pricing' => ['basis' => 'PACKAGE', 'amount' => '28'],
+        ];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)
+            ->assertOk()
+            ->assertJsonPath('data.net_pln_per_package', '28.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '1.86666666666667')
+            ->assertJsonPath('data.usable_cost_basis', 'PLN/100g')
+            ->assertHeader('Cache-Control', 'no-store, private');
+        $input['pricing'] = ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg'];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)
+            ->assertOk()->assertJsonPath('data.net_pln_per_package', '28.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '1.86666666666667');
+
+        $input = [
+            'base_unit_code' => 'ml', 'nominal_quantity' => '2000',
+            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'l'],
+        ];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)
+            ->assertOk()->assertJsonPath('data.net_pln_per_package', '20.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '1.00000000000000')
+            ->assertJsonPath('data.usable_cost_basis', 'PLN/100ml');
+        $input = [
+            'base_unit_code' => 'pc', 'nominal_quantity' => '10', 'usable_quantity' => '8',
+            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '2', 'unit_code' => 'pc'],
+        ];
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)
+            ->assertOk()->assertJsonPath('data.net_pln_per_package', '20.00000000000000')
+            ->assertJsonPath('data.usable_unit_cost', '2.50000000000000')
+            ->assertJsonPath('data.usable_cost_basis', 'PLN/pc');
+        $input['pricing']['amount'] = '0';
+        $this->postJson('/api/v1/raw-materials/pricing-preview', $input)
+            ->assertOk()->assertJsonPath('data.usable_unit_cost', '0.00000000000000');
+        foreach ([
+            ['nominal_quantity' => '0'],
+            ['usable_quantity' => '-1'],
+            ['usable_quantity' => '11'],
+            ['pricing' => ['basis' => 'PACKAGE', 'amount' => '-1']],
+            ['pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => 'abc', 'unit_code' => 'pc']],
+            ['pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '1', 'unit_code' => 'kg']],
+        ] as $invalid) {
+            $this->postJson('/api/v1/raw-materials/pricing-preview', array_replace($input, $invalid))
+                ->assertUnprocessable();
+        }
+    }
+
+    public function test_pricing_preview_rejects_non_administrator_with_manage_grant(): void
+    {
+        $this->prepareReadyModule();
+        $this->selectContext($this->steward, $this->location);
+        $this->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()->assertJsonPath('data.permissions.manage_reference_price', true)
+            ->assertJsonPath('data.actions.manage_reference_price', false);
+        $this->postJson('/api/v1/raw-materials/pricing-preview', [
+            'base_unit_code' => 'g', 'nominal_quantity' => '100',
+            'pricing' => ['basis' => 'PACKAGE', 'amount' => '10'],
+        ])->assertForbidden();
+    }
+
+    public function test_pricing_preview_does_not_expose_financial_data_without_reference_price_view(): void
+    {
+        $this->prepareReadyModule();
+        $recipient = $this->newRecipient('pricing-preview-view-only@example.test');
+        $this->role($this->steward, BusinessRole::Administrator);
+        $this->role($recipient, BusinessRole::Administrator);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward, $this->location, $recipient, RawMaterialPermission::View, 'Odczyt katalogu w teście',
+        );
+        $this->selectContext($recipient, $this->location);
+        $this->postJson('/api/v1/raw-materials/pricing-preview', [
+            'base_unit_code' => 'g', 'nominal_quantity' => '100',
+            'pricing' => ['basis' => 'PACKAGE', 'amount' => '10'],
+        ])->assertForbidden()->assertJsonMissingPath('data.net_pln_per_package')
+            ->assertJsonMissingPath('data.usable_unit_cost');
+    }
+
     public function test_ready_module_readiness_is_separate_from_location_availability(): void
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());

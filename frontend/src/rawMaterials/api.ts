@@ -51,6 +51,7 @@ export type RawMaterialCapabilities = {
     editAllergens?: boolean
     createAndApprove?: boolean
     viewReferencePrice?: boolean
+    viewUsableCost?: boolean
     manageReferencePrice?: boolean
     manageSuppliers?: boolean
   }
@@ -192,6 +193,7 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
       manageCategories: value.actions.manage_categories === true,
       editAllergens: value.actions.edit_allergens, createAndApprove: value.actions.create_and_approve,
       viewReferencePrice: value.actions.view_reference_price === true,
+      viewUsableCost: value.actions.view_usable_cost === true,
       manageReferencePrice: value.actions.manage_reference_price === true,
       manageSuppliers: value.actions.manage_suppliers === true },
   }
@@ -508,6 +510,37 @@ export async function fetchAllergenDeclaration(id: string, signal?: AbortSignal)
 
 export async function fetchCategories(signal?: AbortSignal): Promise<CategoryOption[]> {
   return parseCategories(await request(`${RAW_API}/categories`, 'GET', undefined, { signal }))
+}
+
+export type PricingPreview = {
+  netPlnPerPackage: string
+  usableUnitCost?: string
+  usableCostBasis?: 'PLN/100g' | 'PLN/100ml' | 'PLN/pc'
+}
+
+export async function previewRawMaterialPricing(
+  payload: {
+    base_unit_code: RawMaterialUnit
+    nominal_quantity: string
+    usable_quantity?: string
+    pricing: { basis: RawMaterialPricingBasis; amount: string; unit_code?: RawMaterialPricingUnit }
+  },
+  signal?: AbortSignal,
+): Promise<PricingPreview> {
+  const value = await request(`${RAW_API}/pricing-preview`, 'POST', payload, { signal })
+  if (!isRecord(value) || typeof value.net_pln_per_package !== 'string' || !DECIMAL.test(value.net_pln_per_package)
+    || (value.usable_unit_cost !== undefined && (typeof value.usable_unit_cost !== 'string'
+      || !DECIMAL.test(value.usable_unit_cost)
+      || !['PLN/100g', 'PLN/100ml', 'PLN/pc'].includes(String(value.usable_cost_basis))))
+    || (value.usable_unit_cost === undefined && value.usable_cost_basis !== undefined)) {
+    throw new Error('Backend zwrócił nieprawidłowy podgląd ceny.')
+  }
+  return {
+    netPlnPerPackage: value.net_pln_per_package,
+    ...(typeof value.usable_unit_cost === 'string'
+      && (value.usable_cost_basis === 'PLN/100g' || value.usable_cost_basis === 'PLN/100ml' || value.usable_cost_basis === 'PLN/pc')
+      ? { usableUnitCost: value.usable_unit_cost, usableCostBasis: value.usable_cost_basis } : {}),
+  }
 }
 
 export async function createCategory(

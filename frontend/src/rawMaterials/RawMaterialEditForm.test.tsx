@@ -9,6 +9,7 @@ import {
   fetchRawMaterialEditor,
   fetchAllergenDeclaration,
   fetchAllergenCatalogs,
+  previewRawMaterialPricing,
   reviseRawMaterial,
   type RawMaterialCapabilities,
   type RawMaterialCompletion,
@@ -23,6 +24,7 @@ vi.mock('./api', async (importOriginal) => ({
   fetchRawMaterialEditor: vi.fn(),
   fetchAllergenDeclaration: vi.fn(),
   fetchAllergenCatalogs: vi.fn(),
+  previewRawMaterialPricing: vi.fn(),
   reviseRawMaterial: vi.fn(),
 }))
 
@@ -98,10 +100,14 @@ function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialEd
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   capabilitiesMock.mockResolvedValue(makeCapabilities())
   completionMock.mockResolvedValue(makeCompletion())
   editorMock.mockResolvedValue(makeEditor())
   reviseMock.mockResolvedValue(makeSaved())
+  vi.mocked(previewRawMaterialPricing).mockResolvedValue({
+    netPlnPerPackage: '20.00000000000000', usableUnitCost: '0.25000000000000', usableCostBasis: 'PLN/100g',
+  })
 })
 
 afterEach(() => {
@@ -110,6 +116,38 @@ afterEach(() => {
 })
 
 describe('formularz edycji surowca', () => {
+  it('pokazuje cenę tylko z prawem odczytu i blokuje jej edycję bez prawa zapisu', async () => {
+    const editor = makeEditor()
+    editor.values.pricingAmount = '20'
+    editorMock.mockResolvedValue(editor)
+    capabilitiesMock.mockResolvedValue({
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: false },
+    })
+    renderForm()
+    expect(await screen.findByLabelText<HTMLInputElement>('Średnia cena netto opakowania (PLN)')).toHaveProperty('disabled', true)
+    expect(screen.queryByText(/Koszt użytkowy:/)).toBeNull()
+    fireEvent.change(screen.getByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('pricing')
+  })
+
+  it('nie wysyła zmienionej ceny po cofnięciu grantu w trakcie edycji', async () => {
+    const authorized = {
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true, viewUsableCost: true },
+    }
+    capabilitiesMock.mockResolvedValueOnce(authorized).mockResolvedValue({
+      ...authorized, actions: { ...authorized.actions, manageReferencePrice: false },
+    })
+    renderForm()
+    fireEvent.change(await screen.findByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '30' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    expect(await screen.findByText(/Uprawnienie lub wersja edytora zmieniły się/)).toBeTruthy()
+    expect(reviseMock).not.toHaveBeenCalled()
+  })
+
   it('zachowuje dane zakładek i zapisuje zmienione alergeny razem z rewizją', async () => {
     const catalogId = '00000000-0000-4000-8000-000000000406'
     completionMock.mockResolvedValue({ ...makeCompletion(), availableActions: ['edit', 'edit_allergens'] })

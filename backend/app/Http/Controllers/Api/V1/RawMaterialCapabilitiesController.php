@@ -7,6 +7,7 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialCatalogValues;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use Illuminate\Http\JsonResponse;
@@ -35,6 +36,7 @@ final class RawMaterialCapabilitiesController
         $allergenManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
         $referencePriceManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceManage);
         $referencePriceView = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView);
+        $usableCostView = app(RawMaterialCatalogValues::class)->canReadCost($actor, $location);
         $supplierManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
             && $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierView);
         $createApproved = app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Administrator)
@@ -64,7 +66,10 @@ final class RawMaterialCapabilitiesController
                     'edit_allergens' => $allergenManage && $editCapability['context'] && $moduleAvailable,
                     'create_and_approve' => $createApproved,
                     'view_reference_price' => $referencePriceView && $moduleAvailable,
-                    'manage_reference_price' => $referencePriceManage && $moduleAvailable,
+                    'view_usable_cost' => $usableCostView && $moduleAvailable,
+                    'manage_reference_price' => $referencePriceManage && $moduleAvailable
+                        && $editCapability['context']
+                        && app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Administrator),
                     'manage_suppliers' => $supplierManage && $moduleAvailable,
                 ],
             ],

@@ -227,6 +227,44 @@ final class RawMaterialPricingService
         );
     }
 
+    public function preview(User $actor, Location $context, array $input): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::ReferencePriceView);
+        $quantities = RawMaterialCatalogValues::quantities($input);
+        $unitCode = $input['pricing']['unit_code'] ?? null;
+        $conversions = $unitCode !== null && $unitCode !== $input['base_unit_code']
+            ? [['unit_code' => $unitCode]] : [];
+        $units = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $conversions);
+        $prepared = $this->prepareRevisionInput($actor, $context, $input, $units, null);
+        $unit = collect($units['units'])->firstWhere('unit_code', $unitCode);
+        $values = $this->calculateWithFactor(
+            $prepared['pricing_input_basis'],
+            $prepared['pricing_input_amount'],
+            $prepared['pricing_input_unit_code'],
+            $quantities['nominal_quantity'],
+            $input['base_unit_code'],
+            $unit['to_base_factor'] ?? null,
+        );
+        $result = ['net_pln_per_package' => $values['net_pln_per_package']];
+        if (app(RawMaterialCatalogValues::class)->canReadCost($actor, $context)) {
+            $expression = RawMaterialCatalogValues::usableCostExpression(
+                'CAST(? AS numeric)', 'CAST(? AS numeric)', 'CAST(? AS text)',
+            );
+            $result['usable_unit_cost'] = (string) DB::scalar(
+                'SELECT raw_materials_round_half_even_v1('.$expression.', 14)::text',
+                [$values['net_pln_per_package'], $quantities['usable_quantity'], $input['base_unit_code']],
+            );
+            $result['usable_cost_basis'] = match ($input['base_unit_code']) {
+                'mg', 'g', 'kg' => 'PLN/100g',
+                'ml', 'l' => 'PLN/100ml',
+                'pc' => 'PLN/pc',
+            };
+        }
+
+        return $result;
+    }
+
     private function revisionPricingFields(string $basis, string $amount, ?string $unitCode): array
     {
         if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT', 'LEGACY_BASE_UNIT'], true)) {

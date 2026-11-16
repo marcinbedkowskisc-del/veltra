@@ -8,6 +8,7 @@ use App\Domain\RawMaterials\RawMaterialCompatibilityAssessmentService;
 use App\Domain\RawMaterials\RawMaterialHistoryService;
 use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Domain\RawMaterials\RawMaterialPricingService;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Domain\RawMaterials\RawMaterialSkuReservationService;
 use App\Http\Controllers\Controller;
@@ -32,6 +33,7 @@ use App\Http\Requests\RawMaterialOfferRequest;
 use App\Http\Requests\RawMaterialProductListRequest;
 use App\Http\Requests\RawMaterialProductRequest;
 use App\Http\Requests\RawMaterialProductRevisionRequest;
+use App\Http\Requests\RawMaterialPricingPreviewRequest;
 use App\Http\Requests\RawMaterialReasonRequest;
 use App\Http\Requests\RawMaterialReferencePriceQueryRequest;
 use App\Http\Requests\RawMaterialReferencePriceRequest;
@@ -50,6 +52,13 @@ use Symfony\Component\HttpFoundation\Response;
 
 class RawMaterialController extends Controller
 {
+    public function previewPricing(RawMaterialPricingPreviewRequest $request, RawMaterialPricingService $pricing): JsonResponse
+    {
+        return response()->json(['data' => $pricing->preview(
+            $request->user(), $request->attributes->get('operating_location'), $request->validated(),
+        )], 200, ['Cache-Control' => 'private, no-store']);
+    }
+
     public function workbench(ListRawMaterialsRequest $request, RawMaterialService $service): JsonResponse
     {
         return response()->json(

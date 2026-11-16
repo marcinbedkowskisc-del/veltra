@@ -7,6 +7,7 @@ import {
   createRawMaterial,
   createApprovedRawMaterial,
   fetchAllergenCatalogs,
+  previewRawMaterialPricing,
   reserveRawMaterialSku,
   type CreatedRawMaterial,
   type RawMaterialSkuReservation,
@@ -17,6 +18,7 @@ vi.mock('./api', async (importOriginal) => ({
   createRawMaterial: vi.fn(),
   createApprovedRawMaterial: vi.fn(),
   fetchAllergenCatalogs: vi.fn(),
+  previewRawMaterialPricing: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
 }))
 
@@ -64,11 +66,15 @@ function enterValidBasicFields() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000099')
   reserveMock.mockResolvedValue(reservation)
   createMock.mockResolvedValue(created)
   createApprovedMock.mockResolvedValue({ ...created, lifecycleState: 'ACTIVE' })
   vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, definitions: [] }])
+  vi.mocked(previewRawMaterialPricing).mockResolvedValue({
+    netPlnPerPackage: '28.00000000000000', usableUnitCost: '1.86666666666667', usableCostBasis: 'PLN/100g',
+  })
   vi.spyOn(window, 'confirm').mockReturnValue(true)
 })
 
@@ -80,21 +86,76 @@ afterEach(() => {
 describe('formularz tworzenia surowca RAW', () => {
   it('pokazuje i serializuje cenę wyłącznie przy przyznanym uprawnieniu', async () => {
     renderForm()
-    expect(screen.queryByRole('heading', { name: 'Średnia cena netto' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: /Cena zakupu/ })).toBeNull()
     cleanup()
 
-    renderForm({ canManageReferencePrice: true })
-    expect(screen.getByRole('heading', { name: 'Średnia cena netto' })).toBeTruthy()
+    renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    expect(screen.getByRole('heading', { name: /Cena zakupu/ })).toBeTruthy()
     enterValidBasicFields()
     fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
-    fireEvent.change(screen.getByLabelText('Średnia cena netto za kg (PLN)'), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto za kg nominalne (PLN)'), { target: { value: '10' } })
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
     await screen.findByRole('heading', { name: 'Surowiec utworzony' })
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
       nominal_quantity: '10',
       pricing: { basis: 'NOMINAL_UNIT', amount: '10', unit_code: 'kg' },
+      conversions: [{ unit_code: 'kg' }],
     }), reservationId)
+  })
+
+  it('pokazuje obliczenie backendu dla obu podstaw i ukrywa koszt bez FOODCOST_VIEW', async () => {
+    const { rerender, props } = renderForm({
+      canManageReferencePrice: true, canViewReferencePrice: true, canViewUsableCost: true,
+    })
+    fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+    fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '1500' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
+    expect(await screen.findByText('Cena netto opakowania: 28,00 PLN')).toBeTruthy()
+    expect(screen.getByText('Koszt użytkowy: 1,8667 PLN/100g')).toBeTruthy()
+    expect(previewRawMaterialPricing).toHaveBeenLastCalledWith(expect.objectContaining({
+      nominal_quantity: '2800', usable_quantity: '1500', pricing: { basis: 'PACKAGE', amount: '28' },
+    }), expect.any(AbortSignal))
+
+    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto za kg nominalne (PLN)'), { target: { value: '10' } })
+    await waitFor(() => expect(previewRawMaterialPricing).toHaveBeenLastCalledWith(expect.objectContaining({
+      pricing: { basis: 'NOMINAL_UNIT', amount: '10', unit_code: 'kg' },
+    }), expect.any(AbortSignal)))
+    expect(await screen.findByText('Koszt użytkowy: 1,8667 PLN/100g')).toBeTruthy()
+    rerender(<RawMaterialCreateForm {...props} canViewUsableCost={false} />)
+    expect(screen.queryByText(/Koszt użytkowy:/)).toBeNull()
+    expect(screen.getByText('Cena netto opakowania: 28,00 PLN')).toBeTruthy()
+  })
+
+  it('ignoruje spóźniony wynik podglądu po zmianie ceny i ukrywa dane po utracie uprawnienia', async () => {
+    let resolveOld!: (value: { netPlnPerPackage: string }) => void
+    vi.mocked(previewRawMaterialPricing)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+      .mockResolvedValueOnce({ netPlnPerPackage: '30.00000000000000' })
+    const { rerender, props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
+    await waitFor(() => expect(previewRawMaterialPricing).toHaveBeenCalledTimes(1))
+    fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '30' } })
+    expect(await screen.findByText('Cena netto opakowania: 30,00 PLN')).toBeTruthy()
+    await act(async () => resolveOld({ netPlnPerPackage: '28.00000000000000' }))
+    expect(screen.queryByText('Cena netto opakowania: 28,00 PLN')).toBeNull()
+    rerender(<RawMaterialCreateForm {...props} canViewReferencePrice={false} />)
+    expect(screen.queryByRole('heading', { name: /Cena zakupu/ })).toBeNull()
+    expect(screen.queryByText(/Cena netto opakowania:/)).toBeNull()
+  })
+
+  it('jawnie zgłasza błąd podglądu i odmawia dostępu po odpowiedzi 403', async () => {
+    vi.mocked(previewRawMaterialPricing).mockRejectedValueOnce(new Error('Błąd połączenia.'))
+    const { props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
+    expect(await screen.findByText(/Podgląd ceny niedostępny: Błąd połączenia/)).toBeTruthy()
+    vi.mocked(previewRawMaterialPricing).mockRejectedValueOnce(new ApiError(403, 'Brak dostępu', 'FORBIDDEN'))
+    fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '30' } })
+    await waitFor(() => expect(props.onAuthorizationDenied).toHaveBeenCalled())
+    expect(screen.queryByText(/Cena netto opakowania:/)).toBeNull()
   })
 
   it('zachowuje dane w zakładkach i zatwierdza kompletny surowiec jednym żądaniem', async () => {

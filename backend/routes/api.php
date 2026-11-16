@@ -68,6 +68,7 @@ Route::prefix('v1/raw-materials')->middleware([
     'throttle:security',
     RequireRawMaterialsAvailability::class,
 ])->group(function (): void {
+    Route::post('/pricing-preview', [RawMaterialController::class, 'previewPricing']);
     Route::post('/document-uploads', [RawMaterialDocumentController::class, 'upload']);
     Route::post('/bulk-archive/validation', [RawMaterialController::class, 'validateBulkArchive']);
     Route::post('/bulk-archive', [RawMaterialController::class, 'bulkArchive']);

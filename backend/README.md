@@ -235,6 +235,13 @@ permissions; this contract does not change module readiness or grants.
   pominięcie pola, także zakaz sortowania po nim. Koszt ma bazę `PLN/100g`,
   `PLN/100ml` albo `PLN/pc`. PostgreSQL `numeric` i HALF_EVEN zachowują 14 miejsc;
   prezentacja dwóch miejsc należy do UI. Grant cen referencyjnych nie daje cen ofert.
+- `POST /api/v1/raw-materials/pricing-preview` bez zapisu oblicza cenę opakowania
+  dla `base_unit_code`, wymaganej `nominal_quantity`, opcjonalnej `usable_quantity`
+  i `pricing` (`basis`: `PACKAGE` lub `NOMINAL_UNIT`, `amount`, dla jednostki
+  nominalnej `unit_code`: `kg`, `l` lub `pc`). Korzysta z tej samej normalizacji
+  co rewizje. Wymaga RAW VIEW, REFERENCE_PRICE_VIEW i REFERENCE_PRICE_MANAGE,
+  roli ADMINISTRATOR oraz kontekstu primary; koszt użytkowy zwraca tylko z
+  dodatkowym FOODCOST_VIEW. Odpowiedź ma `Cache-Control: private, no-store`.
 - `POST /{material}/reference-prices` obsługuje alternatywnie
   `net_pln_per_package` lub dotychczasowe `net_pln_per_base_unit`.
   Cena opakowania wymaga zatwierdzonej ilości nominalnej; kwota jest zapisywana

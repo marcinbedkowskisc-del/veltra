@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
+import RawMaterialPricingFields from './RawMaterialPricingFields'
 import { RAW_UNITS, supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
@@ -32,6 +33,8 @@ type Props = {
   categories: CategoryOption[]
   canManageAllergens?: boolean
   canManageReferencePrice?: boolean
+  canViewReferencePrice?: boolean
+  canViewUsableCost?: boolean
   canManageSuppliers?: boolean
   canCreateApproved?: boolean
   operatingLocationId: string
@@ -103,6 +106,8 @@ export default function RawMaterialCreateForm({
   categories,
   canManageAllergens = false,
   canManageReferencePrice = false,
+  canViewReferencePrice = false,
+  canViewUsableCost = false,
   canManageSuppliers = false,
   canCreateApproved = false,
   returnFocus,
@@ -173,7 +178,7 @@ export default function RawMaterialCreateForm({
 
   function focusErrors(errors: Record<string, string>, allergenMessage: string | null = null) {
     const keys = Object.keys(errors)
-    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key))) setTab('basic')
+    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity', 'pricingAmount', 'pricingUnitCode'].includes(key))) setTab('basic')
     else if (allergenMessage) setTab('allergens')
     else if (keys.length) setTab('additional')
     setFocusError((value) => value + 1)
@@ -415,7 +420,8 @@ export default function RawMaterialCreateForm({
       return
     }
 
-    const payload = { ...buildRawMaterialCreatePayload(values, canManageSuppliers && supplierOptionsLoaded),
+    const payload = { ...buildRawMaterialCreatePayload(values, canManageSuppliers && supplierOptionsLoaded,
+      canManageReferencePrice && canViewReferencePrice),
       ...(allergens.status !== 'UNKNOWN' ? { allergen_declaration: allergens } : {}) }
     const key = reservationKey.current ?? crypto.randomUUID()
     reservationKey.current = key
@@ -570,7 +576,7 @@ export default function RawMaterialCreateForm({
             )}
 
             <Tabs label="Formularz surowca" value={tab} onChange={setTab} tabs={[
-              { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key)) ? ' • błąd' : ''}`, content: (
+              { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity', 'pricingAmount', 'pricingUnitCode'].includes(key)) ? ' • błąd' : ''}`, content: (
             <fieldset disabled={locked} className="create-form-fieldset">
               <legend>Dane podstawowe</legend>
               <div className="create-form-grid">
@@ -651,29 +657,13 @@ export default function RawMaterialCreateForm({
                     {firstQuantityError ?? 'Pozostaw ilość użytkową pustą, aby automatycznie użyć ilości nominalnej. Dozwolone jest 6 miejsc po przecinku; ilość w sztukach musi być całkowita.'}
                   </span>
                 </div>
-                {canManageReferencePrice && (
-                  <section className="create-form-field create-form-field-wide" aria-labelledby="create-pricing-title">
-                    <h3 id="create-pricing-title">Średnia cena netto</h3>
-                    <p className="field-hint">Wprowadź średnią obliczoną poza VELTRA. Cena nie jest wyliczana z ofert dostawców.</p>
-                    <div className="create-form-grid">
-                      <label className="create-form-field" htmlFor="create-pricing-basis">Podstawa ceny
-                        <select id="create-pricing-basis" value={values.pricingBasis}
-                          onChange={(event) => setField('pricingBasis', event.target.value as RawMaterialCreateValues['pricingBasis'])}>
-                          <option value="PACKAGE">Całe opakowanie</option>
-                          <option value="NOMINAL_UNIT">Jednostka nominalna</option>
-                        </select>
-                      </label>
-                      <label className="create-form-field" htmlFor="create-pricing-amount">
-                        {values.pricingBasis === 'PACKAGE'
-                          ? 'Średnia cena netto opakowania (PLN)'
-                          : `Średnia cena netto za ${values.pricingUnitCode} (PLN)`}
-                        <input id="create-pricing-amount" inputMode="decimal" value={values.pricingAmount}
-                          onChange={(event) => setField('pricingAmount', event.target.value)}
-                          {...fieldProps('pricingAmount')} />
-                        {getError('pricingAmount') && <span className="field-error">{getError('pricingAmount')}</span>}
-                      </label>
-                    </div>
-                  </section>
+                {canManageReferencePrice && canViewReferencePrice && (
+                  <RawMaterialPricingFields id="create" values={values} disabled={locked} canCalculate
+                    canViewCost={canViewUsableCost} error={getError('pricingAmount')}
+                    onBasisChange={(value) => setField('pricingBasis', value)}
+                    onAmountChange={(value) => setField('pricingAmount', value)}
+                    onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
+                    onModuleUnavailable={onModuleUnavailable} />
                 )}
               </div>
             </fieldset>

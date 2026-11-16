@@ -3,6 +3,7 @@ import { ApiError } from '../api'
 import { formatNumber } from '../design-system/formatting'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
+import RawMaterialPricingFields from './RawMaterialPricingFields'
 import { lifecycleLabel, RAW_UNITS } from './catalog'
 import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
@@ -12,6 +13,7 @@ import {
   UNIT_DIMENSIONS,
   UNIT_LABELS,
   validateRawMaterialCreate,
+  withPricingUnit,
   type RawMaterialConversionInput,
   type RawMaterialCreateValues,
 } from './create'
@@ -68,6 +70,8 @@ function serverFieldName(field: string): string {
     base_unit_code: 'baseUnitCode',
     nominal_quantity: 'nominalQuantity',
     usable_quantity: 'usableQuantity',
+    'pricing.amount': 'pricingAmount',
+    'pricing.unit_code': 'pricingUnitCode',
     'conversions.*.unit_code': 'conversions',
     'conversions.*.to_base_factor': 'conversions',
     'conversions.*.basis': 'conversions',
@@ -101,7 +105,7 @@ function buildEditPayload(
 ): RawMaterialEditPayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
-  const conversions: RawMaterialEditPayload['conversions'] = values.conversions.map((conversion) => {
+  const conversions: RawMaterialEditPayload['conversions'] = withPricingUnit(values.conversions.map((conversion) => {
     const unitCode = RAW_UNITS.find((unit) => unit === conversion.unitCode)
     if (!unitCode) throw new Error('Wybierz prawidłową jednostkę przeliczeniową.')
     if (UNIT_DIMENSIONS[unitCode] === UNIT_DIMENSIONS[values.baseUnitCode]) {
@@ -112,10 +116,10 @@ function buildEditPayload(
       to_base_factor: normalizeDecimalInput(conversion.toBaseFactor),
       basis: conversion.basis.trim(),
     }
-  })
+  }), values, includePricing)
   const pricingChanged = values.pricingBasis !== initialValues.pricingBasis
     || values.pricingAmount !== initialValues.pricingAmount
-    || values.pricingUnitCode !== initialValues.pricingUnitCode
+    || (values.pricingBasis === 'NOMINAL_UNIT' && values.pricingUnitCode !== initialValues.pricingUnitCode)
 
   return {
     category_id: values.categoryId,
@@ -161,6 +165,8 @@ export default function RawMaterialEditForm({
   const [initialAllergens, setInitialAllergens] = useState<AllergenDeclaration>(unknownAllergens)
   const [canEditAllergens, setCanEditAllergens] = useState(false)
   const [canManageReferencePrice, setCanManageReferencePrice] = useState(false)
+  const [canViewReferencePrice, setCanViewReferencePrice] = useState(false)
+  const [canViewUsableCost, setCanViewUsableCost] = useState(false)
   const [canManageSuppliers, setCanManageSuppliers] = useState(false)
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
   const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
@@ -258,7 +264,8 @@ export default function RawMaterialEditForm({
         setValues(formattedValues)
         setInitialValues(formattedValues)
         setCanEditAllergens(permitted)
-        setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
+        setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
+        setCanViewUsableCost(capabilities.actions.viewUsableCost === true)
         setCanManageSuppliers(supplierPermission)
         setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
         setAllergens(declaration?.declaration ?? unknownAllergens())
@@ -301,7 +308,7 @@ export default function RawMaterialEditForm({
 
   function focusErrors(errors: Record<string, string>, allergenMessage: string | null = null) {
     const keys = Object.keys(errors)
-    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key))) setTab('basic')
+    if (keys.some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity', 'pricingAmount', 'pricingUnitCode'].includes(key))) setTab('basic')
     else if (allergenMessage) setTab('allergens')
     else if (keys.length) setTab('additional')
     setFocusError((value) => value + 1)
@@ -499,6 +506,8 @@ export default function RawMaterialEditForm({
       setInitialValues(formattedValues)
       setCanEditAllergens(permitted)
       setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
+      setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
+      setCanViewUsableCost(capabilities.actions.viewUsableCost === true)
       setCanManageSuppliers(supplierPermission)
       setAllergens(declaration?.declaration ?? unknownAllergens())
       setInitialAllergens(declaration?.declaration ?? unknownAllergens())
@@ -570,7 +579,7 @@ export default function RawMaterialEditForm({
     setAttempted(true)
     setFormError(null)
     setServerErrors({})
-    const errors = validateRawMaterialCreate(values)
+    const errors = validateRawMaterialCreate(values, true)
     const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
     const declarationError = allergensChanged ? allergenError(allergens, false) : null
     setAllergenValidation(declarationError)
@@ -587,7 +596,7 @@ export default function RawMaterialEditForm({
     const payload = { ...buildEditPayload(
       values,
       changeReason,
-      canManageReferencePrice,
+      canManageReferencePrice && canViewReferencePrice,
       canManageSuppliers && supplierOptionsLoaded,
       initialValues ?? values,
     ),
@@ -611,6 +620,7 @@ export default function RawMaterialEditForm({
       if (capabilities.locationId !== expectedLocation || !capabilities.actions.edit
         || !completion.availableActions.includes('edit') || !completion.version
         || (allergensChanged && !completion.availableActions.includes('edit_allergens'))
+        || (payload.pricing && (!capabilities.actions.manageReferencePrice || !capabilities.actions.viewReferencePrice))
         || completion.revisionId !== snapshot.revisionId || completion.version !== snapshot.version) {
         setPhase('conflict')
         setFormError('Uprawnienie lub wersja edytora zmieniły się. Lokalne zmiany zachowano; wczytaj aktualny stan świadomie.')
@@ -762,7 +772,7 @@ export default function RawMaterialEditForm({
                 <p className="create-form-error" role="alert">Popraw pola oznaczone poniżej.</p>
               )}
               <Tabs label="Formularz surowca" value={tab} onChange={setTab} tabs={[
-                { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity'].includes(key)) ? ' • błąd' : ''}`, content: (
+                { id: 'basic', label: `Dane podstawowe${Object.keys({ ...validationErrors, ...serverErrors }).some((key) => ['categoryId', 'name', 'baseUnitCode', 'nominalQuantity', 'usableQuantity', 'pricingAmount', 'pricingUnitCode'].includes(key)) ? ' • błąd' : ''}`, content: (
               <fieldset disabled={phase !== 'editing'} className="create-form-fieldset">
                 <legend>Dane podstawowe</legend>
                 <div className="create-form-grid">
@@ -808,31 +818,15 @@ export default function RawMaterialEditForm({
                     )}
                     <span className="field-hint">Pozostaw ilość użytkową pustą, aby automatycznie użyć nominalnej. Maksymalnie 6 miejsc po przecinku.</span>
                   </fieldset>
-                  {canManageReferencePrice ? (
-                    <section className="create-form-field create-form-field-wide" aria-labelledby="edit-pricing-title">
-                      <h3 id="edit-pricing-title">Średnia cena netto</h3>
-                      <p className="field-hint">Cena jest wprowadzana ręcznie i nie jest wyliczana z ofert dostawców.</p>
-                      <div className="create-form-grid">
-                        <label className="create-form-field" htmlFor="edit-pricing-basis">Podstawa ceny
-                          <select id="edit-pricing-basis" value={values.pricingBasis} disabled={phase !== 'editing'}
-                            onChange={(event) => setField('pricingBasis', event.target.value as RawMaterialCreateValues['pricingBasis'])}>
-                            <option value="PACKAGE">Całe opakowanie</option>
-                            <option value="NOMINAL_UNIT">Jednostka nominalna</option>
-                          </select>
-                        </label>
-                        <label className="create-form-field" htmlFor="edit-pricing-amount">
-                          {values.pricingBasis === 'PACKAGE'
-                            ? 'Średnia cena netto opakowania (PLN)'
-                            : `Średnia cena netto za ${values.pricingUnitCode} (PLN)`}
-                          <input id="edit-pricing-amount" inputMode="decimal" value={values.pricingAmount}
-                            disabled={phase !== 'editing'} {...fieldProps('pricingAmount')}
-                            onChange={(event) => setField('pricingAmount', event.target.value)} />
-                          {getError('pricingAmount') && <span className="field-error">{getError('pricingAmount')}</span>}
-                        </label>
-                      </div>
-                    </section>
-                  ) : (
-                    <p className="field-hint">Edycja ceny referencyjnej wymaga osobnego uprawnienia.</p>
+                  {canViewReferencePrice && (
+                    <RawMaterialPricingFields id="edit" values={values}
+                      disabled={phase !== 'editing' || !canManageReferencePrice}
+                      canCalculate={canManageReferencePrice} canViewCost={canViewUsableCost}
+                      error={getError('pricingAmount')}
+                      onBasisChange={(value) => setField('pricingBasis', value)}
+                      onAmountChange={(value) => setField('pricingAmount', value)}
+                      onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
+                      onModuleUnavailable={onModuleUnavailable} />
                   )}
                   {canManageSuppliers && (
                     <label className="create-form-field create-form-field-wide" htmlFor="edit-suppliers">

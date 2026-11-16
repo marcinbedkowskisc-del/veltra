@@ -1,6 +1,6 @@
 import { isRecord } from './api'
 
-export type PreviewMode = 'authorized' | 'view-only' | 'no-edit' | 'not-ready'
+export type PreviewMode = 'authorized' | 'financial-restricted' | 'view-only' | 'no-edit' | 'not-ready'
   | 'record-unavailable' | 'version-conflict' | 'demo' | 'compact' | 'restricted'
   | 'session-expired' | 'forbidden'
   | 'detail-forbidden' | 'create-demo' | 'create-saving' | 'create-not-ready' | 'create-unauthorized'
@@ -233,7 +233,7 @@ function catalogResponse(url: URL, mode: PreviewMode, products: DemoProduct[]): 
       return { ...row, ordinal: (from ?? 0) + index }
     })
 
-  const responseData = mode === 'restricted' || mode === 'view-only'
+  const responseData = mode === 'restricted' || mode === 'view-only' || mode === 'financial-restricted'
     ? rows.map(({
       reference_net_price: _referencePrice,
       currency_code: _currency,
@@ -306,8 +306,8 @@ function detailResponse(materialId: string, mode: PreviewMode, products: DemoPro
       occurred_at: '2025-01-15T10:30:00Z',
       actor: { id: 'DEMO-ACTOR', first_name: 'Użytkownik', last_name: 'demonstracyjny' },
     },
-    history_url: mode === 'restricted' || mode === 'view-only' ? null : `/api/v1/raw-materials/${product.id}/history`,
-    ...(mode === 'restricted' || mode === 'view-only' ? {} : {
+    history_url: mode === 'restricted' || mode === 'view-only' || mode === 'financial-restricted' ? null : `/api/v1/raw-materials/${product.id}/history`,
+    ...(mode === 'restricted' || mode === 'view-only' || mode === 'financial-restricted' ? {} : {
       reference_net_price: product.reference_net_price,
       currency_code: 'PLN',
       usable_unit_cost: product.usable_unit_cost,
@@ -365,7 +365,7 @@ function revisionsResponse(materialId: string, products: DemoProduct[]): Respons
 }
 
 function referencePricesResponse(materialId: string, mode: PreviewMode, products: DemoProduct[]): Response {
-  if (mode === 'detail-forbidden' || mode === 'restricted' || mode === 'view-only') {
+  if (mode === 'detail-forbidden' || mode === 'restricted' || mode === 'view-only' || mode === 'financial-restricted') {
     return jsonResponse({ message: 'Brak dostępu.' }, 403)
   }
   const product = products.find((item) => item.id === materialId)
@@ -387,7 +387,7 @@ function referencePricesResponse(materialId: string, mode: PreviewMode, products
 }
 
 function canEditProduct(mode: PreviewMode, product: DemoProduct): boolean {
-  const globalEdit = ['authorized', 'version-conflict', 'record-unavailable', 'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-noneditable'].includes(mode)
+  const globalEdit = ['authorized', 'financial-restricted', 'version-conflict', 'record-unavailable', 'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-noneditable'].includes(mode)
   const editableLifecycle = product.lifecycle_state === 'DRAFT' || product.lifecycle_state === 'ACTIVE'
   return globalEdit && editableLifecycle && mode !== 'record-unavailable' && mode !== 'edit-noneditable'
 }
@@ -462,7 +462,7 @@ function editorResponse(materialId: string, products: DemoProduct[]): Response {
 }
 
 const MODES = new Set<PreviewMode>([
-  'authorized', 'view-only', 'no-edit', 'not-ready', 'record-unavailable', 'version-conflict',
+  'authorized', 'financial-restricted', 'view-only', 'no-edit', 'not-ready', 'record-unavailable', 'version-conflict',
   'demo', 'compact', 'restricted', 'session-expired', 'forbidden', 'detail-forbidden',
   'create-demo', 'create-saving', 'create-not-ready', 'create-unauthorized',
   'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-not-ready',
@@ -512,8 +512,9 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
 
   function capabilitiesResponse(): Response {
     const unavailable = mode === 'not-ready' || mode === 'create-not-ready' || mode === 'edit-not-ready'
-    const authorized = ['authorized', 'no-edit', 'record-unavailable', 'version-conflict', 'not-ready', 'create-demo', 'create-saving', 'create-not-ready'].includes(mode)
-    const editAuthorized = ['authorized', 'version-conflict', 'record-unavailable', 'not-ready', 'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-noneditable', 'edit-not-ready'].includes(mode)
+    const authorized = ['authorized', 'financial-restricted', 'no-edit', 'record-unavailable', 'version-conflict', 'not-ready', 'create-demo', 'create-saving', 'create-not-ready'].includes(mode)
+    const editAuthorized = ['authorized', 'financial-restricted', 'version-conflict', 'record-unavailable', 'not-ready', 'edit-demo', 'edit-loading', 'edit-saving', 'edit-conflict', 'edit-noneditable', 'edit-not-ready'].includes(mode)
+    const financial = authorized && mode !== 'financial-restricted'
     return jsonResponse({ data: {
       module: 'RAW_MATERIALS',
       location_id: DEMO_LOCATION_ID,
@@ -522,12 +523,17 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
       permissions: {
         create: authorized || mode === 'create-not-ready',
         edit: editAuthorized || mode === 'edit-not-ready',
+        view_reference_price: financial,
+        manage_reference_price: financial,
       },
       actions: {
         create: authorized && !unavailable,
         edit: editAuthorized && !unavailable,
         edit_allergens: false,
         create_and_approve: false,
+        view_reference_price: financial && !unavailable,
+        manage_reference_price: financial && !unavailable,
+        view_usable_cost: financial && !unavailable,
       },
     } })
   }
@@ -554,6 +560,26 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
 
     if (url.pathname === '/api/v1/security/raw-materials/capabilities') {
       return capabilitiesResponse()
+    }
+
+    if (url.pathname === '/api/v1/raw-materials/pricing-preview' && method === 'POST') {
+      if (!['authorized', 'no-edit', 'record-unavailable', 'version-conflict'].includes(mode)) {
+        return jsonResponse({ message: 'Brak syntetycznych uprawnień finansowych.' }, 403)
+      }
+      const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+      if (isRecord(body) && isRecord(body.pricing) && body.base_unit_code === 'g'
+        && /^0*2800(?:\.0+)?$/.test(String(body.nominal_quantity))
+        && /^0*1500(?:\.0+)?$/.test(String(body.usable_quantity))
+        && ((body.pricing.basis === 'PACKAGE' && /^0*28(?:\.0+)?$/.test(String(body.pricing.amount)))
+          || (body.pricing.basis === 'NOMINAL_UNIT' && body.pricing.unit_code === 'kg'
+            && /^0*10(?:\.0+)?$/.test(String(body.pricing.amount))))) {
+        return jsonResponse({ data: {
+          net_pln_per_package: '28.00000000000000',
+          usable_unit_cost: '1.86666666666667',
+          usable_cost_basis: 'PLN/100g',
+        } })
+      }
+      return jsonResponse({ message: 'Symulacja obsługuje tylko przykład 2800 g / 1500 g, 28 PLN za opakowanie lub 10 PLN/kg.' }, 422)
     }
 
     if (url.pathname === '/api/v1/raw-materials' && method === 'GET') {
@@ -793,7 +819,7 @@ export function installVisualPreviewApi(initialMode = initialModeFromLocation())
   window.fetch = demoFetch
 
   function capabilitiesResponseAllowedForCreate(): boolean {
-    return ['authorized', 'no-edit', 'record-unavailable', 'version-conflict', 'create-demo', 'create-saving'].includes(mode)
+    return ['authorized', 'financial-restricted', 'no-edit', 'record-unavailable', 'version-conflict', 'create-demo', 'create-saving'].includes(mode)
   }
 
   return {

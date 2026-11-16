@@ -18,6 +18,7 @@ const DEMO_RECORDS = [
 
 const SCENARIOS: Array<{ value: PreviewMode; label: string }> = [
   { value: 'authorized', label: 'Pełny dostęp (CREATE + EDIT)' },
+  { value: 'financial-restricted', label: 'CREATE + EDIT bez danych finansowych' },
   { value: 'view-only', label: 'Tylko VIEW' },
   { value: 'no-edit', label: 'CREATE bez EDIT' },
   { value: 'not-ready', label: 'Moduł NOT_READY' },
@@ -26,12 +27,13 @@ const SCENARIOS: Array<{ value: PreviewMode; label: string }> = [
 ]
 
 function scenarioPermissions(mode: PreviewMode): string {
+  if (mode === 'financial-restricted') return 'VIEW: tak · CREATE: tak · EDIT: tak · ceny i koszty: nie'
   if (mode === 'view-only') return 'VIEW: tak · CREATE: nie · EDIT: nie'
   if (mode === 'no-edit') return 'VIEW: tak · CREATE: tak · EDIT: nie'
   if (mode === 'not-ready') return 'VIEW: tak · CREATE: przyznane · EDIT: przyznane · akcje zablokowane'
   if (mode === 'record-unavailable') return 'VIEW: tak · CREATE: tak · EDIT: tak · rekord: niedostępny'
   if (mode === 'version-conflict') return 'VIEW: tak · CREATE: przyznane · EDIT: tak'
-  return 'VIEW: tak · CREATE: tak · EDIT: tak'
+  return 'VIEW: tak · CREATE: tak · EDIT: tak · cena referencyjna: odczyt i zapis · FOODCOST_VIEW: tak'
 }
 
 function VisualPreview() {
@@ -119,6 +121,7 @@ function VisualPreview() {
           <p className="preview-toolbar-status">
             Uprawnienia syntetyczne: {scenarioPermissions(scenario)} · RAW_MATERIALS: {scenario === 'not-ready' ? 'NOT_READY' : 'READY (wyłącznie w symulacji)'}
           </p>
+          <p>Podgląd ceny symuluje wyłącznie przykład: 2800 g nominalnie, 1500 g użytkowo, 28 PLN za opakowanie lub 10 PLN/kg.</p>
         </section>
         {sessionExpired && (
           <section className="state-panel state-error" role="alert">

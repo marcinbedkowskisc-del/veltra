@@ -25,24 +25,46 @@ korzysta z serwerow developerskich Laravel i Vite oraz zaleznosci developerskich
 
 ## Pierwsze uruchomienie
 
-W katalogu glownym repozytorium:
+Primary korzysta z osobnego projektu `veltra-primary` oraz zewnetrznych
+wolumenow `veltra-primary-postgres-data` i `veltra-primary-redis-data`.
+Ponizsze polecenia wskazuja jawnie Docker Desktop, projekt i oba pliki Compose.
+Takiego samego wskazania nalezy uzywac rowniez w pozostalych przykladach
+`docker compose` dotyczacych Primary; bez overlayu odnosza sie do innego
+projektu i nie zapewniaja opisanej ochrony wolumenow.
+
+W katalogu glownym repozytorium, po upewnieniu sie, ze wymienione wolumeny
+jeszcze nie istnieja i nie naleza do innej instalacji:
 
 ```bash
-docker version
-docker compose version
+docker --context default version
+docker --context default compose version
 
 # Utworzenie ignorowanego przez Git .env z losowym haslem i kluczem aplikacji.
 # Polecenie nie nadpisuje istniejacego pliku.
-docker run --rm --user "$(id -u):$(id -g)" \
+docker --context default run --rm --user "$(id -u):$(id -g)" \
   -v "$PWD:/app" -w /app composer:2 php scripts/init-env.php
 
-docker compose up -d --build
-docker compose run --rm migrate
-docker compose ps
+docker --context default volume create --label com.veltra.environment=primary --label com.veltra.storage=postgres veltra-primary-postgres-data
+docker --context default volume create --label com.veltra.environment=primary --label com.veltra.storage=redis veltra-primary-redis-data
+
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml build backend frontend
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml up -d --wait postgres redis
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml run --rm --no-deps migrate
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml up -d --wait
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml ps
 ```
 
+Inicjalizator odmawia nadpisania istniejacego `.env`. Jesli plik juz istnieje,
+zachowaj go i bezpiecznie uzupelnij brakujace `APP_DB_PASSWORD`,
+`APP_DB_MIGRATION_PASSWORD` i `APP_DB_MUTATION_SIGNING_KEY` niezaleznymi
+wartosciami, stosujac jak w inicjalizatorze `bin2hex(random_bytes(32))`.
+Nie ujawniaj sekretow; plik powinien nalezec do uzytkownika i miec prawa
+`0600`. Wolumeny sa zewnetrzne: Compose nie tworzy ani nie usuwa ich w ramach
+cyklu zycia projektu. Nie uruchamiaj `docker compose down -v`.
+
 Pierwsze budowanie kompiluje rozszerzenia PHP i moze potrwac kilka minut.
-Gotowosc mozna sprawdzic poleceniem `docker compose up -d --wait --wait-timeout 120`.
+Gotowosc mozna sprawdzic przez `docker --context default compose -p
+veltra-primary -f compose.yaml -f compose.primary.yaml ps`.
 
 - Frontend: <http://localhost:5173>
 - API health: <http://localhost:8000/api/health>

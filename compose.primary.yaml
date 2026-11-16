@@ -1,0 +1,19 @@
+name: veltra-primary
+
+services:
+  backend:
+    image: veltra-primary-backend:local
+  migrate:
+    image: veltra-primary-backend:local
+  queue:
+    image: veltra-primary-backend:local
+  frontend:
+    image: veltra-primary-frontend:local
+
+volumes:
+  postgres-data:
+    name: veltra-primary-postgres-data
+    external: true
+  redis-data:
+    name: veltra-primary-redis-data
+    external: true

@@ -43,12 +43,39 @@ prerequisites:
    ```
 
    Do not switch the global Docker context.
-5. Start only the dedicated user service with
-   `systemctl --user daemon-reload` and
-   `systemctl --user start veltra-test-dockerd.service`.
+5. After owner authorization, enable and start only the dedicated user service:
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now veltra-test-dockerd.service
+   ```
+
+   This enables the service for the user's `default.target`; it does not start
+   Windows or WSL. Without user lingering, the user manager may stop after the
+   last session ends, stopping the daemon. Enabling lingering requires separate
+   owner authorization and still does not guarantee that WSL starts on Windows
+   boot.
 6. Verify that `DOCKER_CONFIG=~/.config/veltra-test/docker docker --context veltra-test-isolated info` reports the
    `com.veltra.daemon-role=disposable-test` daemon label and a data root under
    `~/.local/share/veltra-test-docker`.
+
+## Service operation and troubleshooting
+
+```sh
+systemctl --user is-enabled veltra-test-dockerd.service
+systemctl --user status veltra-test-dockerd.service --no-pager
+systemctl --user start veltra-test-dockerd.service
+systemctl --user stop veltra-test-dockerd.service
+journalctl --user -u veltra-test-dockerd.service -b --no-pager
+DOCKER_CONFIG="$HOME/.config/veltra-test/docker" docker context inspect veltra-test-isolated
+DOCKER_CONFIG="$HOME/.config/veltra-test/docker" docker --context veltra-test-isolated info
+loginctl show-user "$(id -u)" -p Linger -p State
+```
+
+Stopping the service does not disable autostart. If the socket is unavailable,
+check the service status and journal, the private context's socket endpoint,
+and whether the systemd user manager is running. An `active` service can precede
+Docker API readiness, so verify with the `info` command as well.
 
 Do not point this context at Docker Desktop, `default`, or the Stage daemon.
 The cleanup wrapper checks both this context identity and the daemon label.

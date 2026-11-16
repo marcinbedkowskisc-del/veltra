@@ -8,6 +8,7 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\RawMaterialException;
+use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
@@ -216,6 +217,69 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         $this->assertTrue((bool) $explicitRevision->usable_quantity_explicit);
         $this->assertSame('1500.000000', (string) $explicitRevision->usable_quantity);
         $this->assertRevisionHashMatches($explicitRevision);
+    }
+
+    public function test_approved_quantity_changes_recalculate_both_price_modes_and_supplier_links_do_not_change_price(): void
+    {
+        $this->role($this->steward, BusinessRole::Administrator);
+        $catalogVersionId = $this->publishedCatalog([]);
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->steward,
+            $this->location,
+            ['supplier_code' => 'TEST_SUPPLIER', 'display_name' => 'Dostawca testowy'],
+            'test-supplier-0001',
+        )['data'];
+
+        foreach ([
+            [['basis' => 'PACKAGE', 'amount' => '28'], '28.00000000000000', '28.00000000000000'],
+            [['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg'], '20.00000000000000', '30.00000000000000'],
+        ] as [$pricing, $initialPrice, $revisedPrice]) {
+            $material = $this->createMaterial('Cena '.$pricing['basis'], [
+                'nominal_quantity' => '2000',
+                'conversions' => [['unit_code' => 'kg']],
+                'pricing' => $pricing,
+                'allergen_declaration' => [
+                    'status' => 'NO_KNOWN_ALLERGENS',
+                    'catalog_version_id' => $catalogVersionId,
+                    'items' => [],
+                ],
+            ]);
+            $id = $material['id'];
+            $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+            $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena początkowa', expectedVersion: $this->rawVersion($id));
+
+            $this->rawMaterials->revise($this->steward, $this->location, $id, [
+                'category_id' => $this->categoryId,
+                'name' => 'Nowa ilość '.$pricing['basis'],
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '3000',
+                'conversions' => [['unit_code' => 'kg']],
+            ], expectedVersion: $this->rawVersion($id));
+            $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+            $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+            $this->rawMaterials->approve($this->steward, $this->location, $id, 'Zmiana ilości', expectedVersion: $this->rawVersion($id));
+
+            $events = DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->orderBy('event_no')->get();
+            $this->assertCount(2, $events);
+            $this->assertSame($initialPrice, (string) $events[0]->net_pln_per_package);
+            $this->assertSame('2000.000000', (string) $events[0]->pricing_nominal_quantity);
+            $this->assertSame($revisedPrice, (string) $events[1]->net_pln_per_package);
+            $this->assertSame('3000.000000', (string) $events[1]->pricing_nominal_quantity);
+            $this->assertSame('3000.000000', (string) $events[1]->pricing_usable_quantity);
+
+            $this->rawMaterials->revise($this->steward, $this->location, $id, [
+                'category_id' => $this->categoryId,
+                'name' => 'Nowa ilość '.$pricing['basis'],
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '3000',
+                'conversions' => [['unit_code' => 'kg']],
+                'supplier_ids' => [$supplier['id']],
+            ], expectedVersion: $this->rawVersion($id));
+            $this->assertSame(1, DB::table('raw_material_supplier_associations')->where('raw_material_id', $id)->count());
+            $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+            $this->rawMaterials->approve($this->steward, $this->location, $id, 'Przypisanie dostawcy', expectedVersion: $this->rawVersion($id));
+            $this->assertSame(2, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+        }
     }
 
     public function test_database_rejects_duplicate_and_invalid_declarations_and_storage_bounds(): void

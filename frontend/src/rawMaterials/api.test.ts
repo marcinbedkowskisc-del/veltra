@@ -10,6 +10,8 @@ import {
   fetchAllergenDeclaration,
   saveAllergenDeclaration,
   fetchCatalog,
+  createCategory,
+  renameCategory,
 } from './api'
 
 const locationId = '00000000-0000-4000-8000-000000000101'
@@ -116,11 +118,11 @@ describe('fetchRawMaterialCapabilities', () => {
         readiness: 'READY',
         available: true,
         permissions: {
-          create: true, edit: true,
+          create: true, edit: true, manage_categories: true,
           view_reference_price: false, manage_reference_price: false, manage_suppliers: false,
         },
         actions: {
-          create: true, edit: true, edit_allergens: true, create_and_approve: true,
+          create: true, edit: true, manage_categories: true, edit_allergens: true, create_and_approve: true,
           view_reference_price: false, manage_reference_price: false, manage_suppliers: false,
         },
       },
@@ -133,10 +135,10 @@ describe('fetchRawMaterialCapabilities', () => {
       readiness: 'READY',
       available: true,
       permissions: {
-        create: true, edit: true, viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
+        create: true, edit: true, manageCategories: true, viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
       },
       actions: {
-        create: true, edit: true, editAllergens: true, createAndApprove: true,
+        create: true, edit: true, manageCategories: true, editAllergens: true, createAndApprove: true,
         viewReferencePrice: false, manageReferencePrice: false, manageSuppliers: false,
       },
     })
@@ -163,6 +165,33 @@ describe('fetchRawMaterialCapabilities', () => {
       available: false,
       permissions: { create: false, edit: true },
       actions: { create: false, edit: false, editAllergens: false, createAndApprove: false },
+    })
+  })
+
+  it('odrzuca akcję kategorii bez jej grantu', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        module: 'RAW_MATERIALS', location_id: locationId, readiness: 'READY', available: true,
+        permissions: { create: false, edit: false, manage_categories: false },
+        actions: { create: false, edit: false, manage_categories: true, edit_allergens: false, create_and_approve: false },
+      },
+    }))))
+    await expect(fetchRawMaterialCapabilities(locationId)).rejects.toThrow('nieprawidłowe uprawnienia')
+  })
+
+  describe('zarządzanie kategoriami', () => {
+    it('wysyła tworzenie i zmianę nazwy przez istniejący kontrakt', async () => {
+      const category = { id: 'category-1', code: 'MAKA', name: 'Mąka', depth: 1 }
+      const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: category })))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(createCategory({ code: 'MAKA', name: 'Mąka' })).resolves.toEqual(category)
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/raw-materials/categories', expect.objectContaining({
+        method: 'POST', body: JSON.stringify({ code: 'MAKA', name: 'Mąka' }),
+      }))
+      await renameCategory('category-1', 'Mąki')
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/raw-materials/categories/category-1', expect.objectContaining({
+        method: 'PATCH', body: JSON.stringify({ name: 'Mąki' }),
+      }))
     })
   })
 

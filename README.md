@@ -827,6 +827,15 @@ jest autoryzacja. Ponowienie uzywa tej samej rezerwacji i danych; wynik zostaje
 zapamietany tylko po powodzeniu calej transakcji. Pozostali uzytkownicy
 korzystaja z istniejacego procesu szkicu. Globalny stan RAW pozostaje NOT_READY.
 
+### Zarzadzanie kategoriami RAW
+
+Panel katalogu umozliwia tworzenie kategorii i zmiane ich nazw, gdy lista
+kategorii jest dostepna, a `capabilities.actions.manage_categories` potwierdza
+efektywny grant `RAW_MATERIALS_CATEGORY_MANAGE`, glowny kontekst i dostepnosc
+modulu. Backend ponawia autoryzacje zapisu; kod kategorii pozostaje niezmienny.
+Po niepotwierdzonym zapisie nalezy odswiezyc i sprawdzic liste przed ponowieniem.
+Zmiana w kodzie nie stanowi wdrozenia ani zgody na aktywacje RAW lub Stage.
+
 ## Stage 1D: zakresy i macierz rol
 
 Kazde zadanie wymaga aktywnego, zweryfikowanego konta oraz jawnego aktywnego

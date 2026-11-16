@@ -4,6 +4,7 @@ import CatalogFilters, { type SupplierFilterState } from './CatalogFilters'
 import CatalogTable from './CatalogTable'
 import Pagination from '../design-system/Pagination'
 import Tabs from '../design-system/Tabs'
+import RawMaterialCategoryManager from './RawMaterialCategoryManager'
 import RawMaterialCreateForm from './RawMaterialCreateForm'
 import RawMaterialDetailDrawer from './RawMaterialDetailDrawer'
 import SelectionActionBar from './SelectionActionBar'
@@ -111,6 +112,7 @@ export default function RawMaterialsCatalogPage({
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null)
   const [createFormLocationId, setCreateFormLocationId] = useState<string | null>(null)
+  const [categoryManagerLocationId, setCategoryManagerLocationId] = useState<string | null>(null)
   const [createOpeningLocationId, setCreateOpeningLocationId] = useState<string | null>(null)
   const [createReturnFocus, setCreateReturnFocus] = useState<HTMLButtonElement | null>(null)
   const [createdMaterial, setCreatedMaterial] = useState<CreatedRawMaterial | null>(null)
@@ -176,6 +178,7 @@ export default function RawMaterialsCatalogPage({
   useEffect(() => {
     return () => {
       setCreateFormLocationId(null)
+      setCategoryManagerLocationId(null)
       setCreateOpeningLocationId(null)
       setCreatedMaterial(null)
       setCreatedMaterialLocationId(null)
@@ -216,6 +219,7 @@ export default function RawMaterialsCatalogPage({
   const markModuleUnavailable = useCallback(() => {
     setSelectedDetail(null)
     setCreateFormLocationId(null)
+    setCategoryManagerLocationId(null)
     setCapabilities(null)
     setCapabilitiesLoading(false)
     moduleUnavailable.current = true
@@ -302,6 +306,7 @@ export default function RawMaterialsCatalogPage({
   }
 
   function handleCreateSessionExpired() {
+    setCategoryManagerLocationId(null)
     setRows([])
     setMeta(EMPTY_META)
     setCategories([])
@@ -704,6 +709,12 @@ export default function RawMaterialsCatalogPage({
             </button>
           </div>
         ) : null}
+        {catalogState === 'ready' && categoriesAvailable && capabilities && capabilities.locationId === operatingLocationId
+          && capabilities.actions.manageCategories && !categoryManagerLocationId && (
+          <button type="button" className="button button-secondary" onClick={() => setCategoryManagerLocationId(operatingLocationId ?? null)}>
+            Zarządzaj kategoriami
+          </button>
+        )}
       </header>
 
       {operatingLocationId && capabilitiesLoading && (
@@ -711,6 +722,27 @@ export default function RawMaterialsCatalogPage({
       )}
       {operatingLocationId && capabilitiesError && catalogState === 'ready' && (
         <p className="inline-error" role="alert">{capabilitiesError}</p>
+      )}
+      {categoryManagerLocationId === operatingLocationId && categoryManagerLocationId
+        && capabilities?.locationId === operatingLocationId && capabilities.actions.manageCategories
+        && catalogState === 'ready' && categoriesAvailable && (
+        <RawMaterialCategoryManager
+          key={categoryManagerLocationId}
+          locationId={categoryManagerLocationId}
+          categories={categories}
+          onUpdated={(updated) => {
+            setCategories(updated)
+            setCategoriesAvailable(true)
+          }}
+          onClose={() => setCategoryManagerLocationId(null)}
+          onSessionExpired={handleCreateSessionExpired}
+          onAuthorizationDenied={() => {
+            setCategoryManagerLocationId(null)
+            setCapabilities(null)
+            setCapabilitiesError('Uprawnienie do zarządzania kategoriami wygasło lub zostało cofnięte.')
+          }}
+          onModuleUnavailable={markModuleUnavailable}
+        />
       )}
       <CatalogFilters
         working={view === 'workbench'}

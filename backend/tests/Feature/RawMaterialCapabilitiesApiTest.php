@@ -106,6 +106,46 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.actions.edit', false);
     }
 
+    public function test_category_management_capability_requires_grant_availability_and_primary_context(): void
+    {
+        $this->selectContext($this->steward, $this->location);
+        $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.manage_categories', true)
+            ->assertJsonPath('data.actions.manage_categories', false);
+
+        $this->prepareReadyModule();
+        $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()->assertJsonPath('data.actions.manage_categories', true);
+        $category = $this->postJson('/api/v1/raw-materials/categories', [
+            'code' => 'TEST_CATEGORY', 'name' => 'Kategoria testowa',
+        ])->assertCreated()->assertJsonPath('data.depth', 1)->json('data.id');
+        $this->patchJson('/api/v1/raw-materials/categories/'.$category, ['name' => 'Nowa nazwa'])
+            ->assertOk()->assertJsonPath('data.name', 'Nowa nazwa');
+
+        $secondary = $this->kitchen('CAT2');
+        app(MembershipService::class)->assign($this->steward, $secondary);
+        $this->enableRawMaterials($secondary);
+        $this->selectContext($this->steward, $secondary);
+        $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.manage_categories', true)
+            ->assertJsonPath('data.actions.manage_categories', false);
+    }
+
+    public function test_category_management_requires_an_effective_grant(): void
+    {
+        $this->prepareReadyModule();
+        $recipient = $this->newRecipient('category-view-only@example.test');
+        $this->selectContext($recipient, $this->location);
+        $this->actingAs($recipient, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
+            ->assertOk()
+            ->assertJsonPath('data.permissions.manage_categories', false)
+            ->assertJsonPath('data.actions.manage_categories', false);
+        $this->postJson('/api/v1/raw-materials/categories', ['code' => 'DENIED', 'name' => 'Odmowa'])
+            ->assertForbidden();
+    }
+
     public function test_ready_module_readiness_is_separate_from_location_availability(): void
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());

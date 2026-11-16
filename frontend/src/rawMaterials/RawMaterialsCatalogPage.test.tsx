@@ -17,6 +17,7 @@ import {
   fetchSuppliers,
   reserveRawMaterialSku,
   createRawMaterial,
+  createCategory,
   reviseRawMaterial,
   changeRawMaterialLifecycle,
   type RawMaterialCapabilities,
@@ -41,6 +42,8 @@ vi.mock('./api', async (importOriginal) => ({
   fetchSuppliers: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
   createRawMaterial: vi.fn(),
+  createCategory: vi.fn(),
+  renameCategory: vi.fn(),
   reviseRawMaterial: vi.fn(),
   changeRawMaterialLifecycle: vi.fn(),
 }))
@@ -167,6 +170,7 @@ const fetchRawMaterialCapabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
 const fetchSuppliersMock = vi.mocked(fetchSuppliers)
 const reserveRawMaterialSkuMock = vi.mocked(reserveRawMaterialSku)
 const createRawMaterialMock = vi.mocked(createRawMaterial)
+const createCategoryMock = vi.mocked(createCategory)
 const reviseRawMaterialMock = vi.mocked(reviseRawMaterial)
 const exportCatalogMock = vi.mocked(exportCatalog)
 const downloadCatalogExportMock = vi.mocked(downloadCatalogExport)
@@ -314,6 +318,7 @@ describe('katalog surowców', () => {
       module: 'RAW_MATERIALS', locationId: locationA, readiness: 'READY', available: true,
       permissions: { create: true, edit: true }, actions: { create: true, edit: true },
     })
+
     reserveRawMaterialSkuMock.mockResolvedValue({
       reservationId: materialB, sku: 'RAW-000001', expiresAt: '2026-11-13T12:00:00Z', status: 'RESERVED',
     })
@@ -328,6 +333,56 @@ describe('katalog surowców', () => {
     fireEvent.click(await within(form).findByRole('button', { name: 'Otwórz szczegóły' }))
     await waitFor(() => expect(fetchRawMaterialDetailMock).toHaveBeenCalledWith(materialA, expect.any(AbortSignal), true))
     expect(screen.getByRole('tab', { name: 'Szkice i oczekujące' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('pozwala uprawnionemu utworzyć kategorię i wybrać ją podczas tworzenia surowca', async () => {
+    const category = { id: 'category-new', code: 'TEST', name: 'Kategoria testowa', depth: 1 }
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS', locationId: locationA, readiness: 'READY', available: true,
+      permissions: { create: true, edit: false, manageCategories: true },
+      actions: { create: true, edit: false, manageCategories: true },
+    })
+    fetchCategoriesMock.mockResolvedValue([])
+    createCategoryMock.mockImplementation(async () => {
+      fetchCategoriesMock.mockResolvedValue([category])
+      return category
+    })
+    reserveRawMaterialSkuMock.mockResolvedValue({
+      reservationId: materialB, sku: 'RAW-000001', expiresAt: '2026-11-13T12:00:00Z', status: 'RESERVED',
+    })
+    createRawMaterialMock.mockResolvedValue({ id: materialA, sku: 'RAW-000001', lifecycleState: 'DRAFT' })
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Zarządzaj kategoriami' }))
+    fireEvent.change(screen.getByLabelText(/^Kod/), { target: { value: 'TEST' } })
+    fireEvent.change(screen.getByLabelText('Nazwa'), { target: { value: category.name } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dodaj kategorię' }))
+    await screen.findByText('Utworzono kategorię.')
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij zarządzanie kategoriami' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Dodaj surowiec' }))
+    const form = await screen.findByRole('dialog', { name: 'Dodaj surowiec' })
+    fireEvent.change(within(form).getByLabelText(/Kategoria/), { target: { value: category.id } })
+    fireEvent.change(within(form).getByLabelText(/Nazwa surowca/), { target: { value: 'Surowiec testowy' } })
+    fireEvent.change(within(form).getByLabelText(/Nominalna/), { target: { value: '10' } })
+    fireEvent.click(within(form).getByRole('button', { name: 'Utwórz szkic' }))
+    await waitFor(() => expect(createRawMaterialMock).toHaveBeenCalledWith(
+      expect.objectContaining({ category_id: category.id, name: 'Surowiec testowy' }), materialB,
+    ))
+  })
+
+  it('nie otwiera zarządzania, gdy nie można pobrać kategorii', async () => {
+    fetchRawMaterialCapabilitiesMock.mockResolvedValue({
+      module: 'RAW_MATERIALS', locationId: locationA, readiness: 'READY', available: true,
+      permissions: { create: false, edit: false, manageCategories: true },
+      actions: { create: false, edit: false, manageCategories: true },
+    })
+    fetchCategoriesMock.mockRejectedValue(new Error('Brak połączenia'))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    await screen.findByRole('button', { name: 'Pokaż szczegóły: Surowiec 1' })
+    await waitFor(() => expect(fetchCategoriesMock).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Zarządzaj kategoriami' })).toBeNull()
   })
 
   it('zamyka akcję fail-closed, jeśli świeże capabilities przed formularzem odmawia CREATE', async () => {

@@ -39,6 +39,7 @@ export type RawMaterialCapabilities = {
   permissions: {
     create: boolean
     edit: boolean
+    manageCategories?: boolean
     viewReferencePrice?: boolean
     manageReferencePrice?: boolean
     manageSuppliers?: boolean
@@ -46,6 +47,7 @@ export type RawMaterialCapabilities = {
   actions: {
     create: boolean
     edit: boolean
+    manageCategories?: boolean
     editAllergens?: boolean
     createAndApprove?: boolean
     viewReferencePrice?: boolean
@@ -167,6 +169,7 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     || (value.available && value.readiness !== 'READY')
     || (value.actions.create && (!value.permissions.create || !value.available))
     || (value.actions.edit && (!value.permissions.edit || !value.available))
+    || (value.actions.manage_categories === true && (value.permissions.manage_categories !== true || !value.available))
     || (value.actions.edit_allergens && !value.available)
     || (value.actions.create_and_approve && (!value.actions.create || !value.actions.edit_allergens))) {
     throw new Error('Backend zwrócił nieprawidłowe uprawnienia katalogu surowców.')
@@ -180,11 +183,13 @@ function parseRawMaterialCapabilities(value: unknown, expectedLocationId: string
     permissions: {
       create: value.permissions.create,
       edit: value.permissions.edit,
+      manageCategories: value.permissions.manage_categories === true,
       viewReferencePrice: value.permissions.view_reference_price === true,
       manageReferencePrice: value.permissions.manage_reference_price === true,
       manageSuppliers: value.permissions.manage_suppliers === true,
     },
     actions: { create: value.actions.create, edit: value.actions.edit,
+      manageCategories: value.actions.manage_categories === true,
       editAllergens: value.actions.edit_allergens, createAndApprove: value.actions.create_and_approve,
       viewReferencePrice: value.actions.view_reference_price === true,
       manageReferencePrice: value.actions.manage_reference_price === true,
@@ -503,6 +508,17 @@ export async function fetchAllergenDeclaration(id: string, signal?: AbortSignal)
 
 export async function fetchCategories(signal?: AbortSignal): Promise<CategoryOption[]> {
   return parseCategories(await request(`${RAW_API}/categories`, 'GET', undefined, { signal }))
+}
+
+export async function createCategory(
+  payload: { code: string; name: string; parent_id?: string },
+  signal?: AbortSignal,
+): Promise<CategoryOption> {
+  return parseCategories([await request(`${RAW_API}/categories`, 'POST', payload, { signal })])[0]
+}
+
+export async function renameCategory(id: string, name: string, signal?: AbortSignal): Promise<CategoryOption> {
+  return parseCategories([await request(`${RAW_API}/categories/${encodeURIComponent(id)}`, 'PATCH', { name }, { signal })])[0]
 }
 
 export async function reserveRawMaterialSku(idempotencyKey: string): Promise<RawMaterialSkuReservation> {

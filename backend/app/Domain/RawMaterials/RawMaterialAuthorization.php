@@ -45,13 +45,7 @@ final class RawMaterialAuthorization
      */
     public function evaluateCreateCapability(User $actor, Location $context): array
     {
-        [$freshActor, $freshContext] = $this->resolveActorContext($actor, $context);
-
-        return [
-            'permission' => $this->hasEffectiveGrant($freshActor, RawMaterialPermission::Create),
-            'context' => ! RawMaterialPermission::Create->requiresPrimaryCatalogContext()
-                || app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext),
-        ];
+        return $this->evaluateCatalogCapability($actor, $context, RawMaterialPermission::Create);
     }
 
     /**
@@ -59,11 +53,27 @@ final class RawMaterialAuthorization
      */
     public function evaluateEditCapability(User $actor, Location $context): array
     {
+        return $this->evaluateCatalogCapability($actor, $context, RawMaterialPermission::Edit);
+    }
+
+    /**
+     * @return array{permission: bool, context: bool}
+     */
+    public function evaluateCategoryManageCapability(User $actor, Location $context): array
+    {
+        return $this->evaluateCatalogCapability($actor, $context, RawMaterialPermission::CategoryManage);
+    }
+
+    /**
+     * @return array{permission: bool, context: bool}
+     */
+    private function evaluateCatalogCapability(User $actor, Location $context, RawMaterialPermission $permission): array
+    {
         [$freshActor, $freshContext] = $this->resolveActorContext($actor, $context);
 
         return [
-            'permission' => $this->hasEffectiveGrant($freshActor, RawMaterialPermission::Edit),
-            'context' => ! RawMaterialPermission::Edit->requiresPrimaryCatalogContext()
+            'permission' => $this->hasEffectiveGrant($freshActor, $permission),
+            'context' => ! $permission->requiresPrimaryCatalogContext()
                 || app(RawMaterialLocationSharePolicy::class)->isPrimaryContext($freshContext),
         ];
     }

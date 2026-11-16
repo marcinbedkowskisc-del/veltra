@@ -74,7 +74,7 @@ export type CatalogPage = {
   canReadUsableCost: boolean | null
 }
 
-export type CategoryOption = { id: string; name: string }
+export type CategoryOption = { id: string; name: string; code?: string; depth?: number }
 export type SupplierOption = { id: string; code: string; name: string }
 
 const COST_BASES = new Set(['PLN/100g', 'PLN/100ml', 'PLN/pc'])
@@ -207,9 +207,15 @@ export function parseCategories(value: unknown): CategoryOption[] {
 
   return value.map((category) => {
     if (!isRecord(category)) throw new Error('Backend zwrócił nieprawidłową listę kategorii.')
+    if (category.code !== undefined && (typeof category.code !== 'string' || category.code.length === 0)
+      || category.depth !== undefined && (!Number.isInteger(category.depth) || Number(category.depth) < 1 || Number(category.depth) > 3)) {
+      throw new Error('Backend zwrócił nieprawidłową listę kategorii.')
+    }
     return {
       id: requiredString(category.id, 'category.id'),
       name: requiredString(category.name, 'category.name'),
+      ...(typeof category.code === 'string' ? { code: category.code } : {}),
+      ...(typeof category.depth === 'number' ? { depth: category.depth } : {}),
     }
   })
 }

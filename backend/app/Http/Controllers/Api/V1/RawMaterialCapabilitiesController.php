@@ -29,6 +29,7 @@ final class RawMaterialCapabilitiesController
 
         $createCapability = $authorization->evaluateCreateCapability($actor, $location);
         $editCapability = $authorization->evaluateEditCapability($actor, $location);
+        $categoryCapability = $authorization->evaluateCategoryManageCapability($actor, $location);
         $definition = $modules->find('RAW_MATERIALS');
         $moduleAvailable = $definition !== null && $availability->enabled($location, 'RAW_MATERIALS');
         $allergenManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
@@ -51,6 +52,7 @@ final class RawMaterialCapabilitiesController
                 'permissions' => [
                     'create' => $createCapability['permission'],
                     'edit' => $editCapability['permission'],
+                    'manage_categories' => $categoryCapability['permission'],
                     'view_reference_price' => $referencePriceView,
                     'manage_reference_price' => $referencePriceManage,
                     'manage_suppliers' => $supplierManage,
@@ -58,6 +60,7 @@ final class RawMaterialCapabilitiesController
                 'actions' => [
                     'create' => $createCapability['permission'] && $createCapability['context'] && $moduleAvailable,
                     'edit' => $editCapability['permission'] && $editCapability['context'] && $moduleAvailable,
+                    'manage_categories' => $categoryCapability['permission'] && $categoryCapability['context'] && $moduleAvailable,
                     'edit_allergens' => $allergenManage && $editCapability['context'] && $moduleAvailable,
                     'create_and_approve' => $createApproved,
                     'view_reference_price' => $referencePriceView && $moduleAvailable,

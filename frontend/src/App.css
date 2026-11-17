@@ -55,7 +55,7 @@
 * { box-sizing: border-box; }
 
 body {
-  min-width: 320px;
+  min-width: min(320px, 100%);
   margin: 0;
   background: var(--canvas);
   color: var(--text);
@@ -1002,6 +1002,11 @@ button:disabled, select:disabled, input:disabled {
   scrollbar-width: thin;
 }
 
+.module-nav-primary {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .module-nav-item {
   min-height: 2.65rem;
   display: flex;
@@ -1022,7 +1027,8 @@ button:disabled, select:disabled, input:disabled {
   background: var(--surface-hover);
 }
 
-.module-nav-item[aria-current="page"] {
+.module-nav-item[aria-current="page"],
+.module-nav-item.is-active {
   color: #fff;
   background: linear-gradient(100deg, #1555a5, #103f7d);
   border-color: rgb(74 150 255 / 38%);
@@ -1038,52 +1044,45 @@ button:disabled, select:disabled, input:disabled {
   text-align: center;
 }
 
-.module-nav-item[aria-current="page"] .module-nav-icon {
+.module-nav-item[aria-current="page"] .module-nav-icon,
+.module-nav-item.is-active .module-nav-icon {
   color: #b7dcff;
 }
 
-.administration-header h1 { margin: 0; font-size: 1.6rem; }
-.administration-header > p:last-child { color: var(--text-secondary); }
-.administration-layout {
-  display: grid;
-  grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: start;
-  margin-top: var(--space-5);
+.module-administration {
+  min-width: 0;
+  padding-left: var(--space-3);
+  padding-bottom: var(--space-1);
 }
-.administration-sidebar {
-  padding: var(--space-3);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+.module-administration .ui-accordion-trigger {
+  margin-top: var(--space-1);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
-.administration-sidebar h2 {
-  margin: var(--space-4) var(--space-2) var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--font-size-sm);
+.module-administration .ui-accordion-trigger[data-active] {
+  color: var(--text);
+  box-shadow: inset 3px 0 var(--accent);
 }
-.administration-sidebar ul { margin: 0; padding: 0; list-style: none; }
-.administration-sidebar a {
+.module-administration ul { margin: 0; padding: 0; list-style: none; }
+.module-administration-link {
   display: block;
   padding: var(--space-2);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: var(--font-size-md);
+  font-size: 0.78rem;
+  line-height: 1.3;
   text-decoration: none;
 }
-.administration-sidebar a:hover { background: var(--surface-hover); color: var(--text); }
-.administration-sidebar a[aria-current="page"] {
+.module-administration-link:hover { background: var(--surface-hover); color: var(--text); }
+.module-administration-link[aria-current="page"] {
   background: var(--accent-soft);
   color: var(--text);
   box-shadow: inset 3px 0 var(--accent);
   font-weight: 700;
 }
-.administration-content.state-panel { max-width: none; min-width: 0; margin: 0; }
-.administration-content .button { margin-top: var(--space-4); }
-
-@media (max-width: 720px) {
-  .administration-layout { grid-template-columns: minmax(0, 1fr); }
-}
+.administration-header h1 { margin: 0; font-size: 1.6rem; }
+.administration-header > p:last-child { color: var(--text-secondary); }
+.administration-content.state-panel { max-width: none; min-width: 0; margin: var(--space-5) 0 0; }
 
 .module-nav-item.is-disabled {
   align-items: flex-start;
@@ -1533,12 +1532,23 @@ button:disabled, select:disabled, input:disabled {
   .shell-brand { min-height: 2.2rem; padding: 0 0.25rem; }
   .brand-mark { width: 1.75rem; height: 1.75rem; }
   .module-nav {
+    display: block;
+    margin-top: 0.45rem;
+    overflow: visible;
+  }
+
+  .module-nav-primary {
     display: flex;
     gap: 0.25rem;
-    margin-top: 0.45rem;
     overflow-x: auto;
     overflow-y: hidden;
     padding-bottom: 0.1rem;
+  }
+
+  .module-administration {
+    max-height: 30vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
   }
 
   .module-nav-item {

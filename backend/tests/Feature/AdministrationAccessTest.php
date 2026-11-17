@@ -8,12 +8,15 @@ use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\User;
+use Illuminate\Support\Facades\Auth;
 use Tests\AuthorizationTestCase;
 
 class AdministrationAccessTest extends AuthorizationTestCase
 {
     private function selectContext(User $user, Location $location): void
     {
+        Auth::forgetGuards();
+        $this->flushSession();
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', [
             'location_id' => $location->id,
         ])->assertOk();

@@ -171,7 +171,7 @@ function App() {
 
   return (
     <ApplicationShell
-      activePath={isAdministrationRoute ? '/administration' : isRawMaterialsRoute ? '/raw-materials' : '/'}
+      activePath={isAdministrationRoute ? window.location.pathname : isRawMaterialsRoute ? '/raw-materials' : '/'}
       showAdministration={administrationStatus === 'allowed'}
       contexts={[{ label: 'Lokalizacja operacyjna', value: contextValue, detail: contextDetail }]}
       footerNote={developmentStageLabel}

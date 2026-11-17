@@ -924,13 +924,19 @@ Dezaktywacja przypisania zamyka jego lokalne role i granty.
 ## PA-01: fundament Panelu Administracyjnego
 
 Frontend udostępnia `/administration` oraz podstrony będące wyłącznie
-placeholderami. Widoczność wejścia i zawartość panelu zależą od odpowiedzi
+placeholderami. Sekcje PA pojawiają się w istniejącej nawigacji aplikacji po
+otwarciu panelu; nie ma osobnego sidebara PA. Widoczność wejścia i zawartość panelu zależą od odpowiedzi
 `GET /api/v1/administration/access`. Ten endpoint wymaga sesji first-party,
 aktywnej zweryfikowanej tożsamości, aktywnego kontekstu i roli ADMINISTRATOR;
 zwraca `{"data":{"allowed":true}}`, 401 dla braku ważnej tożsamości i 403 dla
 braku kontekstu lub uprawnienia. Rola jest sprawdzana ponownie na serwerze.
 Kontrola PA nie zależy od gotowości RAW ani nie włącza jego operacji. Istniejące
 zakresowe operacje personelu poza PA pozostają pod dotychczasową autoryzacją.
+
+Nawigacja PA używa wspólnego `VeltraAccordion`: grupy można rozwijać niezależnie,
+a otwarte grupy są zachowywane w obrębie karty przeglądarki. Grupa aktywnej
+podstrony rozwija się automatycznie. Komponent obsługuje również tryb pojedynczej
+otwartej grupy i preferencję ograniczenia animacji.
 
 ## Stage 1D: API i audyt
 

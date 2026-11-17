@@ -24,6 +24,7 @@ function mockApi(access: () => Response | Promise<Response>, authenticated = tru
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  window.sessionStorage.clear()
   window.history.replaceState(null, '', '/')
 })
 
@@ -35,14 +36,37 @@ describe('Panel Administracyjny', () => {
 
     render(<App />)
 
-    const nav = await screen.findByRole('navigation', { name: 'Nawigacja Panelu Administracyjnego' })
+    const nav = await screen.findByRole('navigation', { name: 'Moduły' })
+    await screen.findByRole('heading', { name: 'Alergeny' })
+    expect(screen.getAllByRole('complementary', { name: 'Nawigacja modułowa' })).toHaveLength(1)
+    expect(screen.getAllByRole('navigation')).toHaveLength(1)
     expect(screen.getByRole('link', { name: 'Panel Administracyjny' }).getAttribute('href')).toBe('/administration')
+    expect(within(nav).getByRole('link', { name: 'Pulpit' }).getAttribute('href')).toBe('/')
+    expect(within(nav).getByRole('link', { name: 'RAW' }).getAttribute('href')).toBe('/raw-materials')
+    expect(within(nav).getByRole('link', { name: 'Przegląd' }).getAttribute('href')).toBe('/administration')
+    for (const name of ['Słowniki i definicje', 'Kontrahenci', 'Użytkownicy i uprawnienia']) {
+      expect(within(nav).getByRole('button', { name })).toBeTruthy()
+    }
     expect(within(nav).getByRole('link', { name: 'Alergeny' }).getAttribute('aria-current')).toBe('page')
+    fireEvent.click(within(nav).getByRole('button', { name: 'Kontrahenci' }))
+    fireEvent.click(within(nav).getByRole('button', { name: 'Użytkownicy i uprawnienia' }))
     for (const name of ['Kategorie surowców', 'Jednostki miary i przeliczniki', 'Alergeny', 'Dostawcy', 'Użytkownicy', 'Role i uprawnienia']) {
       expect(within(nav).getByRole('link', { name })).toBeTruthy()
     }
     expect(screen.getByText('Ta funkcjonalność nie została jeszcze zaimplementowana.')).toBeTruthy()
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/raw-materials'), expect.anything())
+  })
+
+  it('zachowuje wskazanie aktywnej sekcji po jej zwinięciu', async () => {
+    vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
+    window.history.replaceState(null, '', '/administration/allergens')
+    render(<App />)
+    const group = await screen.findByRole('button', { name: 'Słowniki i definicje' })
+    fireEvent.click(group)
+    expect(group.getAttribute('aria-expanded')).toBe('false')
+    expect(group.getAttribute('data-active')).toBe('true')
+    expect(document.getElementById(group.getAttribute('aria-describedby')!)?.textContent).toBe('Zawiera bieżącą stronę')
+    expect(screen.queryByRole('link', { name: 'Alergeny' })).toBeNull()
   })
 
   it('ukrywa wejście i odmawia dostępu przez bezpośredni adres', async () => {
@@ -52,7 +76,7 @@ describe('Panel Administracyjny', () => {
 
     expect(await screen.findByRole('heading', { name: 'Brak dostępu' })).toBeTruthy()
     expect(screen.queryByRole('link', { name: 'Panel Administracyjny' })).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Nawigacja Panelu Administracyjnego' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Użytkownicy' })).toBeNull()
   })
 
   it('wymaga zalogowania bez wykonywania kontroli PA dla gościa', async () => {
@@ -89,7 +113,7 @@ describe('Panel Administracyjny', () => {
 
     expect(await screen.findByRole('heading', { name: 'Nie można sprawdzić dostępu' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Spróbuj ponownie' }))
-    expect(await screen.findByRole('navigation', { name: 'Nawigacja Panelu Administracyjnego' })).toBeTruthy()
+    expect((await screen.findByRole('link', { name: 'Przegląd' })).getAttribute('aria-current')).toBe('page')
   })
 
   it('ponownie sprawdza dostęp po odświeżeniu przypisań i ukrywa panel po odmowie', async () => {
@@ -98,7 +122,7 @@ describe('Panel Administracyjny', () => {
     window.history.replaceState(null, '', '/administration')
     render(<App />)
 
-    expect(await screen.findByRole('navigation', { name: 'Nawigacja Panelu Administracyjnego' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Przegląd' })).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Konto: Jan Test'))
     fireEvent.click(screen.getByRole('button', { name: 'Odśwież przypisania' }))
     expect(await screen.findByRole('heading', { name: 'Brak dostępu' })).toBeTruthy()
@@ -131,6 +155,50 @@ describe('Panel Administracyjny', () => {
     expect(await screen.findByRole('heading', { name: 'Brak dostępu' })).toBeTruthy()
     resolveOld?.(json({ data: { allowed: true } }))
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Panel Administracyjny' })).toBeNull())
-    expect(screen.queryByRole('navigation', { name: 'Nawigacja Panelu Administracyjnego' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Przegląd' })).toBeNull()
+  })
+
+  it('pokazuje treść i aktywny link wybranej sekcji po przejściu pod jej adres', async () => {
+    vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
+    window.history.replaceState(null, '', '/administration')
+    const rendered = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Kontrahenci' }))
+    const link = await screen.findByRole('link', { name: 'Dostawcy' })
+    const href = link.getAttribute('href')
+    expect(href).toBe('/administration/suppliers')
+
+    rendered.unmount()
+    window.history.replaceState(null, '', href)
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Dostawcy' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Dostawcy' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('link', { name: 'Przegląd' }).getAttribute('aria-current')).toBeNull()
+  })
+
+  it('nie rozwija grup PA na zwykłej stronie aplikacji', async () => {
+    vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
+    render(<App />)
+    expect(await screen.findByRole('link', { name: 'Panel Administracyjny' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Przegląd' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Pulpit' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('zachowuje otwarte grupy przy nawigacji i otwiera grupę aktywnego adresu', async () => {
+    vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
+    window.history.replaceState(null, '', '/administration/allergens')
+    const rendered = render(<App />)
+    const dictionaries = await screen.findByRole('button', { name: 'Słowniki i definicje' })
+    expect(dictionaries.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Kontrahenci' }))
+    expect(screen.getByRole('button', { name: 'Kontrahenci' }).getAttribute('aria-expanded')).toBe('true')
+
+    rendered.unmount()
+    window.history.replaceState(null, '', '/administration/permissions')
+    render(<App />)
+    expect((await screen.findByRole('link', { name: 'Role i uprawnienia' })).getAttribute('aria-current')).toBe('page')
+    for (const name of ['Słowniki i definicje', 'Kontrahenci', 'Użytkownicy i uprawnienia']) {
+      expect(screen.getByRole('button', { name }).getAttribute('aria-expanded')).toBe('true')
+    }
+    expect(screen.getByRole('link', { name: 'Dostawcy' }).getAttribute('href')).toBe('/administration/suppliers')
   })
 })

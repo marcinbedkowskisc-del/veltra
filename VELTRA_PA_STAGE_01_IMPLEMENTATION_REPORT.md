@@ -1,6 +1,8 @@
 # VELTRA 2.0 — raport implementacyjny PA-01
 
-Data: 2026-11-17. **Wynik: PARTIAL — implementacja lokalna i walidacja frontendu wykonane; rzeczywiste testy backendowego RBAC są zablokowane.** Nie jest to potwierdzenie odbioru bezpieczeństwa ani zgoda na wdrożenie.
+Data: 2026-11-17. **Aktualny wynik: weryfikacja backendu PASS; PA-01 gotowy do odbioru przez właściciela**, z ograniczeniami integracyjnymi opisanymi w sekcji 9. Nie jest to zgoda na wdrożenie.
+
+Sekcje 1–8 zachowują historyczne wyniki wcześniejszych prób, w tym dwa niepowodzenia testowe sprzed poprawki. Ostateczne wyniki opisuje sekcja 9.
 
 ## 1. Podsumowanie
 
@@ -80,3 +82,127 @@ Układ PA jest przygotowany do późniejszego zastąpienia statycznych grup wsp�
 Tymczasowe procesy lokalnego podglądu i syntetycznego API zostały zatrzymane. Nie wykonano migracji, zmian danych produkcyjnych, wdrożenia, commit ani push. Gałąź `main`, HEAD `1aed58a17a8e459b4313c3f612443eafc59b10db`; zmiany PA-01 pozostają lokalne i niezatwierdzone.
 
 Google Drive: publiczny folder jest czytelny, lecz nie ma dostępnej uwierzytelnionej ścieżki zapisu; raport pozostaje lokalny i nie został przesłany.
+
+## 8. Wykonanie testów backendowych — 2026-11-17
+
+### Środowisko i izolacja
+
+Wygenerowano nowe syntetyczne wartości `TEST_APP_KEY`, `TEST_MUTATION_SIGNING_KEY`, `TEST_PG_ADMIN_PASSWORD`, `TEST_DB_APP_PASSWORD` i `TEST_DB_MIGRATION_PASSWORD` w ignorowanym przez Git `tests/compose/test.env` (tryb 0600); nie użyto poświadczeń Stage ani produkcji. Wrapper projektu zweryfikował konfigurację i kontekst `veltra-test-isolated`: osobny rootless daemon z etykietą `com.veltra.daemon-role=disposable-test` i katalogiem danych `/home/veltra/.local/share/veltra-test-docker`. Wewnętrzna sieć testowa jest odrębna od Stage/produkcji. PostgreSQL nie ma podpiętego wolumenu danych, a rzeczywisty `/proc/self/mountinfo` wskazał `tmpfs` na `/var/lib/postgresql/data`; `SHOW data_directory` potwierdził ten katalog.
+
+Przed uruchomieniem poprzedni testowy kontener PostgreSQL był zatrzymany, jego dane `tmpfs` nie były trwałe, a `docker diff` nie wykazał danych bazy poza `tmpfs`. Compose odtworzył ten kontener i utworzył nową bazę; istniejący zatrzymany kontener Redis został uruchomiony bez odtworzenia. Przed migracją `veltra_testing` miała **0 tabel** w `public`; po inicjalizacji: **0 organizacji, 0 użytkowników, 49 migracji**. Migracje wykonano wyłącznie na nowej nietrwałej bazie testowej, zgodnie z osobną zgodą właściciela.
+
+### Wykonane polecenia
+
+Z katalogu repozytorium:
+
+```bash
+umask 077
+python3 -c 'import base64, os, secrets; from pathlib import Path; p=Path("tests/compose/test.env"); values={"TEST_APP_KEY":"base64:"+base64.b64encode(secrets.token_bytes(32)).decode(), "TEST_MUTATION_SIGNING_KEY":secrets.token_hex(32), "TEST_PG_ADMIN_PASSWORD":secrets.token_hex(24), "TEST_DB_APP_PASSWORD":secrets.token_hex(24), "TEST_DB_MIGRATION_PASSWORD":secrets.token_hex(24)}; fd=os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600); os.write(fd, "".join(f"{k}={v}\n" for k,v in values.items()).encode()); os.close(fd); print("Created synthetic test-only env (mode 0600).")'
+scripts/compose-test config --quiet
+python3 scripts/compose_test_cleanup.py --target application --env-file tests/compose/test.env --verify-context
+scripts/compose-test up -d postgres redis
+scripts/compose-test ps -a
+scripts/compose-test exec -T postgres sh -c 'mount | grep " /var/lib/postgresql/data "; psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(), count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname = '\''public'\'' AND c.relkind IN ('\''r'\'', '\''p'\'')"'
+scripts/compose-test exec -T postgres sh -c 'grep " /var/lib/postgresql/data " /proc/self/mountinfo; psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SHOW data_directory"'
+scripts/compose-test run --build --rm migrate-test
+scripts/compose-test exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(), (SELECT count(*) FROM public.organizations), (SELECT count(*) FROM public.users), (SELECT count(*) FROM public.migrations)"'
+scripts/compose-test run --rm backend-test php artisan test \
+  tests/Feature/AdministrationAccessTest.php \
+  tests/Feature/SecurityApiTest.php \
+  tests/Feature/AdministratorAuthorizationTest.php \
+  tests/Feature/RoleAdministrationTest.php \
+  tests/Feature/PersonnelAdministrationTest.php \
+  tests/Feature/BusinessRoleDefinitionTest.php \
+  tests/Feature/AuthorizationMutationBoundaryTest.php
+```
+
+Obraz backendowy został zbudowany z bieżącego drzewa; testy wykonywano sekwencyjnie. Migracje zakończyły się powodzeniem. Dodatkowe zapytania odczytowe sprawdziły pustą bazę przed testami; kontrola tożsamości i uprawnień połączeń była również wykonywana przez projektowy `Tests\TestCase`.
+
+### Rzeczywiste wyniki oryginalnych testów
+
+**33 passed, 2 failed, 425 assertions, 23.21 s; kod wyjścia 1.**
+
+| Plik | Wynik |
+|---|---|
+| `AdministrationAccessTest.php` | 2 passed, 2 failed |
+| `SecurityApiTest.php` | 5 passed |
+| `AdministratorAuthorizationTest.php` | 13 passed |
+| `RoleAdministrationTest.php` | 4 passed |
+| `PersonnelAdministrationTest.php` | 2 passed |
+| `BusinessRoleDefinitionTest.php` | 6 passed |
+| `AuthorizationMutationBoundaryTest.php` | 1 passed |
+
+Przeszły oryginalne testy aktywnego administratora przy niedostępnym RAW oraz braku sesji i kontekstu. Regresje obejmujące managera, hierarchię i ochronę ostatniego administratora zakończyły się powodzeniem. Negatywne logi SQLSTATE `42501` i `23514` wypisane przez `AuthorizationMutationBoundaryTest` były **oczekiwanymi odmowami** i nie stanowią osobnych niepowodzeń.
+
+Istotny fragment obu niepowodzeń:
+
+```text
+FAILED AdministrationAccessTest > employee manager and boss are denied and manager personnel access remains
+Expected response status code [200] but received 401.
+tests/Feature/AdministrationAccessTest.php:19, wywołanie :45
+
+FAILED AdministrationAccessTest > revoked role and disabled account are rejected on the next request
+Expected response status code [200] but received 401.
+tests/Feature/AdministrationAccessTest.php:19, wywołanie :79
+```
+
+Obie awarie wystąpiły podczas `PUT /api/v1/auth/operating-location` w pomocniczym `selectContext`, po zmianie użytkownika w tym samym teście, przed zakończeniem wszystkich asercji. Pierwszy test nie potwierdził wszystkich trzech ról i operacji managera; drugi nie dotarł do asercji wyłączenia konta (wcześniejsza asercja odmowy po odebraniu roli została wykonana).
+
+### Diagnostyka bez zmiany repozytorium
+
+Uruchomiono istniejące asercje na **tymczasowej kopii** testu wewnątrz jednorazowego kontenera, dodając przed `actingAs` w `selectContext` tylko wyczyszczenie stanu. Uruchomienie z samym `Auth::forgetGuards()` nadal dało **2 passed / 2 failed**, 401; z samym `$this->flushSession()` dało **2 passed / 2 failed**, lecz późniejsze 403. Dodanie **obu** instrukcji dało **4 passed / 0 failed, 25 assertions**. Zastosowano wzorzec istniejący w `LocalRawMaterialIntegrationTest`; kopia nie zastępuje wyniku oryginalnej suity i nie jest zmianą kodu.
+
+Polecenie diagnostyczne (wykonane osobno dla trzech wariantów):
+
+```bash
+scripts/compose-test run -T --rm backend-test php < /home/veltra/.copilot/session-state/94452563-8d4a-4521-8cf5-26f0706baa29/files/pa01-diagnose.php
+```
+
+Tymczasowy skrypt wczytywał oryginalny `tests/Feature/AdministrationAccessTest.php`, dopisywał do kopii w `/tmp/AdministrationAccessTest.php` odpowiednio `Auth::forgetGuards()`, `$this->flushSession()` lub oba wywołania, a następnie wykonywał `php artisan test /tmp/AdministrationAccessTest.php`. Skrypt sesyjny usunięto po diagnostyce; oryginalny test pozostał nietknięty. Wyniki wskazują na brak izolacji guardów i sesji w fixture przy przełączaniu użytkowników, a nie na potwierdzony defekt produkcyjnej bramki PA. Bez poprawienia i ponownego uruchomienia **oryginalnego** testu odbiór PA-01 pozostaje zablokowany.
+
+### Sprzątanie i status
+
+Po testach zatrzymano nowy kontener PostgreSQL i uruchomiony na czas testu wcześniej istniejący kontener Redis:
+
+```bash
+env -i PATH="$PATH" HOME="$HOME" DOCKER_CONFIG="$HOME/.config/veltra-test/docker" \
+  docker --context veltra-test-isolated stop \
+  veltra-test-application-postgres-1 veltra-test-application-redis-1
+```
+
+Zatrzymanie nowego PostgreSQL usuwa nietrwałą bazę `tmpfs`; kontener Redis pozostawiono, przywracając jego poprzedni stan zatrzymania. Syntetyczny `test.env` pozostaje lokalnie jako plik ignorowany przez Git. Nie zmieniono Stage/produkcji, kodu RBAC ani istniejących testów; nie wykonano wdrożenia, commit ani push.
+
+## 9. Poprawka izolacji testu i końcowa weryfikacja — 2026-11-17
+
+W oryginalnym [AdministrationAccessTest.php](backend/tests/Feature/AdministrationAccessTest.php) helper `selectContext` wywołuje `Auth::forgetGuards()` i `$this->flushSession()` przed `actingAs`, zgodnie z istniejącym wzorcem [LocalRawMaterialIntegrationTest.php](backend/tests/Feature/LocalRawMaterialIntegrationTest.php). Nie zmieniono asercji ani produkcyjnego middleware, usług autoryzacji, ról, grantów i endpointów.
+
+Ponownie użyto izolowanego rootless daemona i syntetycznego `test.env` z sekcji 8. Po starcie PostgreSQL `mountinfo` potwierdził `tmpfs`, sieć `veltra-test-application_isolated` była wewnętrzna, a przed migracjami w `veltra_testing` było 0 tabel użytkownika. Po migracji: 0 organizacji, 0 użytkowników, 49 migracji. Obraz backendu zbudowano z aktualnego drzewa, w tym poprawionego oryginalnego testu.
+
+Polecenia w katalogu repozytorium:
+
+```bash
+scripts/compose-test config --quiet
+python3 scripts/compose_test_cleanup.py --target application --env-file tests/compose/test.env --verify-context
+scripts/compose-test up -d postgres redis
+scripts/compose-test exec -T postgres sh -c 'grep " /var/lib/postgresql/data " /proc/self/mountinfo; psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(), count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname = '\''public'\'' AND c.relkind IN ('\''r'\'', '\''p'\'')"'
+scripts/compose-test run --build --rm migrate-test
+scripts/compose-test exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT current_database(), (SELECT count(*) FROM public.organizations), (SELECT count(*) FROM public.users), (SELECT count(*) FROM public.migrations)"'
+scripts/compose-test run --rm backend-test php artisan test \
+  tests/Feature/AdministrationAccessTest.php \
+  tests/Feature/SecurityApiTest.php \
+  tests/Feature/AdministratorAuthorizationTest.php \
+  tests/Feature/RoleAdministrationTest.php \
+  tests/Feature/PersonnelAdministrationTest.php \
+  tests/Feature/BusinessRoleDefinitionTest.php \
+  tests/Feature/AuthorizationMutationBoundaryTest.php \
+  > /home/veltra/.copilot/session-state/94452563-8d4a-4521-8cf5-26f0706baa29/files/pa01-final-test.log 2>&1
+scripts/compose-test run --rm backend-test vendor/bin/pint --test tests/Feature/AdministrationAccessTest.php
+```
+
+Wyniki oryginalnych siedmiu plików: **35 passed, 0 failed, 431 assertions, 23.31 s**, kod wyjścia 0. `AdministrationAccessTest`: 4 passed; pozostałe zestawy odpowiednio 5, 13, 4, 2, 6 i 1 passed w kolejności powyższego polecenia. Pint: **PASS, 1 plik**. Oczekiwane odmowy SQLSTATE `42501` i `23514` z testu granicy mutacji nie są błędami testów.
+
+W oryginalnym teście PA przeszły scenariusze administratora przy niedostępnym RAW, odmowy pracownikowi/managerowi/BOSS, zachowania dostępu managera do personelu poza PA, braku sesji i kontekstu, odebrania roli oraz wyłączenia konta. Są to rzeczywiste testy Laravel HTTP z PostgreSQL, ale nie testują rzeczywistej sesji przeglądarkowej i wdrożonego serwera.
+
+**Pozostaje do osobnej kontroli integracyjnej:** rzeczywista sesja frontend–backend, zachowanie po przeładowaniu i routing w docelowym środowisku. Wcześniejsze podglądy UI korzystały z syntetycznego API. Nie uruchomiono wdrożenia ani testów Stage/produkcji; gotowość do odbioru nie oznacza ich zatwierdzenia.
+
+Po testach zatrzymano PostgreSQL i Redis, przywracając ich poprzedni stan zatrzymania; baza PostgreSQL w `tmpfs` jest nietrwała. Syntetyczny `tests/compose/test.env` pozostał lokalnie, ignorowany przez Git. Nie wykonano wdrożenia, commitu ani push.

@@ -7,11 +7,91 @@ import Pagination from './Pagination'
 import { getPageItems } from './pagination'
 import SearchField from './SearchField'
 import Tabs from './Tabs'
+import VeltraAccordion from './VeltraAccordion'
 import { formatNumber } from './formatting'
 
 afterEach(cleanup)
 
 describe('wspólne komponenty VELTRA UI', () => {
+  it('rozwija wiele paneli, ukrywa zwinięte i zachowuje poprawne powiązania ARIA', () => {
+    const items = [
+      { id: 'one', title: 'Pierwsza', content: <a href="/one">Pierwszy link</a> },
+      { id: 'two', title: 'Druga', content: <a href="/two">Drugi link</a> },
+    ]
+    render(<><VeltraAccordion items={items} /><VeltraAccordion items={items} /></>)
+    const first = screen.getAllByRole('button', { name: 'Pierwsza' })
+    const second = screen.getAllByRole('button', { name: 'Druga' })
+    expect(first[0].getAttribute('aria-controls')).not.toBe(first[1].getAttribute('aria-controls'))
+    const panel = document.getElementById(first[0].getAttribute('aria-controls')!)
+    expect(panel?.getAttribute('aria-labelledby')).toBe(first[0].id)
+    expect(panel?.hasAttribute('inert')).toBe(true)
+    expect(screen.queryByRole('link', { name: 'Pierwszy link' })).toBeNull()
+
+    fireEvent.click(first[0])
+    fireEvent.click(second[0])
+    expect(first[0].getAttribute('aria-expanded')).toBe('true')
+    expect(second[0].getAttribute('aria-expanded')).toBe('true')
+    expect(panel?.hasAttribute('inert')).toBe(false)
+    expect(screen.getByRole('link', { name: 'Pierwszy link' })).toBeTruthy()
+    fireEvent.click(first[0])
+    expect(first[0].getAttribute('aria-expanded')).toBe('false')
+    expect(second[0].getAttribute('aria-expanded')).toBe('true')
+    expect(screen.queryByRole('link', { name: 'Pierwszy link' })).toBeNull()
+  })
+
+  it('obsługuje tryb pojedynczy, szybkie zmiany i kontrolowany stan', () => {
+    const onExpandedChange = vi.fn()
+    const items = [
+      { id: 'one', title: 'Pierwsza', content: 'Treść pierwsza' },
+      { id: 'two', title: 'Druga', content: 'Treść druga' },
+    ]
+    const { rerender } = render(<VeltraAccordion items={items} mode="single" defaultExpandedIds={['one']} />)
+    const first = screen.getByRole('button', { name: 'Pierwsza' })
+    const second = screen.getByRole('button', { name: 'Druga' })
+    fireEvent.click(second)
+    expect(first.getAttribute('aria-expanded')).toBe('false')
+    expect(second.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(first)
+    fireEvent.click(first)
+    fireEvent.click(second)
+    expect(first.getAttribute('aria-expanded')).toBe('false')
+    expect(second.getAttribute('aria-expanded')).toBe('true')
+
+    rerender(<VeltraAccordion items={items} expandedIds={['one']} onExpandedChange={onExpandedChange} />)
+    fireEvent.click(second)
+    expect(onExpandedChange).toHaveBeenCalledWith(['one', 'two'])
+    expect(second.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('dostosowuje wysokość otwartego panelu do zmieniającej się treści', () => {
+    let notify = () => {}
+    const disconnect = vi.fn()
+    class TestResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        notify = () => callback([], this)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() { disconnect() }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    try {
+      const { unmount } = render(<VeltraAccordion items={[{ id: 'one', title: 'Pierwsza', content: 'Treść' }]} defaultExpandedIds={['one']} />)
+      const trigger = screen.getByRole('button', { name: 'Pierwsza' })
+      const panel = document.getElementById(trigger.getAttribute('aria-controls')!)!
+      const content = panel.querySelector<HTMLElement>('.ui-accordion-content')!
+      vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 100, 144))
+      act(() => notify())
+      expect(panel.style.height).toBe('144px')
+      fireEvent.click(trigger)
+      expect(panel.style.height).toBe('0px')
+      expect(disconnect).toHaveBeenCalled()
+      unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('czyści tylko kontrolowane wyszukiwanie i zachowuje fokus', () => {
     function SearchHarness() {
       const [value, setValue] = useState('mąka')

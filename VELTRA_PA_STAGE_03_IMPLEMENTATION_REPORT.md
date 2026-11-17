@@ -184,7 +184,9 @@ Backend i baza:
 ## Git, commit i gotowość
 
 - Branch: `main`, bazowy HEAD pozostaje `f05ab9d8c2f8fdeefe304f8924ef34b6d8363b59`.
-- Commit PA-03 zostanie utworzony lokalnie po końcowym sprawdzeniu formatowania
-  i diffu; hash oraz końcowy stan working tree zostaną dopisane po utworzeniu.
+- Commit PA-03: `206973c` —
+  `feat(admin): implement F10 raw material category management`.
+- Raport zaktualizowano po utworzeniu commitu; po zapisaniu tej aktualizacji
+  working tree pozostaje czysty. Zmiany są wyłącznie lokalne.
 - Nie wykonano push, deploymentu ani modyfikacji Stage/production.
 - **Gotowość PA-04: nie rozpoczynać** przed akceptacją PA-03 przez właściciela.

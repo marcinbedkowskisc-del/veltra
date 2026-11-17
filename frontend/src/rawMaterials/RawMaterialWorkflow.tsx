@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
+import { AllergenDeclarationRows } from './AllergenFields'
 import {
   changeRawMaterialLifecycle,
   fetchAllergenCatalogs,
@@ -112,7 +113,8 @@ export default function RawMaterialWorkflow({ materialId, refreshKey, onSaved, o
   }
 
   const missing = completion?.missingRequirements ?? []
-  const selectedCatalog = catalogs.find((catalog) => catalog.id === allergens?.declaration.catalog_version_id)
+  const currentCatalog = catalogs.find((catalog) => catalog.isCurrent) ?? catalogs[0]
+  const selectedCatalog = catalogs.find((catalog) => catalog.id === allergens?.declaration.catalog_version_id) ?? currentCatalog
 
   return (
     <section ref={section} tabIndex={-1} aria-label="Cykl zatwierdzania RAW" className="detail-section" aria-busy={loading || busy}>
@@ -184,36 +186,31 @@ export default function RawMaterialWorkflow({ materialId, refreshKey, onSaved, o
           <select value={allergens.declaration.status} disabled={busy} onChange={(event) => {
             const status = event.target.value
             if (status !== 'UNKNOWN' && status !== 'DECLARED' && status !== 'NO_KNOWN_ALLERGENS') return
-            setAllergens({ ...allergens, declaration: { status, catalog_version_id: null, items: [] } })
+            setAllergens({ ...allergens, declaration: {
+              status,
+              catalog_version_id: status === 'UNKNOWN' ? null : currentCatalog?.id ?? null,
+              items: [],
+            } })
           }}>
             <option value="UNKNOWN">Nieznany — brak deklaracji</option>
             <option value="DECLARED">Deklaruję występujące alergeny</option>
             <option value="NO_KNOWN_ALLERGENS">Deklaruję brak znanych alergenów</option>
           </select>
         </label>
-        {allergens.declaration.status !== 'UNKNOWN' && <>
-          <label className="create-form-field">Wersja katalogu alergenów
+        {allergens.declaration.status !== 'UNKNOWN' && selectedCatalog && <>
+          {allergens.declaration.catalog_version_id !== currentCatalog?.id && <label className="create-form-field">Wersja katalogu alergenów
             <select required disabled={busy} value={allergens.declaration.catalog_version_id ?? ''} onChange={(event) =>
               setAllergens({ ...allergens, declaration: { ...allergens.declaration, catalog_version_id: event.target.value || null, items: [] } })}>
-              <option value="">Wybierz wersję</option>
               {catalogs.map((catalog) => <option key={catalog.id} value={catalog.id}>Katalog · wersja {catalog.versionNumber}</option>)}
             </select>
-          </label>
-          {allergens.declaration.status === 'DECLARED' && selectedCatalog?.definitions.map((definition) => {
-            const item = allergens.declaration.items.find((candidate) => candidate.allergen_code === definition.code)
-            return <label key={definition.code} className="create-form-field">{definition.name}
-              <select disabled={busy} value={item?.exposure_kind ?? ''} onChange={(event) => {
-                const exposure = event.target.value
-                const items = allergens.declaration.items.filter((candidate) => candidate.allergen_code !== definition.code)
-                if (exposure === 'DIRECT' || exposure === 'CROSS_CONTACT_POTENTIAL') items.push({ allergen_code: definition.code, exposure_kind: exposure })
-                setAllergens({ ...allergens, declaration: { ...allergens.declaration, items } })
-              }}>
-                <option value="">Nie deklaruję</option>
-                <option value="DIRECT">Występuje bezpośrednio</option>
-                <option value="CROSS_CONTACT_POTENTIAL">Możliwy kontakt krzyżowy</option>
-              </select>
-            </label>
-          })}
+          </label>}
+          {allergens.declaration.status === 'DECLARED' && <AllergenDeclarationRows
+            catalog={selectedCatalog}
+            items={allergens.declaration.items}
+            disabled={busy}
+            invalid={false}
+            onChange={(items) => setAllergens({ ...allergens, declaration: { ...allergens.declaration, items } })}
+          />}
         </>}
         <div className="create-form-actions create-form-field-wide">
           <button type="submit" className="button button-primary" disabled={busy

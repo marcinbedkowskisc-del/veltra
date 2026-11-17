@@ -100,7 +100,7 @@ describe('kontrakt cyklu zatwierdzania i alergenów', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: materialId, version: 'next-version' } })))
     vi.stubGlobal('fetch', fetchMock)
     await expect(fetchAllergenCatalogs()).resolves.toEqual([{
-      id: catalogId, versionNumber: 1, definitions: [{ code: 'TEST_WHEAT', name: 'TEST — Pszenica' }],
+      id: catalogId, versionNumber: 1, isCurrent: false, definitions: [{ code: 'TEST_WHEAT', name: 'TEST — Pszenica', sources: [] }],
     }])
     await expect(fetchAllergenDeclaration(materialId)).resolves.toEqual({ version, declaration })
     await saveAllergenDeclaration(materialId, declaration, version)

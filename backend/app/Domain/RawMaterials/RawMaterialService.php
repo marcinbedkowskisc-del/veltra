@@ -1680,6 +1680,8 @@ final class RawMaterialService
     public function allergenCatalog(User $actor, Location $context): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+        $currentPoolVersion = DB::table('raw_material_allergen_pool_versions')
+            ->orderByDesc('version_number')->value('catalog_version_id');
 
         return DB::table('raw_material_allergen_catalog_versions')
             ->where('status', 'PUBLISHED')
@@ -1689,15 +1691,20 @@ final class RawMaterialService
                 'id' => $version->id,
                 'version_number' => (int) $version->version_number,
                 'published_at' => $version->published_at,
+                'is_current' => $version->id === $currentPoolVersion,
                 'definitions' => DB::table('raw_material_allergen_definitions')
                     ->where('catalog_version_id', $version->id)
                     ->where('is_active', true)
                     ->orderBy('display_order')
-                    ->get(['allergen_code', 'name_pl', 'display_order'])
+                    ->get(['allergen_code', 'name_pl', 'display_order', 'canonical_allergen_id', 'source_codes'])
                     ->map(fn (object $definition): array => [
                         'allergen_code' => $definition->allergen_code,
                         'name_pl' => $definition->name_pl,
                         'display_order' => (int) $definition->display_order,
+                        'canonical_allergen_id' => $definition->canonical_allergen_id,
+                        'source_codes' => is_array($definition->source_codes)
+                            ? $definition->source_codes
+                            : json_decode($definition->source_codes, true, flags: JSON_THROW_ON_ERROR),
                     ])->all(),
             ])->all();
     }
@@ -1758,10 +1765,14 @@ final class RawMaterialService
             ->get([
                 'declarations.allergen_code',
                 'definitions.name_pl',
+                'definitions.source_codes',
                 'declarations.exposure_kind',
             ])->map(fn (object $item): array => [
                 'allergen_code' => $item->allergen_code,
                 'name_pl' => $item->name_pl,
+                'source_codes' => is_array($item->source_codes)
+                    ? $item->source_codes
+                    : json_decode($item->source_codes, true, flags: JSON_THROW_ON_ERROR),
                 'exposure_kind' => $item->exposure_kind,
             ])->all();
 

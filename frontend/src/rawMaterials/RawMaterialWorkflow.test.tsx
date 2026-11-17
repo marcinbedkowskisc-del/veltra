@@ -34,7 +34,10 @@ beforeEach(() => {
   vi.mocked(changeRawMaterialLifecycle).mockResolvedValue()
   vi.mocked(saveAllergenDeclaration).mockResolvedValue()
   vi.mocked(fetchAllergenCatalogs).mockResolvedValue([
-    { id: 'catalog-1', versionNumber: 1, definitions: [{ code: 'TEST_WHEAT', name: 'TEST — Pszenica' }] },
+    { id: 'catalog-1', versionNumber: 1, isCurrent: true, definitions: [
+      { code: 'TEST_WHEAT', name: 'TEST — Pszenica', sources: ['EU'] },
+      { code: 'TEST_MILK', name: 'TEST — Mleko', sources: ['US'] },
+    ] },
   ])
   vi.mocked(fetchAllergenDeclaration).mockResolvedValue({
     version: 'version-1', declaration: { status: 'UNKNOWN', catalog_version_id: null, items: [] },
@@ -61,20 +64,28 @@ it('przekazuje i zatwierdza dopiero po osobnych potwierdzeniach, z właściwą w
   expect(changeRawMaterialLifecycle).toHaveBeenLastCalledWith('material-1', 'approve', 'version-2', 'Akceptacja rewizji')
 })
 
-it('nie deklaruje automatycznie braku alergenów i zapisuje jawny wybór przez istniejący kontrakt', async () => {
+it('zapisuje kilka alergenów z odrębnymi rodzajami deklaracji przez istniejący kontrakt', async () => {
   render(<RawMaterialWorkflow {...props} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Deklaracja alergenów' }))
   const status = await screen.findByLabelText('Status deklaracji')
   expect((status as HTMLSelectElement).value).toBe('UNKNOWN')
   expect(saveAllergenDeclaration).not.toHaveBeenCalled()
   fireEvent.change(status, { target: { value: 'DECLARED' } })
-  fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: 'catalog-1' } })
-  fireEvent.change(screen.getByLabelText('TEST — Pszenica'), { target: { value: 'DIRECT' } })
+  await screen.findByRole('button', { name: '+ Dodaj alergen' })
+  fireEvent.click(screen.getByRole('button', { name: '+ Dodaj alergen' }))
+  fireEvent.change(screen.getAllByLabelText('Alergen')[0], { target: { value: 'TEST_WHEAT' } })
+  fireEvent.change(screen.getAllByLabelText('Rodzaj deklaracji')[0], { target: { value: 'DIRECT' } })
+  fireEvent.click(screen.getByRole('button', { name: '+ Dodaj alergen' }))
+  fireEvent.change(screen.getAllByLabelText('Alergen')[1], { target: { value: 'TEST_MILK' } })
+  fireEvent.change(screen.getAllByLabelText('Rodzaj deklaracji')[1], { target: { value: 'CROSS_CONTACT_POTENTIAL' } })
   fireEvent.click(screen.getByRole('button', { name: 'Zapisz deklarację' }))
   await waitFor(() => expect(props.onSaved).toHaveBeenCalledTimes(1))
   expect(saveAllergenDeclaration).toHaveBeenCalledWith('material-1', {
     status: 'DECLARED', catalog_version_id: 'catalog-1',
-    items: [{ allergen_code: 'TEST_WHEAT', exposure_kind: 'DIRECT' }],
+    items: [
+      { allergen_code: 'TEST_WHEAT', exposure_kind: 'DIRECT' },
+      { allergen_code: 'TEST_MILK', exposure_kind: 'CROSS_CONTACT_POTENTIAL' },
+    ],
   }, 'version-1')
 })
 

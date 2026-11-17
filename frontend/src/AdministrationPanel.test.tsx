@@ -17,6 +17,8 @@ function mockApi(access: () => Response | Promise<Response>, authenticated = tru
     if (url.endsWith('/auth/locations')) return Promise.resolve(json({ data: [location] }))
     if (url.endsWith('/auth/operating-location')) return Promise.resolve(json({ data: location }))
     if (url.endsWith('/administration/access')) return Promise.resolve(access())
+    if (url.endsWith('/administration/allergens/dictionaries')) return Promise.resolve(json({ data: [] }))
+    if (url.endsWith('/administration/allergens/canonical')) return Promise.resolve(json({ data: [] }))
     throw new Error(`Unexpected request: ${url}`)
   })
 }
@@ -29,7 +31,7 @@ afterEach(() => {
 })
 
 describe('Panel Administracyjny', () => {
-  it('pokazuje administratorowi wejście, nawigację i wybraną niedostępną funkcję', async () => {
+  it('pokazuje administratorowi wejście, nawigację i zarządzanie słownikami alergenów', async () => {
     const fetchMock = mockApi(() => json({ data: { allowed: true } }))
     vi.stubGlobal('fetch', fetchMock)
     window.history.replaceState(null, '', '/administration/allergens')
@@ -37,7 +39,7 @@ describe('Panel Administracyjny', () => {
     render(<App />)
 
     const nav = await screen.findByRole('navigation', { name: 'Moduły' })
-    await screen.findByRole('heading', { name: 'Alergeny' })
+    await screen.findByRole('heading', { name: 'Międzynarodowe słowniki alergenów' })
     expect(screen.getAllByRole('complementary', { name: 'Nawigacja modułowa' })).toHaveLength(1)
     expect(screen.getAllByRole('navigation')).toHaveLength(1)
     expect(screen.getByRole('link', { name: 'Panel Administracyjny' }).getAttribute('href')).toBe('/administration')
@@ -53,7 +55,7 @@ describe('Panel Administracyjny', () => {
     for (const name of ['Kategorie surowców', 'Jednostki miary i przeliczniki', 'Alergeny', 'Dostawcy', 'Użytkownicy', 'Role i uprawnienia']) {
       expect(within(nav).getByRole('link', { name })).toBeTruthy()
     }
-    expect(screen.getByText('Ta funkcjonalność nie została jeszcze zaimplementowana.')).toBeTruthy()
+    expect(screen.queryByText('Ta funkcjonalność nie została jeszcze zaimplementowana.')).toBeNull()
     expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining('/raw-materials'), expect.anything())
   })
 

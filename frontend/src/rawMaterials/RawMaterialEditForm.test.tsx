@@ -164,14 +164,13 @@ describe('formularz edycji surowca', () => {
     vi.mocked(fetchAllergenDeclaration).mockResolvedValue({
       version, declaration: { status: 'UNKNOWN', catalog_version_id: null, items: [] },
     })
-    vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: catalogId, versionNumber: 1, definitions: [] }])
+    vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: catalogId, versionNumber: 1, isCurrent: true, definitions: [] }])
     renderForm()
     await screen.findByRole('heading', { name: 'Edytuj surowiec' })
     fireEvent.change(screen.getByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
     fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
     await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
     fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
-    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: catalogId } })
     fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
     expect(screen.getByLabelText<HTMLTextAreaElement>(/Opis.*Pozostawienie/).value).toBe('Opis zachowany')
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))

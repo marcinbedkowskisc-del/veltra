@@ -73,7 +73,7 @@ beforeEach(() => {
   reserveMock.mockResolvedValue(reservation)
   createMock.mockResolvedValue(created)
   createApprovedMock.mockResolvedValue({ ...created, lifecycleState: 'ACTIVE' })
-  vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, definitions: [] }])
+  vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, isCurrent: true, definitions: [] }])
   vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
     { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
     { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
@@ -179,7 +179,6 @@ describe('formularz tworzenia surowca RAW', () => {
     await screen.findByLabelText('Status deklaracji')
     await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
     fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
-    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: allergenCatalogId } })
     fireEvent.click(screen.getByRole('tab', { name: 'Dane podstawowe' }))
     expect(screen.getByLabelText<HTMLInputElement>(/Nazwa surowca/).value).toBe('Mąka testowa')
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
@@ -208,7 +207,6 @@ describe('formularz tworzenia surowca RAW', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
     await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
     fireEvent.change(screen.getByLabelText('Status deklaracji'), { target: { value: 'NO_KNOWN_ALLERGENS' } })
-    fireEvent.change(screen.getByLabelText('Wersja katalogu alergenów'), { target: { value: allergenCatalogId } })
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
     await screen.findByRole('button', { name: 'Ponów bezpiecznie' })
     const first = createApprovedMock.mock.calls[0]

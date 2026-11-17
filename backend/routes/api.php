@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AccountLinkController;
+use App\Http\Controllers\Api\V1\AdministrationAllergenController;
 use App\Http\Controllers\Api\V1\AdministrationCategoryController;
 use App\Http\Controllers\Api\V1\AdministrationUnitController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
@@ -54,6 +55,17 @@ Route::prefix('v1/administration')->middleware([
     Route::patch('/units/{unit}', [AdministrationUnitController::class, 'update'])->whereUuid('unit');
     Route::post('/units/{unit}/archive', [AdministrationUnitController::class, 'archive'])->whereUuid('unit');
     Route::post('/units/{unit}/restore', [AdministrationUnitController::class, 'restore'])->whereUuid('unit');
+    Route::get('/allergens/dictionaries', [AdministrationAllergenController::class, 'dictionaries']);
+    Route::get('/allergens/canonical', [AdministrationAllergenController::class, 'canonicalAllergens']);
+    Route::get('/allergens/dictionaries/{version}/entries', [AdministrationAllergenController::class, 'entries'])->whereUuid('version');
+    Route::get('/allergens/dictionaries/{version}/history', [AdministrationAllergenController::class, 'history'])->whereUuid('version');
+    Route::post('/allergens/dictionaries/{version}/entries', [AdministrationAllergenController::class, 'storeEntry'])->whereUuid('version');
+    Route::patch('/allergens/entries/{entry}', [AdministrationAllergenController::class, 'updateEntry'])->whereUuid('entry');
+    Route::post('/allergens/entries/{entry}/archive', [AdministrationAllergenController::class, 'archiveEntry'])->whereUuid('entry');
+    Route::patch('/allergens/dictionaries/{version}/canonical/{allergen}', [AdministrationAllergenController::class, 'updateCanonical'])
+        ->whereUuid('version')->where('allergen', '[A-Z][A-Z0-9_]{0,39}');
+    Route::post('/allergens/dictionaries/{version}/canonical/{allergen}/archive', [AdministrationAllergenController::class, 'archiveCanonical'])
+        ->whereUuid('version')->where('allergen', '[A-Z][A-Z0-9_]{0,39}');
 });
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {

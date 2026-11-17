@@ -1,0 +1,2323 @@
+{
+  "meta": {
+    "document_id": "VELTRA_ALLERGEN_DICTIONARIES_MASTER_v1.1",
+    "revised_on": "2026-11-17",
+    "language": "pl",
+    "completeness": "STRUCTURALLY_COMPLETE_NOT_LEGALLY_CERTIFIED",
+    "source_v1_url": "https://drive.google.com/file/d/1d3mk29i7T_nZ7hxvHvlRRSWn-Iea0CWG/view",
+    "legal_review_required_before_automated_export_labels": true,
+    "notes": [
+      "TH sesame: verified on Thai FDA Notification 474, effective 2026-10-31.",
+      "Codex sulphites separate clause 4.2.1.7, not 4.2.1.4.",
+      "Japan cashew transition until 2028-03-31 per CAA.",
+      "Legal scope or exceptions must not be inferred from group hierarchy when composing a market-specific legal label.",
+      "The mapping covers expressly listed entries and selected source examples; not an exhaustive species list for FDA fish and crustaceans."
+    ]
+  },
+  "source_dictionaries": [
+    {
+      "code": "EU_1169_2011_ANNEX_II",
+      "jurisdiction": "EU",
+      "authority": "European Union",
+      "status": "ACTIVE",
+      "effective_from": "2014-12-13",
+      "last_significant_list_change": null,
+      "last_significant_list_change_status": "UNVERIFIED",
+      "official_url": "https://eur-lex.europa.eu/legal-content/PL/TXT/?uri=CELEX:32011R1169",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "US_FDA_MAJOR_ALLERGENS",
+      "jurisdiction": "US",
+      "authority": "U.S. Food and Drug Administration",
+      "status": "ACTIVE",
+      "effective_from": "2006-01-01",
+      "sesame_effective_from": "2023-01-01",
+      "tree_nut_guidance_date": "2025-01-06",
+      "faq_current_as_of": "2026-10-29",
+      "official_url": "https://www.fda.gov/food/nutrition-food-labeling-and-critical-foods/food-allergies",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "CODEX_CXS_1_1985_2024",
+      "jurisdiction": "CODEX",
+      "authority": "Codex Alimentarius Commission (FAO/WHO)",
+      "status": "ACTIVE_STANDARD",
+      "revision_year": 2024,
+      "official_url": "https://www.fao.org/fao-who-codexalimentarius/sh-proxy/en/?lnk=1&url=https%3A%2F%2Fworkspace.fao.org%2Fsites%2Fcodex%2FStandards%2FCXS+1-1985%2FCXS_001e.pdf",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-17",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "JP_CAA_ALLERGENS_2026_04",
+      "jurisdiction": "JP",
+      "authority": "Consumer Affairs Agency",
+      "status": "ACTIVE",
+      "effective_from": "2026-04-01",
+      "official_url": "https://www.caa.go.jp/policies/policy/food_labeling/food_sanitation/allergy/",
+      "cashew_transition_end": "2028-03-31",
+      "cashew_transition_source": "https://www.caa.go.jp/policies/policy/food_labeling/information/pamphlets/assets/food_labeling_cms201_261030_02.pdf",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-17",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "CN_GB7718_2011_CURRENT",
+      "jurisdiction": "CN",
+      "authority": "National Health Commission",
+      "status": "ACTIVE",
+      "effective_from": "2012-04-20",
+      "replaced_on": "2027-03-16",
+      "allergen_declaration_status": "VOLUNTARY_RECOMMENDED",
+      "official_url": "https://www.nhc.gov.cn/zwgk/cybz/201106/53c53d99b71940c7a74830f86b46f8db.shtml",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "CN_GB7718_2025_FUTURE",
+      "jurisdiction": "CN",
+      "authority": "National Health Commission",
+      "status": "FUTURE",
+      "effective_from": "2027-03-16",
+      "allergen_declaration_status": "FUTURE_MANDATORY",
+      "official_url": "https://www.nhc.gov.cn/sps/c100087/202509/bc824a504ec34c27883da73f14c20d44.shtml",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "KR_MFDS_ALLERGENS",
+      "jurisdiction": "KR",
+      "authority": "Ministry of Food and Drug Safety",
+      "status": "ACTIVE",
+      "last_verified_major_list_change": "2018-04-26",
+      "effective_date_of_2018_change": null,
+      "effective_date_status": "UNVERIFIED",
+      "official_url": "https://www.mfds.go.kr/eng/wpge/m_14/contents.do",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "TW_TFDA_ALLERGENS_2020",
+      "jurisdiction": "TW",
+      "authority": "Taiwan Food and Drug Administration",
+      "status": "ACTIVE",
+      "amended_on": "2018-08-21",
+      "effective_from": "2020-07-01",
+      "official_url": "https://www.fda.gov.tw/tc/includes/GetFile.ashx?id=f639239439163075113",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-16",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    },
+    {
+      "code": "TH_FDA_NOTIFICATION_474_2026",
+      "jurisdiction": "TH",
+      "authority": "Thai FDA / Ministry of Public Health",
+      "status": "ACTIVE",
+      "effective_from": "2026-10-31",
+      "official_url": "https://food.fda.moph.go.th/press-release/law474-no2/",
+      "change_note": "Notification 474 adds sesame and sesame products to mandatory allergen labeling; sulphites and lactose moved out of allergen list to separate warning provisions.",
+      "last_manual_edit_at": null,
+      "seed_imported_at": null,
+      "last_verified_on": "2026-11-17",
+      "manual_edit_date_policy": "Set timestamp only when an authorized administrator actually modifies a dictionary; do not prefill with legal effective date."
+    }
+  ],
+  "allergens": [
+    {
+      "id": "ALG_CEREALS_GLUTEN",
+      "parent_id": null,
+      "canonical_pl": "ZBOŻA ZAWIERAJĄCE GLUTEN",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_WHEAT",
+      "parent_id": "ALG_CEREALS_GLUTEN",
+      "canonical_pl": "PSZENICA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "小麦"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_RYE",
+      "parent_id": "ALG_CEREALS_GLUTEN",
+      "canonical_pl": "ŻYTO",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BARLEY",
+      "parent_id": "ALG_CEREALS_GLUTEN",
+      "canonical_pl": "JĘCZMIEŃ",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_OATS",
+      "parent_id": "ALG_CEREALS_GLUTEN",
+      "canonical_pl": "OWIES",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SPELT",
+      "parent_id": "ALG_WHEAT",
+      "canonical_pl": "ORKISZ",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_KHORASAN",
+      "parent_id": "ALG_WHEAT",
+      "canonical_pl": "PSZENICA KHORASAN / KAMUT",
+      "synonyms_pl": [
+        "PSZENICA KHORASAN",
+        "KAMUT"
+      ],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BUCKWHEAT",
+      "parent_id": null,
+      "canonical_pl": "GRYKA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "そば"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CRUSTACEANS",
+      "parent_id": null,
+      "canonical_pl": "SKORUPIAKI",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SHRIMP",
+      "parent_id": "ALG_CRUSTACEANS",
+      "canonical_pl": "KREWETKI",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "えび"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CRAB",
+      "parent_id": "ALG_CRUSTACEANS",
+      "canonical_pl": "KRABY",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "かに"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_EGGS",
+      "parent_id": null,
+      "canonical_pl": "JAJA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "卵"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_FISH",
+      "parent_id": null,
+      "canonical_pl": "RYBY",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SALMON",
+      "parent_id": "ALG_FISH",
+      "canonical_pl": "ŁOSOŚ",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "さけ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MACKEREL",
+      "parent_id": "ALG_FISH",
+      "canonical_pl": "MAKRELA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "さば"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SALMON_ROE",
+      "parent_id": "ALG_FISH",
+      "canonical_pl": "IKRA ŁOSOSIOWA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "いくら"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PEANUT",
+      "parent_id": null,
+      "canonical_pl": "ORZESZKI ZIEMNE",
+      "synonyms_pl": [
+        "ORZESZKI ARACHIDOWE"
+      ],
+      "original_names": {
+        "ja": "落花生"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SOY",
+      "parent_id": null,
+      "canonical_pl": "SOJA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "大豆"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MILK",
+      "parent_id": null,
+      "canonical_pl": "MLEKO",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "乳"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_TREE_NUTS",
+      "parent_id": null,
+      "canonical_pl": "ORZECHY DRZEWNE / ORZECHY",
+      "synonyms_pl": [
+        "ORZECHY"
+      ],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_ALMOND",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "MIGDAŁY",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "アーモンド"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_HAZELNUT",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "ORZECHY LASKOWE",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_WALNUT",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "ORZECHY WŁOSKIE / WALNUT",
+      "synonyms_pl": [
+        "ORZECHY WŁOSKIE"
+      ],
+      "original_names": {
+        "en": "walnut / English walnut / California walnut",
+        "ja": "くるみ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CASHEW",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "NERKOWCE",
+      "synonyms_pl": [
+        "ORZECHY NERKOWCA",
+        "NERKOWIEC"
+      ],
+      "original_names": {
+        "ja": "カシューナッツ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PECAN",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "PEKAN",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BRAZIL_NUT",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "ORZECHY BRAZYLIJSKIE",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PISTACHIO",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "PISTACJE",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "ピスタチオ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MACADAMIA",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "MAKADAMIA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "マカダミアナッツ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PINE_NUT",
+      "parent_id": "ALG_TREE_NUTS",
+      "canonical_pl": "ORZESZKI PINIOWE",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SESAME",
+      "parent_id": null,
+      "canonical_pl": "SEZAM",
+      "synonyms_pl": [],
+      "original_names": {
+        "th": "งา",
+        "ja": "ごま"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CELERY",
+      "parent_id": null,
+      "canonical_pl": "SELER",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MUSTARD",
+      "parent_id": null,
+      "canonical_pl": "GORCZYCA",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SULPHITES",
+      "parent_id": null,
+      "canonical_pl": "DWUTLENEK SIARKI I SIARCZYNY",
+      "synonyms_pl": [
+        "SIARCZYNY",
+        "DWUTLENEK SIARKI"
+      ],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_LUPIN",
+      "parent_id": null,
+      "canonical_pl": "ŁUBIN",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MOLLUSCS",
+      "parent_id": null,
+      "canonical_pl": "MIĘCZAKI",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CEPHALOPODS",
+      "parent_id": "ALG_MOLLUSCS",
+      "canonical_pl": "GŁOWONOGI",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_SQUID",
+      "parent_id": "ALG_CEPHALOPODS",
+      "canonical_pl": "KAŁAMARNICA / KALMAR",
+      "synonyms_pl": [
+        "KALMAR",
+        "KAŁAMARNICA"
+      ],
+      "original_names": {
+        "ja": "いか"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CLAMS",
+      "parent_id": "ALG_MOLLUSCS",
+      "canonical_pl": "MAŁŻE / CLAMS",
+      "synonyms_pl": [
+        "MAŁŻE"
+      ],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_ABALONE",
+      "parent_id": "ALG_MOLLUSCS",
+      "canonical_pl": "ABALONE / UCHO MORSKIE",
+      "synonyms_pl": [
+        "UCHO MORSKIE"
+      ],
+      "original_names": {
+        "ja": "あわび"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_MANGO",
+      "parent_id": null,
+      "canonical_pl": "MANGO",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_KIWI",
+      "parent_id": null,
+      "canonical_pl": "KIWI",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "キウイフルーツ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_ORANGE",
+      "parent_id": null,
+      "canonical_pl": "POMARAŃCZA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "オレンジ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BANANA",
+      "parent_id": null,
+      "canonical_pl": "BANAN",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "バナナ"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_APPLE",
+      "parent_id": null,
+      "canonical_pl": "JABŁKO",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "りんご"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PEACH",
+      "parent_id": null,
+      "canonical_pl": "BRZOSKWINIA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "もも"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_TOMATO",
+      "parent_id": null,
+      "canonical_pl": "POMIDOR",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BEEF",
+      "parent_id": null,
+      "canonical_pl": "WOŁOWINA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "牛肉"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_PORK",
+      "parent_id": null,
+      "canonical_pl": "WIEPRZOWINA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "豚肉"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_CHICKEN",
+      "parent_id": null,
+      "canonical_pl": "KURCZAK",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "鶏肉"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_YAM",
+      "parent_id": null,
+      "canonical_pl": "YAM / POCHRZYN",
+      "synonyms_pl": [
+        "POCHRZYN"
+      ],
+      "original_names": {
+        "ja": "やまいも"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_GELATIN",
+      "parent_id": null,
+      "canonical_pl": "ŻELATYNA",
+      "synonyms_pl": [],
+      "original_names": {
+        "ja": "ゼラチン"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_OTHER_SEEDS",
+      "parent_id": null,
+      "canonical_pl": "INNE NASIONA",
+      "synonyms_pl": [],
+      "original_names": {},
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_BLACK_WALNUT",
+      "canonical_pl": "ORZECH CZARNY",
+      "parent_id": "ALG_TREE_NUTS",
+      "synonyms_pl": [],
+      "original_names": {
+        "en": "black walnut"
+      },
+      "record_status": "ACTIVE"
+    },
+    {
+      "id": "ALG_HEARTNUT",
+      "canonical_pl": "ORZECH SERCOWATY",
+      "parent_id": "ALG_TREE_NUTS",
+      "synonyms_pl": [],
+      "original_names": {
+        "en": "heartnut / Japanese walnut"
+      },
+      "record_status": "ACTIVE"
+    }
+  ],
+  "allergen_source_links": [
+    {
+      "allergen_id": "ALG_CEREALS_GLUTEN",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WHEAT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_RYE",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BARLEY",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_OATS",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SPELT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_KHORASAN",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ALMOND",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_HAZELNUT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CASHEW",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PECAN",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BRAZIL_NUT",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PISTACHIO",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACADAMIA",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CELERY",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MUSTARD",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SULPHITES",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null,
+      "threshold": {
+        "amount": 10,
+        "unit": "mg/kg",
+        "analyte": "SO2 equivalent",
+        "comparator": "GT",
+        "alternative": {
+          "amount": 10,
+          "unit": "mg/l",
+          "comparator": "GT"
+        }
+      }
+    },
+    {
+      "allergen_id": "ALG_LUPIN",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MOLLUSCS",
+      "source_code": "EU_1169_2011_ANNEX_II",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2014-12-13",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WHEAT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ALMOND",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_HAZELNUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CASHEW",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PECAN",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BRAZIL_NUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PISTACHIO",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACADAMIA",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PINE_NUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BLACK_WALNUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_HEARTNUT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SPELT",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "INHERITED_FROM_WHEAT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Species in Triticum; no standalone major-allergen label term."
+    },
+    {
+      "allergen_id": "ALG_KHORASAN",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "INHERITED_FROM_WHEAT",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Species in Triticum; no standalone major-allergen label term."
+    },
+    {
+      "allergen_id": "ALG_SHRIMP",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "EXAMPLE_SPECIES",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Species-specific labelling required when applicable; not exhaustive FDA species list."
+    },
+    {
+      "allergen_id": "ALG_CRAB",
+      "source_code": "US_FDA_MAJOR_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "EXAMPLE_SPECIES",
+      "legal_effective_from": "2006-01-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Species-specific labelling required when applicable; not exhaustive FDA species list."
+    },
+    {
+      "allergen_id": "ALG_WHEAT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_RYE",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BARLEY",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ALMOND",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CASHEW",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_HAZELNUT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PECAN",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PISTACHIO",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SULPHITES",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "MANDATORY",
+      "listing_rule": "SEPARATE_CLAUSE_4_2_1_7",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": ">=10 mg/kg SO2 equivalents; must not be attributed to clause 4.2.1.4.",
+      "threshold": {
+        "amount": 10,
+        "unit": "mg/kg",
+        "analyte": "SO2 equivalent",
+        "comparator": "GTE"
+      }
+    },
+    {
+      "allergen_id": "ALG_BUCKWHEAT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CELERY",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_OATS",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_LUPIN",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MUSTARD",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BRAZIL_NUT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACADAMIA",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PINE_NUT",
+      "source_code": "CODEX_CXS_1_1985_2024",
+      "status": "NATIONAL_OPTION",
+      "listing_rule": "CLAUSE_4_2_1_5",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SHRIMP",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CASHEW",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null,
+      "transition_end": "2028-03-31"
+    },
+    {
+      "allergen_id": "ALG_CRAB",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WHEAT",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BUCKWHEAT",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ALMOND",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ABALONE",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SQUID",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SALMON_ROE",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ORANGE",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_KIWI",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BEEF",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SALMON",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACKEREL",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CHICKEN",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BANANA",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PISTACHIO",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PORK",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACADAMIA",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEACH",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_YAM",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_APPLE",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_GELATIN",
+      "source_code": "JP_CAA_ALLERGENS_2026_04",
+      "status": "RECOMMENDED",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-04-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CEREALS_GLUTEN",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "CN_GB7718_2011_CURRENT",
+      "status": "VOLUNTARY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2012-04-20",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CEREALS_GLUTEN",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "CN_GB7718_2025_FUTURE",
+      "status": "FUTURE_MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2027-03-16",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BUCKWHEAT",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_WHEAT",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MACKEREL",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRAB",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SHRIMP",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PORK",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEACH",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TOMATO",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SULPHITES",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null,
+      "threshold": {
+        "amount": 10,
+        "unit": "mg/kg",
+        "analyte": "SO2 equivalent",
+        "comparator": "GTE"
+      }
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CHICKEN",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_BEEF",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SQUID",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CLAMS",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PINE_NUT",
+      "source_code": "KR_MFDS_ALLERGENS",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": null,
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MANGO",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CEREALS_GLUTEN",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SULPHITES",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": null,
+      "threshold": {
+        "amount": 10,
+        "unit": "mg/kg",
+        "analyte": "SO2 equivalent",
+        "comparator": "GTE"
+      }
+    },
+    {
+      "allergen_id": "ALG_CEPHALOPODS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "SOURCE_CATEGORY",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "The OTHER_SEEDS category is source-specific; exemptions apply."
+    },
+    {
+      "allergen_id": "ALG_OTHER_SEEDS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "SOURCE_CATEGORY",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "The OTHER_SEEDS category is source-specific; exemptions apply."
+    },
+    {
+      "allergen_id": "ALG_KIWI",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "SOURCE_CATEGORY",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "The OTHER_SEEDS category is source-specific; exemptions apply."
+    },
+    {
+      "allergen_id": "ALG_SQUID",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "INHERITED_FROM_RECOMMENDED_GROUP",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Examples included under respective Taiwan recommended broad classes; not exhaustive."
+    },
+    {
+      "allergen_id": "ALG_CLAMS",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "INHERITED_FROM_RECOMMENDED_GROUP",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Examples included under respective Taiwan recommended broad classes; not exhaustive."
+    },
+    {
+      "allergen_id": "ALG_ABALONE",
+      "source_code": "TW_TFDA_ALLERGENS_2020",
+      "status": "RECOMMENDED",
+      "listing_rule": "INHERITED_FROM_RECOMMENDED_GROUP",
+      "legal_effective_from": "2020-07-01",
+      "source_scope": "LEGAL_LIST",
+      "note": "Examples included under respective Taiwan recommended broad classes; not exhaustive."
+    },
+    {
+      "allergen_id": "ALG_CEREALS_GLUTEN",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_CRUSTACEANS",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_EGGS",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_FISH",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_PEANUT",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SOY",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MILK",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_TREE_NUTS",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_MOLLUSCS",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_SESAME",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "DIRECT",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": null
+    },
+    {
+      "allergen_id": "ALG_ALMOND",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_CASHEW",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_HAZELNUT",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_PECAN",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_PISTACHIO",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_WALNUT",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_BRAZIL_NUT",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_MACADAMIA",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_PINE_NUT",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "MANDATORY",
+      "listing_rule": "SOURCE_EXPLICIT_SUBTYPE",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Source-specific enumeration of tree nuts under Notification 474."
+    },
+    {
+      "allergen_id": "ALG_SULPHITES",
+      "source_code": "TH_FDA_NOTIFICATION_474_2026",
+      "status": "WARNING_ONLY",
+      "listing_rule": "NOT_ALLERGEN_LIST",
+      "legal_effective_from": "2026-10-31",
+      "source_scope": "LEGAL_LIST",
+      "note": "Residue warning >=10 mg/kg SO2 equivalent under amended separate warning rules.",
+      "threshold": {
+        "amount": 10,
+        "unit": "mg/kg",
+        "analyte": "SO2 equivalent",
+        "comparator": "GTE"
+      }
+    }
+  ],
+  "status_codes": [
+    "MANDATORY",
+    "RECOMMENDED",
+    "VOLUNTARY",
+    "NATIONAL_OPTION",
+    "WARNING_ONLY",
+    "FUTURE_MANDATORY",
+    "HISTORICAL"
+  ],
+  "listing_rules": [
+    "DIRECT",
+    "INHERITED_FROM_WHEAT",
+    "EXAMPLE_SPECIES",
+    "SEPARATE_CLAUSE_4_2_1_7",
+    "CLAUSE_4_2_1_5",
+    "SOURCE_CATEGORY",
+    "INHERITED_FROM_RECOMMENDED_GROUP",
+    "SOURCE_EXPLICIT_SUBTYPE",
+    "NOT_ALLERGEN_LIST"
+  ]
+}

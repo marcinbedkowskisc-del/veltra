@@ -128,6 +128,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
             $this->getJson('/api/v1/administration/access')->assertForbidden();
             $this->getJson('/api/v1/administration/categories')->assertForbidden();
             $this->getJson('/api/v1/administration/units')->assertForbidden();
+            $this->getJson('/api/v1/administration/allergens/dictionaries')->assertForbidden();
             if ($role === BusinessRole::RestaurantManager) {
                 $this->getJson("/api/v1/security/locations/{$location->id}/users")->assertOk();
             }
@@ -139,11 +140,13 @@ class AdministrationAccessTest extends AuthorizationTestCase
         $this->getJson('/api/v1/administration/access')->assertUnauthorized();
         $this->getJson('/api/v1/administration/categories')->assertUnauthorized();
         $this->getJson('/api/v1/administration/units')->assertUnauthorized();
+        $this->getJson('/api/v1/administration/allergens/dictionaries')->assertUnauthorized();
         $admin = $this->user('admin@example.test');
         $this->role($admin, BusinessRole::Administrator);
         $this->actingAs($admin, 'web')->getJson('/api/v1/administration/access')->assertForbidden();
         $this->getJson('/api/v1/administration/categories')->assertForbidden();
         $this->getJson('/api/v1/administration/units')->assertForbidden();
+        $this->getJson('/api/v1/administration/allergens/dictionaries')->assertForbidden();
     }
 
     public function test_category_hierarchy_archive_restore_and_raw_references_are_preserved(): void

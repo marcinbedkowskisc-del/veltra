@@ -1,4 +1,5 @@
 import { administrationGroups } from './administrationNavigation'
+import AllergenDictionaryManagementPage from './administration/AllergenDictionaryManagementPage'
 import CategoryManagementPage from './administration/CategoryManagementPage'
 import UnitManagementPage from './administration/UnitManagementPage'
 
@@ -24,6 +25,8 @@ export default function AdministrationPanel({ path }: { path: string }) {
             <CategoryManagementPage />
           ) : selected.path === '/administration/units' ? (
             <UnitManagementPage />
+          ) : selected.path === '/administration/allergens' ? (
+            <AllergenDictionaryManagementPage />
           ) : (
             <>
               <h2>{selected.label}</h2>

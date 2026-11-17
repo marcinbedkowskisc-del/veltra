@@ -441,7 +441,12 @@ export async function changeRawMaterialLifecycle(id: string, action: 'submit' | 
   }
 }
 
-export type AllergenCatalog = { id: string; versionNumber: number; definitions: Array<{ code: string; name: string }> }
+export type AllergenCatalog = {
+  id: string
+  versionNumber: number
+  isCurrent: boolean
+  definitions: Array<{ code: string; name: string; sources: string[] }>
+}
 export type AllergenDeclaration = {
   status: 'UNKNOWN' | 'DECLARED' | 'NO_KNOWN_ALLERGENS'
   catalog_version_id: string | null
@@ -465,15 +470,22 @@ export async function fetchAllergenCatalogs(signal?: AbortSignal): Promise<Aller
   return value.map((catalog) => {
     if (!isRecord(catalog) || typeof catalog.id !== 'string' || !UUID.test(catalog.id)
       || typeof catalog.version_number !== 'number' || !Number.isInteger(catalog.version_number) || catalog.version_number < 1
+      || !(catalog.is_current === undefined || typeof catalog.is_current === 'boolean')
       || !Array.isArray(catalog.definitions)) {
       throw new Error('Nieprawidłowy katalog alergenów.')
     }
     return { id: catalog.id, versionNumber: catalog.version_number, definitions: catalog.definitions.map((definition) => {
-      if (!isRecord(definition) || typeof definition.allergen_code !== 'string' || typeof definition.name_pl !== 'string') {
+      if (!isRecord(definition) || typeof definition.allergen_code !== 'string' || typeof definition.name_pl !== 'string'
+        || !(definition.source_codes === undefined || Array.isArray(definition.source_codes)
+          && definition.source_codes.every((source) => typeof source === 'string'))) {
         throw new Error('Nieprawidłowy katalog alergenów.')
       }
-      return { code: definition.allergen_code, name: definition.name_pl }
-    }) }
+      return {
+        code: definition.allergen_code,
+        name: definition.name_pl,
+        sources: Array.isArray(definition.source_codes) ? definition.source_codes : [],
+      }
+    }), isCurrent: catalog.is_current === true }
   })
 }
 

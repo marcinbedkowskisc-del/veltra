@@ -2,7 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
 import { formatNumber } from '../design-system/formatting'
 import { previewRawMaterialPricing, type PricingPreview } from './api'
-import { normalizeDecimalInput, validateRawMaterialCreate, type RawMaterialCreateValues } from './create'
+import {
+  normalizeDecimalInput,
+  validateRawMaterialCreate,
+  type RawMaterialCreateValues,
+  type RawMaterialUnitOption,
+} from './create'
 
 type Props = {
   id: string
@@ -10,6 +15,7 @@ type Props = {
   disabled: boolean
   canCalculate: boolean
   canViewCost: boolean
+  unitOptions: RawMaterialUnitOption[]
   error?: string
   onBasisChange: (value: RawMaterialCreateValues['pricingBasis']) => void
   onAmountChange: (value: string) => void
@@ -20,7 +26,7 @@ type Props = {
 
 export default function RawMaterialPricingFields({
   id, values, disabled, canCalculate, canViewCost, error, onBasisChange, onAmountChange,
-  onSessionExpired, onAuthorizationDenied, onModuleUnavailable,
+  unitOptions, onSessionExpired, onAuthorizationDenied, onModuleUnavailable,
 }: Props) {
   const callbacks = useRef({ onSessionExpired, onAuthorizationDenied, onModuleUnavailable })
   useLayoutEffect(() => {
@@ -28,7 +34,7 @@ export default function RawMaterialPricingFields({
   }, [onSessionExpired, onAuthorizationDenied, onModuleUnavailable])
   const [result, setResult] = useState<{ key: string; value: PricingPreview } | null>(null)
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null)
-  const errors = validateRawMaterialCreate(values, true)
+  const errors = validateRawMaterialCreate(values, true, unitOptions)
   const amount = normalizeDecimalInput(values.pricingAmount)
   const key = JSON.stringify([
     values.baseUnitCode, values.nominalQuantity, values.usableQuantity,
@@ -85,7 +91,7 @@ export default function RawMaterialPricingFields({
         <label className="create-form-field" htmlFor={`${id}-pricing-amount`}>
           {values.pricingBasis === 'PACKAGE'
             ? 'Średnia cena netto opakowania (PLN)'
-            : `Średnia cena netto za ${values.pricingUnitCode} nominalne (PLN)`}
+            : `Średnia cena netto za ${unitOptions.find((unit) => unit.code === values.pricingUnitCode)?.symbol ?? values.pricingUnitCode} nominalne (PLN)`}
           <input id={`${id}-pricing-amount`} inputMode="decimal" value={values.pricingAmount}
             disabled={disabled} aria-invalid={Boolean(error)} onChange={(event) => onAmountChange(event.target.value)} />
           {error && <span className="field-error">{error}</span>}

@@ -9,6 +9,7 @@ use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Tests\AuthorizationTestCase;
 
 class AdministrationAccessTest extends AuthorizationTestCase
@@ -36,10 +37,82 @@ class AdministrationAccessTest extends AuthorizationTestCase
             ->assertHeader('Cache-Control', 'no-store, private');
         $this->getJson('/api/v1/administration/categories')->assertOk()
             ->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/v1/administration/units')->assertOk()
+            ->assertJsonCount(6, 'data');
+        foreach ([
+            ['kg', 'g', '1000.000000000000'],
+            ['g', 'kg', '0.001000000000'],
+            ['l', 'ml', '1000.000000000000'],
+            ['ml', 'l', '0.001000000000'],
+        ] as [$source, $target, $factor]) {
+            $sourceUnit = collect($this->getJson('/api/v1/administration/units?search='.$source)
+                ->assertOk()->json('data'))->firstWhere('code', $source);
+            $conversion = collect($sourceUnit['conversions'])->firstWhere('unit_code', $target);
+            $this->assertSame($factor, $conversion['factor']);
+        }
         $this->postJson('/api/v1/administration/categories', [
             'code' => 'ADMIN_ONLY',
             'name' => 'Kategoria administracyjna',
         ])->assertCreated()->assertJsonPath('data.depth', 1);
+    }
+
+    public function test_administrator_can_manage_shared_units_and_reject_invalid_factors(): void
+    {
+        $location = $this->kitchen();
+        $admin = $this->user('unit-admin@example.test');
+        $this->role($admin, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($admin, $location);
+        $this->selectContext($admin, $location);
+
+        $this->postJson('/api/v1/administration/units', [
+            'code' => 'mg_custom',
+            'name' => 'Miligram testowy',
+            'symbol' => 'mg*',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0.001',
+        ])->assertCreated()
+            ->assertJsonPath('data.code', 'mg_custom')
+            ->assertJsonPath('data.to_base_factor', '0.001000000000');
+
+        $unitId = DB::table('raw_material_units')->where('code', 'mg_custom')->value('id');
+        $unitsResponse = $this->getJson('/api/v1/administration/units?dimension=MASS&search=custom')
+            ->assertOk()->assertJsonPath('data.0.code', 'mg_custom');
+        $conversionToGrams = collect($unitsResponse->json('data.0.conversions'))
+            ->firstWhere('unit_code', 'g');
+        $this->assertSame('0.001000000000', $conversionToGrams['factor']);
+
+        $this->patchJson('/api/v1/administration/units/'.$unitId, [
+            'name' => 'Miligram niestandardowy',
+            'symbol' => 'mgx',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0.002',
+        ])->assertOk()
+            ->assertJsonPath('data.name', 'Miligram niestandardowy')
+            ->assertJsonPath('data.to_base_factor', '0.002000000000');
+        $gramUnit = collect($this->getJson('/api/v1/administration/units?search=gram')
+            ->assertOk()->json('data'))->firstWhere('code', 'g');
+        $conversionToCustomUnit = collect($gramUnit['conversions'])->firstWhere('unit_code', 'mg_custom');
+        $this->assertSame('500.000000000000', $conversionToCustomUnit['factor']);
+
+        $this->postJson('/api/v1/administration/units', [
+            'code' => 'zero_unit',
+            'name' => 'Nieprawidłowa jednostka',
+            'symbol' => 'x',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0',
+        ])->assertUnprocessable();
+        $this->postJson('/api/v1/administration/units/'.$unitId.'/archive')
+            ->assertOk()->assertJsonPath('data.archived_at', fn ($value) => is_string($value));
+        $this->getJson('/api/v1/administration/units?status=archived&search=custom')
+            ->assertOk()->assertJsonPath('data.0.code', 'mg_custom');
+        $this->postJson('/api/v1/administration/units/'.$unitId.'/restore')
+            ->assertOk()->assertJsonPath('data.archived_at', null);
+
+        $this->assertSame('0.002000000000', (string) DB::table('raw_material_units')
+            ->where('id', $unitId)->value('to_base_factor'));
     }
 
     public function test_employee_manager_and_boss_are_denied_and_manager_personnel_access_remains(): void
@@ -54,6 +127,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
             $this->selectContext($user, $location);
             $this->getJson('/api/v1/administration/access')->assertForbidden();
             $this->getJson('/api/v1/administration/categories')->assertForbidden();
+            $this->getJson('/api/v1/administration/units')->assertForbidden();
             if ($role === BusinessRole::RestaurantManager) {
                 $this->getJson("/api/v1/security/locations/{$location->id}/users")->assertOk();
             }
@@ -64,10 +138,12 @@ class AdministrationAccessTest extends AuthorizationTestCase
     {
         $this->getJson('/api/v1/administration/access')->assertUnauthorized();
         $this->getJson('/api/v1/administration/categories')->assertUnauthorized();
+        $this->getJson('/api/v1/administration/units')->assertUnauthorized();
         $admin = $this->user('admin@example.test');
         $this->role($admin, BusinessRole::Administrator);
         $this->actingAs($admin, 'web')->getJson('/api/v1/administration/access')->assertForbidden();
         $this->getJson('/api/v1/administration/categories')->assertForbidden();
+        $this->getJson('/api/v1/administration/units')->assertForbidden();
     }
 
     public function test_category_hierarchy_archive_restore_and_raw_references_are_preserved(): void

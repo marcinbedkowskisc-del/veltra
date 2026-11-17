@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AccountLinkController;
 use App\Http\Controllers\Api\V1\AdministrationCategoryController;
+use App\Http\Controllers\Api\V1\AdministrationUnitController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
@@ -48,6 +49,11 @@ Route::prefix('v1/administration')->middleware([
     Route::patch('/categories/{category}', [AdministrationCategoryController::class, 'update'])->whereUuid('category');
     Route::post('/categories/{category}/archive', [AdministrationCategoryController::class, 'archive'])->whereUuid('category');
     Route::post('/categories/{category}/restore', [AdministrationCategoryController::class, 'restore'])->whereUuid('category');
+    Route::get('/units', [AdministrationUnitController::class, 'index']);
+    Route::post('/units', [AdministrationUnitController::class, 'store']);
+    Route::patch('/units/{unit}', [AdministrationUnitController::class, 'update'])->whereUuid('unit');
+    Route::post('/units/{unit}/archive', [AdministrationUnitController::class, 'archive'])->whereUuid('unit');
+    Route::post('/units/{unit}/restore', [AdministrationUnitController::class, 'restore'])->whereUuid('unit');
 });
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {
@@ -177,6 +183,7 @@ Route::prefix('v1/raw-materials')->middleware([
     Route::get('/categories', [RawMaterialController::class, 'categories']);
     Route::post('/categories', [RawMaterialController::class, 'storeCategory']);
     Route::patch('/categories/{category}', [RawMaterialController::class, 'renameCategory'])->whereUuid('category');
+    Route::get('/units', [RawMaterialController::class, 'units']);
     Route::get('/{material}', [RawMaterialController::class, 'show'])->whereUuid('material');
     Route::get('/{material}/editor', [RawMaterialController::class, 'editor'])->whereUuid('material');
     Route::get('/{material}/completion', [RawMaterialController::class, 'completion'])->whereUuid('material');

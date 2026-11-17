@@ -1114,6 +1114,16 @@ button:disabled, select:disabled, input:disabled {
 .admin-category-form textarea { min-height: 5rem; resize: vertical; }
 .admin-category-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) 0; }
 .admin-category-pagination span { color: var(--text-secondary); }
+.admin-unit-page { display: grid; gap: var(--space-4); min-width: 0; }
+.admin-unit-group { display: grid; gap: var(--space-2); }
+.admin-unit-group h3 { margin: 0; }
+.admin-unit-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: var(--space-3); }
+.admin-unit-card { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
+.admin-unit-card header { display: flex; justify-content: space-between; gap: var(--space-2); }
+.admin-unit-card h4 { margin: 0; }
+.admin-unit-card h4 span, .admin-unit-card header > span { color: var(--text-secondary); }
+.admin-unit-card ul { margin: 0; padding-left: 1.25rem; overflow-wrap: anywhere; }
+.admin-unit-page .admin-category-filters { grid-template-columns: minmax(12rem, 1fr) minmax(10rem, 14rem) minmax(9rem, 12rem) auto; }
 .admin-category-confirm, .admin-category-refresh { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .admin-category-confirm p, .admin-category-refresh p { margin-top: 0; }
 
@@ -1586,6 +1596,7 @@ button:disabled, select:disabled, input:disabled {
 
   .admin-category-header, .admin-category-search-result { flex-direction: column; align-items: stretch; }
   .admin-category-filters { grid-template-columns: minmax(0, 1fr); }
+  .admin-unit-page .admin-category-filters { grid-template-columns: minmax(0, 1fr); }
   .admin-category-filter-actions { align-items: stretch; }
   .admin-category-filter-actions .button { flex: 1; }
   .admin-category-details { display: grid; gap: var(--space-2); }

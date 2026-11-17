@@ -8,11 +8,12 @@ import {
   type SortDirection,
   type SortKey,
 } from './catalog'
-import { unitLabel } from './create'
+import { unitLabel, type RawMaterialUnitOption } from './create'
 
 type Props = {
   working?: boolean
   rows: CatalogRow[]
+  unitOptions?: RawMaterialUnitOption[]
   selectedIds: Set<string>
   selectionDisabled: boolean
   sort: SortKey
@@ -45,6 +46,7 @@ const SORTABLE_COLUMNS: SortableColumn[] = [
 export default function CatalogTable({
   working = false,
   rows,
+  unitOptions = [],
   selectedIds,
   selectionDisabled,
   sort,
@@ -112,7 +114,7 @@ export default function CatalogTable({
               </span>
             )
           case 'unit':
-            return unitLabel(row.unit)
+            return unitLabel(row.unit, unitOptions)
           case 'nominal_quantity':
             return formatDecimal(row.nominalQuantity)
           case 'usable_quantity':

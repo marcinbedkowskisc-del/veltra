@@ -1,5 +1,6 @@
 import { administrationGroups } from './administrationNavigation'
 import CategoryManagementPage from './administration/CategoryManagementPage'
+import UnitManagementPage from './administration/UnitManagementPage'
 
 export default function AdministrationPanel({ path }: { path: string }) {
   const selected = administrationGroups.flatMap((group) => group.items).find((item) => item.path === path)
@@ -21,6 +22,8 @@ export default function AdministrationPanel({ path }: { path: string }) {
         ) : selected ? (
           selected.path === '/administration/categories' ? (
             <CategoryManagementPage />
+          ) : selected.path === '/administration/units' ? (
+            <UnitManagementPage />
           ) : (
             <>
               <h2>{selected.label}</h2>

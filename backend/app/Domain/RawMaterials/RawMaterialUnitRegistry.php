@@ -2,26 +2,23 @@
 
 namespace App\Domain\RawMaterials;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 final class RawMaterialUnitRegistry
 {
-    private const UNITS = [
-        'mg' => ['dimension' => 'MASS', 'scale' => -3],
-        'g' => ['dimension' => 'MASS', 'scale' => 0],
-        'kg' => ['dimension' => 'MASS', 'scale' => 3],
-        'ml' => ['dimension' => 'VOLUME', 'scale' => 0],
-        'l' => ['dimension' => 'VOLUME', 'scale' => 3],
-        'pc' => ['dimension' => 'COUNT', 'scale' => 0],
-    ];
-
     /**
      * @return array{base_unit_code: string, base_unit_dimension: string, units: list<array<string, string|null>>}
      */
-    public static function resolve(string $baseUnit, array $conversions): array
+    public static function resolve(string $baseUnit, array $conversions, array $allowedArchivedCodes = []): array
     {
-        $base = self::UNITS[$baseUnit] ?? null;
-        if ($base === null) {
+        $codes = array_values(array_unique([
+            $baseUnit,
+            ...array_map(static fn (array $conversion): string => (string) ($conversion['unit_code'] ?? ''), $conversions),
+        ]));
+        $definitions = DB::table('raw_material_units')->whereIn('code', $codes)->get()->keyBy('code');
+        $base = $definitions->get($baseUnit);
+        if (! $base || ! self::assignable($base, $allowedArchivedCodes)) {
             throw ValidationException::withMessages([
                 'base_unit_code' => [__('messages.raw_material_unit_invalid')],
             ]);
@@ -29,7 +26,7 @@ final class RawMaterialUnitRegistry
 
         $units = [[
             'unit_code' => $baseUnit,
-            'dimension' => $base['dimension'],
+            'dimension' => $base->dimension,
             'conversion_kind' => 'BASE',
             'to_base_factor' => '1.000000000000',
             'basis' => null,
@@ -37,28 +34,28 @@ final class RawMaterialUnitRegistry
         $seen = [$baseUnit => true];
 
         foreach ($conversions as $index => $conversion) {
-            $code = $conversion['unit_code'];
-            $unit = self::UNITS[$code] ?? null;
-            if ($unit === null || isset($seen[$code])) {
+            $code = (string) ($conversion['unit_code'] ?? '');
+            $unit = $definitions->get($code);
+            if (! $unit || ! self::assignable($unit, $allowedArchivedCodes) || isset($seen[$code])) {
                 throw ValidationException::withMessages([
                     "conversions.{$index}.unit_code" => [__('messages.raw_material_unit_invalid')],
                 ]);
             }
             $seen[$code] = true;
 
-            if ($unit['dimension'] === $base['dimension']) {
-                $factor = self::metricFactor($unit['scale'] - $base['scale']);
+            if ($unit->dimension === $base->dimension) {
+                $factor = self::factorToBase((string) $unit->to_base_factor, (string) $base->to_base_factor);
                 if (isset($conversion['to_base_factor'])
-                    && self::decimal((string) $conversion['to_base_factor']) !== self::decimal($factor)) {
+                    && self::decimal((string) $conversion['to_base_factor']) !== $factor) {
                     throw ValidationException::withMessages([
                         "conversions.{$index}.to_base_factor" => [__('messages.raw_material_metric_factor_invalid')],
                     ]);
                 }
                 $units[] = [
                     'unit_code' => $code,
-                    'dimension' => $unit['dimension'],
+                    'dimension' => $unit->dimension,
                     'conversion_kind' => 'METRIC',
-                    'to_base_factor' => self::decimal($factor),
+                    'to_base_factor' => $factor,
                     'basis' => null,
                 ];
 
@@ -73,7 +70,7 @@ final class RawMaterialUnitRegistry
 
             $units[] = [
                 'unit_code' => $code,
-                'dimension' => $unit['dimension'],
+                'dimension' => $unit->dimension,
                 'conversion_kind' => 'MATERIAL_SPECIFIC',
                 'to_base_factor' => self::decimal((string) $conversion['to_base_factor']),
                 'basis' => trim((string) $conversion['basis']),
@@ -82,14 +79,39 @@ final class RawMaterialUnitRegistry
 
         return [
             'base_unit_code' => $baseUnit,
-            'base_unit_dimension' => $base['dimension'],
+            'base_unit_dimension' => $base->dimension,
             'units' => $units,
         ];
     }
 
+    public static function factorToBase(string $unitFactor, string $baseFactor): string
+    {
+        $result = DB::selectOne(
+            'SELECT (CAST(? AS numeric(24,12)) / CAST(? AS numeric(24,12)))::numeric(24,12)::text AS factor',
+            [$unitFactor, $baseFactor],
+        );
+
+        return self::decimal((string) $result->factor);
+    }
+
+    public static function dimension(string $code): ?string
+    {
+        return DB::table('raw_material_units')->where('code', $code)->value('dimension');
+    }
+
+    public static function isActive(string $code): bool
+    {
+        return DB::table('raw_material_units')->where('code', $code)->whereNull('archived_at')->exists();
+    }
+
+    private static function assignable(object $unit, array $allowedArchivedCodes): bool
+    {
+        return $unit->archived_at === null || in_array($unit->code, $allowedArchivedCodes, true);
+    }
+
     private static function decimal(string $value): string
     {
-        if (! preg_match('/^\d+(?:\.\d{1,12})?$/D', $value) || ! preg_match('/[1-9]/', $value)) {
+        if (! preg_match('/^\d{1,12}(?:\.\d{1,12})?$/D', $value) || ! preg_match('/[1-9]/', $value)) {
             throw ValidationException::withMessages([
                 'conversions' => [__('messages.raw_material_conversion_factor_invalid')],
             ]);
@@ -97,15 +119,8 @@ final class RawMaterialUnitRegistry
 
         [$whole, $fraction] = array_pad(explode('.', $value, 2), 2, '');
 
-        return ltrim($whole, '0') === '' ? '0.'.str_pad($fraction, 12, '0') : ltrim($whole, '0').'.'.str_pad($fraction, 12, '0');
-    }
-
-    private static function metricFactor(int $power): string
-    {
-        if ($power >= 0) {
-            return '1'.str_repeat('0', $power);
-        }
-
-        return '0.'.str_repeat('0', abs($power) - 1).'1';
+        return ltrim($whole, '0') === ''
+            ? '0.'.str_pad($fraction, 12, '0')
+            : ltrim($whole, '0').'.'.str_pad($fraction, 12, '0');
     }
 }

@@ -9,6 +9,7 @@ import {
   fetchRawMaterialEditor,
   fetchAllergenDeclaration,
   fetchAllergenCatalogs,
+  fetchRawMaterialUnits,
   previewRawMaterialPricing,
   reviseRawMaterial,
   type RawMaterialCapabilities,
@@ -24,6 +25,7 @@ vi.mock('./api', async (importOriginal) => ({
   fetchRawMaterialEditor: vi.fn(),
   fetchAllergenDeclaration: vi.fn(),
   fetchAllergenCatalogs: vi.fn(),
+  fetchRawMaterialUnits: vi.fn(),
   previewRawMaterialPricing: vi.fn(),
   reviseRawMaterial: vi.fn(),
 }))
@@ -102,6 +104,14 @@ function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialEd
 beforeEach(() => {
   vi.clearAllMocks()
   capabilitiesMock.mockResolvedValue(makeCapabilities())
+  vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
+    { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
+    { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'ml', name: 'mililitr', symbol: 'ml', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'l', name: 'litr', symbol: 'l', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'pc', name: 'sztuka', symbol: 'szt.', dimension: 'COUNT', baseUnitCode: 'pc', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+  ])
   completionMock.mockResolvedValue(makeCompletion())
   editorMock.mockResolvedValue(makeEditor())
   reviseMock.mockResolvedValue(makeSaved())

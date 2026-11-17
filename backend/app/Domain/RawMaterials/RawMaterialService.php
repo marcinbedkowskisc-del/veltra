@@ -273,6 +273,252 @@ final class RawMaterialService
         }));
     }
 
+    public function administrationUnits(User $actor, Location $context, array $filters): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+        $query = DB::table('raw_material_units');
+        match ($filters['status'] ?? 'active') {
+            'archived' => $query->whereNotNull('archived_at'),
+            'all' => null,
+            default => $query->whereNull('archived_at'),
+        };
+        if (isset($filters['dimension'])) {
+            $query->where('dimension', $filters['dimension']);
+        }
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $term = '%'.$search.'%';
+            $query->where(function (Builder $where) use ($term): void {
+                $where->whereRaw('name ILIKE ?', [$term])
+                    ->orWhereRaw('symbol ILIKE ?', [$term])
+                    ->orWhereRaw('code ILIKE ?', [$term]);
+            });
+        }
+
+        $units = $query->orderBy('dimension')->orderBy('name')->orderBy('code')->get();
+        $sameDimensionUnits = DB::table('raw_material_units')->get()->groupBy('dimension');
+        $data = $units->map(function (object $unit) use ($sameDimensionUnits): array {
+            $row = (array) $unit;
+            $row['is_base'] = $unit->code === $unit->base_unit_code;
+            $row['definition_locked'] = $this->administrationUnitHasReferences($unit->code);
+            $row['reference_count'] = $this->administrationUnitReferenceCount($unit->code);
+            $row['conversions'] = ($sameDimensionUnits->get($unit->dimension, collect()))
+                ->where('code', '<>', $unit->code)
+                ->map(fn (object $target): array => [
+                    'unit_code' => $target->code,
+                    'name' => $target->name,
+                    'symbol' => $target->symbol,
+                    'archived_at' => $target->archived_at,
+                    'factor' => RawMaterialUnitRegistry::factorToBase(
+                        (string) $unit->to_base_factor,
+                        (string) $target->to_base_factor,
+                    ),
+                ])->values()->all();
+
+            return $row;
+        })->all();
+
+        return ['data' => $data];
+    }
+
+    public function rawMaterialUnitOptions(User $actor, Location $context): array
+    {
+        $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
+
+        return DB::table('raw_material_units')
+            ->orderBy('dimension')->orderBy('name')->orderBy('code')
+            ->get([
+                'code',
+                'name',
+                'symbol',
+                'dimension',
+                'base_unit_code',
+                'to_base_factor',
+                'archived_at',
+            ])
+            ->map(fn (object $unit): array => [
+                'code' => $unit->code,
+                'name' => $unit->name,
+                'symbol' => $unit->symbol,
+                'dimension' => $unit->dimension,
+                'base_unit_code' => $unit->base_unit_code,
+                'to_base_factor' => (string) $unit->to_base_factor,
+                'archived_at' => $unit->archived_at,
+                'is_base' => $unit->code === $unit->base_unit_code,
+            ])->all();
+    }
+
+    public function createAdministrationUnit(User $actor, Location $context, array $input): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $input,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $this->assertCanonicalUnit($input['base_unit_code'], $input['dimension']);
+            $factor = $this->normalizedUnitFactor($input['to_base_factor']);
+            $id = Str::uuid()->toString();
+            $now = now();
+            try {
+                DB::table('raw_material_units')->insert([
+                    'id' => $id,
+                    'code' => trim($input['code']),
+                    'name' => trim($input['name']),
+                    'symbol' => trim($input['symbol']),
+                    'dimension' => $input['dimension'],
+                    'base_unit_code' => $input['base_unit_code'],
+                    'to_base_factor' => $factor,
+                    'created_by' => $actor->id,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            } catch (QueryException $exception) {
+                if (($exception->errorInfo[0] ?? null) === '23505'
+                    && str_contains($exception->getMessage(), 'raw_material_units_code_key')) {
+                    throw ValidationException::withMessages([
+                        'code' => ['Kod jednostki jest już używany.'],
+                    ]);
+                }
+                throw $exception;
+            }
+            $unit = DB::table('raw_material_units')->where('id', $id)->first();
+            $this->audit($actor, $context, 'RAW_UNIT', $id, 'UNIT_CREATED', null, [
+                'code' => $unit->code,
+                'dimension' => $unit->dimension,
+            ], afterHashOverride: $this->administrationUnitStateHash($unit));
+
+            return $this->administrationUnit($unit);
+        }));
+    }
+
+    public function updateAdministrationUnit(User $actor, Location $context, string $unitId, array $input): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $unitId,
+            $input,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $unit = DB::table('raw_material_units')->where('id', $unitId)->lockForUpdate()->first();
+            if (! $unit) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($unit->archived_at !== null) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_ARCHIVED', 'Przywróć jednostkę przed jej edycją.', 409);
+            }
+            $this->assertCanonicalUnit($input['base_unit_code'], $input['dimension']);
+            $factor = $this->normalizedUnitFactor($input['to_base_factor']);
+            $definitionChanged = $unit->dimension !== $input['dimension']
+                || $unit->base_unit_code !== $input['base_unit_code']
+                || (string) $unit->to_base_factor !== $factor;
+            if ($definitionChanged && $this->administrationUnitHasReferences($unit->code)) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_UNIT_DEFINITION_IN_USE',
+                    'Nie można zmienić wymiaru ani przelicznika jednostki użytej w danych historycznych.',
+                    409,
+                );
+            }
+
+            $beforeHash = $this->administrationUnitStateHash($unit);
+            DB::table('raw_material_units')->where('id', $unitId)->update([
+                'name' => trim($input['name']),
+                'symbol' => trim($input['symbol']),
+                'dimension' => $input['dimension'],
+                'base_unit_code' => $input['base_unit_code'],
+                'to_base_factor' => $factor,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('raw_material_units')->where('id', $unitId)->first();
+            $this->audit($actor, $context, 'RAW_UNIT', $unitId, 'UNIT_UPDATED', $beforeHash, [
+                'code' => $unit->code,
+                'definition_changed' => $definitionChanged,
+            ], afterHashOverride: $this->administrationUnitStateHash($updated));
+
+            return $this->administrationUnit($updated);
+        }));
+    }
+
+    public function archiveAdministrationUnit(User $actor, Location $context, string $unitId): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $unitId,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $unit = DB::table('raw_material_units')->where('id', $unitId)->lockForUpdate()->first();
+            if (! $unit) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($unit->code === $unit->base_unit_code) {
+                throw new RawMaterialException('RAW_MATERIAL_BASE_UNIT_PROTECTED', 'Jednostki bazowej wymiaru nie można archiwizować.', 409);
+            }
+            if ($unit->archived_at !== null) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_ALREADY_ARCHIVED', 'Jednostka jest już zarchiwizowana.', 409);
+            }
+
+            $beforeHash = $this->administrationUnitStateHash($unit);
+            DB::table('raw_material_units')->where('id', $unitId)->update([
+                'archived_at' => now(),
+                'archived_by' => $actor->id,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('raw_material_units')->where('id', $unitId)->first();
+            $this->audit($actor, $context, 'RAW_UNIT', $unitId, 'UNIT_ARCHIVED', $beforeHash, [
+                'code' => $unit->code,
+                'reference_count' => $this->administrationUnitReferenceCount($unit->code),
+            ], afterHashOverride: $this->administrationUnitStateHash($updated));
+
+            return $this->administrationUnit($updated);
+        }));
+    }
+
+    public function restoreAdministrationUnit(User $actor, Location $context, string $unitId): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $unitId,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $unit = DB::table('raw_material_units')->where('id', $unitId)->lockForUpdate()->first();
+            if (! $unit) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($unit->archived_at === null) {
+                throw new RawMaterialException('RAW_MATERIAL_UNIT_NOT_ARCHIVED', 'Jednostka jest już aktywna.', 409);
+            }
+            $this->assertCanonicalUnit($unit->base_unit_code, $unit->dimension);
+
+            $beforeHash = $this->administrationUnitStateHash($unit);
+            DB::table('raw_material_units')->where('id', $unitId)->update([
+                'archived_at' => null,
+                'archived_by' => null,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('raw_material_units')->where('id', $unitId)->first();
+            $this->audit($actor, $context, 'RAW_UNIT', $unitId, 'UNIT_RESTORED', $beforeHash, [
+                'code' => $unit->code,
+            ], afterHashOverride: $this->administrationUnitStateHash($updated));
+
+            return $this->administrationUnit($updated);
+        }));
+    }
+
     private function supplierIdsForEditor(User $actor, string $materialId): array
     {
         if (! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
@@ -365,6 +611,83 @@ final class RawMaterialService
             || ! $authorization->hasRole($actor, BusinessRole::Administrator)) {
             throw new AuthorizationException(__('messages.unauthorized'));
         }
+    }
+
+    private function assertCanonicalUnit(string $code, string $dimension): void
+    {
+        $base = DB::table('raw_material_units')->where('code', $code)->whereNull('archived_at')->first();
+        if (! $base || $base->dimension !== $dimension || $base->code !== $base->base_unit_code
+            || (string) $base->to_base_factor !== '1.000000000000') {
+            throw ValidationException::withMessages([
+                'base_unit_code' => ['Wybierz aktywną jednostkę bazową tego samego wymiaru.'],
+            ]);
+        }
+    }
+
+    private function normalizedUnitFactor(string $value): string
+    {
+        $result = DB::selectOne(
+            'SELECT CAST(? AS numeric(24,12))::text AS factor, CAST(? AS numeric) > 0 AS positive',
+            [$value, $value],
+        );
+        if (! $result->positive) {
+            throw ValidationException::withMessages([
+                'to_base_factor' => ['Współczynnik musi być dodatni.'],
+            ]);
+        }
+
+        return $result->factor;
+    }
+
+    private function administrationUnitHasReferences(string $code): bool
+    {
+        return $this->administrationUnitReferenceCount($code) > 0;
+    }
+
+    private function administrationUnitReferenceCount(string $code): int
+    {
+        return (int) DB::scalar(<<<'SQL'
+            SELECT
+                (SELECT COUNT(*) FROM raw_material_revisions WHERE base_unit_code = ?)
+                + (SELECT COUNT(*) FROM raw_material_revision_units WHERE unit_code = ?)
+                + (SELECT COUNT(*) FROM raw_material_catalog_import_rows WHERE base_unit_code = ?)
+                + (SELECT COUNT(*) FROM supplier_product_revisions WHERE content_unit_code = ?)
+                + (SELECT COUNT(*) FROM raw_material_reference_price_events WHERE pricing_input_unit_code = ?)
+            SQL, [$code, $code, $code, $code, $code]);
+    }
+
+    private function administrationUnitStateHash(object $unit): string
+    {
+        return hash('sha256', json_encode([
+            'id' => $unit->id,
+            'code' => $unit->code,
+            'name' => $unit->name,
+            'symbol' => $unit->symbol,
+            'dimension' => $unit->dimension,
+            'base_unit_code' => $unit->base_unit_code,
+            'to_base_factor' => (string) $unit->to_base_factor,
+            'archived_at' => $unit->archived_at,
+            'archived_by' => $unit->archived_by,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function administrationUnit(object $unit): array
+    {
+        return [
+            'id' => $unit->id,
+            'code' => $unit->code,
+            'name' => $unit->name,
+            'symbol' => $unit->symbol,
+            'dimension' => $unit->dimension,
+            'base_unit_code' => $unit->base_unit_code,
+            'to_base_factor' => (string) $unit->to_base_factor,
+            'archived_at' => $unit->archived_at,
+            'archived_by' => $unit->archived_by,
+            'is_base' => $unit->code === $unit->base_unit_code,
+            'definition_locked' => $this->administrationUnitHasReferences($unit->code),
+            'reference_count' => $this->administrationUnitReferenceCount($unit->code),
+            'conversions' => [],
+        ];
     }
 
     private function insertCategory(User $actor, Location $context, array $input): string
@@ -864,7 +1187,13 @@ final class RawMaterialService
                 $this->validateForm(new RawMaterialDataRequest, $input);
                 $base = DB::table('raw_material_revisions')->where('id', $snapshot['revision']['id'])->firstOrFail();
                 $input = $this->mergeRevisionInput($base, $input, RawMaterialPermission::Edit);
-                [$unitData] = $this->validateBasicData($actor, $input, $materialId, $base->category_id);
+                [$unitData] = $this->validateBasicData(
+                    $actor,
+                    $input,
+                    $materialId,
+                    $base->category_id,
+                    $base->id,
+                );
                 $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $base);
             } elseif ($section === 'allergens') {
                 $this->validateForm(new RawMaterialAllergenDeclarationRequest, $input);
@@ -987,12 +1316,28 @@ final class RawMaterialService
         array $input,
         ?string $materialId,
         ?string $existingCategoryId = null,
+        ?string $existingRevisionId = null,
     ): array {
         $rules = (new RawMaterialDataRequest)->rules();
         unset($rules['sku_reservation_id'], $rules['allergen_declaration']);
         Validator::make($input, $rules)->validate();
         $this->requireCategory($actor, $input['category_id'], $existingCategoryId);
-        $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
+        $allowedArchivedCodes = [];
+        if ($existingRevisionId !== null) {
+            $existingRevision = DB::table('raw_material_revisions')->where('id', $existingRevisionId)->first();
+            if ($existingRevision) {
+                $allowedArchivedCodes = [
+                    $existingRevision->base_unit_code,
+                    ...DB::table('raw_material_revision_units')
+                        ->where('revision_id', $existingRevisionId)->pluck('unit_code')->all(),
+                ];
+            }
+        }
+        $unitData = RawMaterialUnitRegistry::resolve(
+            $input['base_unit_code'],
+            $input['conversions'] ?? [],
+            $allowedArchivedCodes,
+        );
         RawMaterialCatalogValues::quantities($input);
         $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
         $this->assertNoDuplicateTerms($actor, $aliases, $materialId);
@@ -1518,7 +1863,13 @@ final class RawMaterialService
                 );
             }
             $input = $this->mergeRevisionInput($baseRevision, $input, $permission);
-            [$unitData, $aliases] = $this->validateBasicData($actor, $input, $materialId, $baseRevision->category_id);
+            [$unitData, $aliases] = $this->validateBasicData(
+                $actor,
+                $input,
+                $materialId,
+                $baseRevision->category_id,
+                $baseRevision->id,
+            );
             $input = $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $baseRevision);
             $latestNo = (int) DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->max('revision_no');
             $revisionId = Str::uuid()->toString();

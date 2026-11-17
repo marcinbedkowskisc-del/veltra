@@ -37,10 +37,11 @@ final class RawMaterialCatalogValues
         if ($nominal === null && $usable === null) {
             return ['nominal_quantity' => null, 'usable_quantity' => null];
         }
+        $unitDimension = RawMaterialUnitRegistry::dimension($input['base_unit_code']);
         foreach (['nominal_quantity' => $nominal, 'usable_quantity' => $usable] as $field => $value) {
             if (! is_string($value) || ! preg_match('/^\d{1,18}(?:\.\d{1,6})?$/D', $value)
                 || ! preg_match('/[1-9]/', $value)
-                || ($input['base_unit_code'] === 'pc' && preg_match('/\.[0-9]*[1-9]/', $value))) {
+                || ($unitDimension === 'COUNT' && preg_match('/\.[0-9]*[1-9]/', $value))) {
                 throw ValidationException::withMessages([$field => ['Ilość musi być dodatnią liczbą z maksymalnie sześcioma miejscami po przecinku; sztuki muszą być całkowite.']]);
             }
         }
@@ -70,9 +71,13 @@ final class RawMaterialCatalogValues
 
     public static function usableCostExpression(string $package, string $usable, string $baseUnit): string
     {
-        return '('.$package.' / NULLIF('.$usable.', 0) * CASE '.$baseUnit.'
-            WHEN \'mg\' THEN 100000 WHEN \'g\' THEN 100 WHEN \'kg\' THEN 0.1
-            WHEN \'ml\' THEN 100 WHEN \'l\' THEN 0.1 WHEN \'pc\' THEN 1 END)';
+        $normalization = '(SELECT CASE dimension
+            WHEN \'MASS\' THEN 100 / NULLIF(to_base_factor, 0)
+            WHEN \'VOLUME\' THEN 100 / NULLIF(to_base_factor, 0)
+            WHEN \'COUNT\' THEN 1 / NULLIF(to_base_factor, 0)
+            END FROM raw_material_units WHERE code = '.$baseUnit.')';
+
+        return '('.$package.' / NULLIF('.$usable.', 0) * '.$normalization.')';
     }
 
     public function select(Builder $query, User $actor, Location $context): void
@@ -100,10 +105,11 @@ final class RawMaterialCatalogValues
         }
         if (property_exists($row, 'usable_unit_cost')) {
             $result['usable_unit_cost'] = $row->usable_unit_cost;
-            $result['usable_cost_basis'] = match ($row->base_unit_code) {
-                'mg', 'g', 'kg' => 'PLN/100g',
-                'ml', 'l' => 'PLN/100ml',
-                'pc' => 'PLN/pc',
+            $result['usable_cost_basis'] = match (RawMaterialUnitRegistry::dimension($row->base_unit_code)) {
+                'MASS' => 'PLN/100g',
+                'VOLUME' => 'PLN/100ml',
+                'COUNT' => 'PLN/pc',
+                default => null,
             };
         }
 

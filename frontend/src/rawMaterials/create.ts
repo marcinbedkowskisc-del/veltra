@@ -1,8 +1,25 @@
-import { RAW_UNITS } from './catalog'
-
-export type RawMaterialUnit = (typeof RAW_UNITS)[number]
-export type RawMaterialPricingUnit = 'kg' | 'l' | 'pc'
+export type RawMaterialUnit = string
+export type RawMaterialPricingUnit = string
 export type RawMaterialPricingBasis = 'PACKAGE' | 'NOMINAL_UNIT'
+export type RawMaterialUnitOption = {
+  code: string
+  name: string
+  symbol: string
+  dimension: 'MASS' | 'VOLUME' | 'COUNT'
+  baseUnitCode: string
+  toBaseFactor: string
+  archivedAt: string | null
+  isBase: boolean
+}
+
+export const RAW_UNIT_OPTIONS_BASELINE: RawMaterialUnitOption[] = [
+  { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
+  { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+  { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+  { code: 'ml', name: 'mililitr', symbol: 'ml', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+  { code: 'l', name: 'litr', symbol: 'l', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+  { code: 'pc', name: 'sztuka', symbol: 'szt.', dimension: 'COUNT', baseUnitCode: 'pc', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+]
 
 export type RawMaterialConversionInput = {
   unitCode: string
@@ -58,7 +75,7 @@ export function withPricingUnit(
   return [...conversions, { unit_code: values.pricingUnitCode }]
 }
 
-export const UNIT_DIMENSIONS: Record<RawMaterialUnit, 'MASS' | 'VOLUME' | 'COUNT'> = {
+export const UNIT_DIMENSIONS: Record<string, 'MASS' | 'VOLUME' | 'COUNT'> = {
   mg: 'MASS',
   g: 'MASS',
   kg: 'MASS',
@@ -67,7 +84,7 @@ export const UNIT_DIMENSIONS: Record<RawMaterialUnit, 'MASS' | 'VOLUME' | 'COUNT
   pc: 'COUNT',
 }
 
-export const UNIT_LABELS: Record<RawMaterialUnit, string> = {
+export const UNIT_LABELS: Record<string, string> = {
   mg: 'mg — miligram',
   g: 'g — gram',
   kg: 'kg — kilogram',
@@ -76,7 +93,7 @@ export const UNIT_LABELS: Record<RawMaterialUnit, string> = {
   pc: 'szt. — sztuka',
 }
 
-const UNIT_NOUNS: Record<RawMaterialUnit, string> = {
+const UNIT_NOUNS: Record<string, string> = {
   mg: 'miligram',
   g: 'gram',
   kg: 'kilogram',
@@ -85,30 +102,29 @@ const UNIT_NOUNS: Record<RawMaterialUnit, string> = {
   pc: 'sztuka',
 }
 
-export function unitLabel(unitCode: string): string {
-  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
-  return unit ? UNIT_LABELS[unit] : unitCode
+export function unitLabel(unitCode: string, units: RawMaterialUnitOption[] = []): string {
+  const known = units.find((unit) => unit.code === unitCode)
+  if (known && !Object.hasOwn(UNIT_LABELS, unitCode)) return `${known.symbol} — ${known.name}`
+  return UNIT_LABELS[unitCode] ?? unitCode
 }
 
 export function unitShortLabel(unitCode: string): string {
   return unitLabel(unitCode).split(' — ')[0]
 }
 
-function unitNoun(unitCode: string): string {
-  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
-  return unit ? UNIT_NOUNS[unit] : unitCode
+function unitNoun(unitCode: string, units: RawMaterialUnitOption[]): string {
+  return UNIT_NOUNS[unitCode] ?? units.find((unit) => unit.code === unitCode)?.name ?? unitCode
 }
 
-function unitDimension(unitCode: string) {
-  const unit = RAW_UNITS.find((candidate) => candidate === unitCode)
-  return unit ? UNIT_DIMENSIONS[unit] : undefined
+export function unitDimension(unitCode: string, units: RawMaterialUnitOption[] = []): 'MASS' | 'VOLUME' | 'COUNT' | undefined {
+  return units.find((unit) => unit.code === unitCode)?.dimension ?? UNIT_DIMENSIONS[unitCode]
 }
 
-function conversionExampleParts(unitCode: string, baseUnitCode: string, factor: string) {
-  const unit = unitNoun(unitCode)
-  const baseUnit = unitShortLabel(baseUnitCode)
-  const baseDimension = unitDimension(baseUnitCode)
-  const unitDimensionValue = unitDimension(unitCode)
+function conversionExampleParts(unitCode: string, baseUnitCode: string, factor: string, units: RawMaterialUnitOption[]) {
+  const unit = unitNoun(unitCode, units)
+  const baseUnit = units.find((item) => item.code === baseUnitCode)?.symbol ?? unitShortLabel(baseUnitCode)
+  const baseDimension = unitDimension(baseUnitCode, units)
+  const unitDimensionValue = unitDimension(unitCode, units)
   const examples: Record<string, string> = {
     'ml:g': '1,05',
     'ml:kg': '0,00105',
@@ -141,13 +157,13 @@ function conversionExampleParts(unitCode: string, baseUnitCode: string, factor: 
   return { subject, verb, sampleFactor, baseUnit }
 }
 
-export function conversionFactorHint(unitCode: string, baseUnitCode: string, factor: string): string {
-  const example = conversionExampleParts(unitCode, baseUnitCode, factor)
+export function conversionFactorHint(unitCode: string, baseUnitCode: string, factor: string, units: RawMaterialUnitOption[] = []): string {
+  const example = conversionExampleParts(unitCode, baseUnitCode, factor, units)
   return `Wpisz, ile jednostek podstawowych odpowiada jednej wybranej jednostce. Przykład: jeśli 1 ${example.subject} ${example.verb} ${example.sampleFactor} ${example.baseUnit}, wpisz ${example.sampleFactor}.`
 }
 
-export function conversionBasisHint(unitCode: string, baseUnitCode: string, factor: string): string {
-  const example = conversionExampleParts(unitCode, baseUnitCode, factor)
+export function conversionBasisHint(unitCode: string, baseUnitCode: string, factor: string, units: RawMaterialUnitOption[] = []): string {
+  const example = conversionExampleParts(unitCode, baseUnitCode, factor, units)
   return `Wyjaśnij, czego dotyczy przeliczenie, np. „1 ${example.subject} ${example.verb} ${example.sampleFactor} ${example.baseUnit}” dla tego surowca.`
 }
 
@@ -204,6 +220,7 @@ function decimalGreaterThan(left: string, right: string): boolean {
 export function validateRawMaterialCreate(
   values: RawMaterialCreateValues,
   requireNominal = false,
+  units: RawMaterialUnitOption[] = [],
 ): Record<string, string> {
   const errors: Record<string, string> = {}
   const name = values.name.trim()
@@ -220,14 +237,14 @@ export function validateRawMaterialCreate(
   if (usable && !nominal) errors.nominalQuantity = 'Podaj ilość nominalną razem z użytkową.'
   if (nominal && !validDecimal(nominal, 6)) {
     errors.nominalQuantity = 'Wpisz dodatnią liczbę z maksymalnie 18 cyframi przed przecinkiem i 6 po nim.'
-  } else if (nominal && values.baseUnitCode === 'pc' && /\.[0-9]*[1-9]/.test(nominal)) {
+  } else if (nominal && unitDimension(values.baseUnitCode, units) === 'COUNT' && /\.[0-9]*[1-9]/.test(nominal)) {
     errors.nominalQuantity = 'Ilość w sztukach musi być liczbą całkowitą.'
   }
   if (values.usableQuantityExplicit && !usable) {
     errors.usableQuantity = 'Podaj ilość użytkową albo wyczyść pole, aby użyć ilości nominalnej.'
   } else if (values.usableQuantityExplicit && !validDecimal(usable, 6)) {
     errors.usableQuantity = 'Wpisz dodatnią liczbę z maksymalnie 18 cyframi przed przecinkiem i 6 po nim.'
-  } else if (usable && values.baseUnitCode === 'pc' && /\.[0-9]*[1-9]/.test(usable)) {
+  } else if (usable && unitDimension(values.baseUnitCode, units) === 'COUNT' && /\.[0-9]*[1-9]/.test(usable)) {
     errors.usableQuantity = 'Ilość w sztukach musi być liczbą całkowitą.'
   }
   if (usable && nominal && validDecimal(usable, 6) && validDecimal(nominal, 6)
@@ -240,7 +257,7 @@ export function validateRawMaterialCreate(
   }
   if (pricingAmount && !nominal) errors.nominalQuantity = 'Cena wymaga ilości nominalnej.'
   if (values.pricingBasis === 'NOMINAL_UNIT'
-    && UNIT_DIMENSIONS[values.pricingUnitCode] !== UNIT_DIMENSIONS[values.baseUnitCode]) {
+    && unitDimension(values.pricingUnitCode, units) !== unitDimension(values.baseUnitCode, units)) {
     errors.pricingUnitCode = 'Jednostka ceny nie odpowiada jednostce surowca.'
   }
 
@@ -260,7 +277,8 @@ export function validateRawMaterialCreate(
   if (values.conversions.length > 20) errors.conversions = 'Możesz dodać maksymalnie 20 dodatkowych jednostek miary.'
   const seenUnits = new Set<string>([values.baseUnitCode])
   values.conversions.forEach((conversion, index) => {
-    if (!RAW_UNITS.includes(conversion.unitCode as RawMaterialUnit)) {
+    if (!/^[a-z][a-z0-9_]{0,23}$/.test(conversion.unitCode)
+      || (units.length > 0 && !units.some((unit) => unit.code === conversion.unitCode))) {
       errors[`conversions.${index}.unitCode`] = 'Wybierz prawidłową jednostkę.'
       return
     }
@@ -269,8 +287,8 @@ export function validateRawMaterialCreate(
     }
     seenUnits.add(conversion.unitCode)
 
-    const sameDimension = UNIT_DIMENSIONS[conversion.unitCode as RawMaterialUnit]
-      === UNIT_DIMENSIONS[values.baseUnitCode]
+    const sameDimension = unitDimension(conversion.unitCode, units)
+      === unitDimension(values.baseUnitCode, units)
     if (!sameDimension) {
       const factor = normalizeDecimalInput(conversion.toBaseFactor)
       const basis = conversion.basis.trim()
@@ -291,13 +309,14 @@ export function buildRawMaterialCreatePayload(
   values: RawMaterialCreateValues,
   includeSupplierIds = false,
   includePricing = true,
+  units: RawMaterialUnitOption[] = [],
 ): RawMaterialCreatePayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
   const aliases = values.aliases.map((alias) => alias.trim()).filter(Boolean)
   const conversions = withPricingUnit(values.conversions.map((conversion) => {
     const unitCode = conversion.unitCode as RawMaterialUnit
-    if (UNIT_DIMENSIONS[unitCode] === UNIT_DIMENSIONS[values.baseUnitCode]) {
+    if (unitDimension(unitCode, units) === unitDimension(values.baseUnitCode, units)) {
       return { unit_code: unitCode }
     }
     return {

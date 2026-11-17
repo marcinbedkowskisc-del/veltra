@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError } from '../api'
 import { formatDecimal, formatMoney, lifecycleLabel } from './catalog'
-import { unitLabel, unitShortLabel } from './create'
+import { unitLabel, unitShortLabel, type RawMaterialUnitOption } from './create'
 import Drawer from '../design-system/Drawer'
 import Tabs from '../design-system/Tabs'
 import { formatNumber } from '../design-system/formatting'
@@ -24,6 +24,7 @@ type Props = {
   globalEditAllowed: boolean
   refreshKey: number
   categories: CategoryOption[]
+  unitOptions?: RawMaterialUnitOption[]
   returnFocus: HTMLElement | null
   canReadReferencePrice: boolean | null
   syntheticPreview?: boolean
@@ -74,9 +75,11 @@ function revisionOutcomeLabel(value: string): string {
 function PriceHistoryChart({
   prices,
   baseUnitCode,
+  unitOptions,
 }: {
   prices: RawMaterialReferencePrice[]
   baseUnitCode: string
+  unitOptions: RawMaterialUnitOption[]
 }) {
   const points = prices
     .filter((price) => price.netPlnPerBaseUnit !== null)
@@ -113,11 +116,11 @@ function PriceHistoryChart({
         className="price-chart"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label={`Historia cen netto w PLN za ${unitLabel(baseUnitCode)}`}
+        aria-label={`Historia cen netto w PLN za ${unitLabel(baseUnitCode, unitOptions)}`}
       >
         <text className="price-chart-axis-title" x="14" y={margin.top + plotHeight / 2}
           transform={`rotate(-90 14 ${margin.top + plotHeight / 2})`}>
-          PLN / {unitShortLabel(baseUnitCode)}
+          PLN / {unitOptions.find((unit) => unit.code === baseUnitCode)?.symbol ?? unitShortLabel(baseUnitCode)}
         </text>
         {[0, 1, 2, 3].map((step) => {
           const value = domainMax - (step / 3) * domainRange
@@ -139,7 +142,7 @@ function PriceHistoryChart({
         {coordinates.map((point) => (
           <circle key={point.id} className="price-chart-point" cx={point.x} cy={point.y} r="3.5">
             <title>
-              {dateLabel(point.effectiveFrom)} · {formatMoney(point.netPlnPerBaseUnit)} PLN / {unitLabel(baseUnitCode)}
+              {dateLabel(point.effectiveFrom)} · {formatMoney(point.netPlnPerBaseUnit)} PLN / {unitLabel(baseUnitCode, unitOptions)}
             </title>
           </circle>
         ))}
@@ -165,6 +168,7 @@ export default function RawMaterialDetailDrawer({
   globalEditAllowed,
   refreshKey,
   categories,
+  unitOptions = [],
   returnFocus,
   canReadReferencePrice,
   syntheticPreview = false,
@@ -544,7 +548,7 @@ export default function RawMaterialDetailDrawer({
                             ? `Wersja ${detail.revision.revisionNo} — ${detail.revision.id === detail.approvedRevisionId ? 'zatwierdzona i obowiązująca' : 'robocza'}`
                             : 'Brak wersji'}</dd></div>
                           <div><dt>Kategoria</dt><dd>{categoryName(detail.revision?.categoryId ?? null)}</dd></div>
-                          <div><dt>Jednostka podstawowa</dt><dd>{detail.revision ? unitLabel(detail.revision.baseUnitCode) : '—'}</dd></div>
+                          <div><dt>Jednostka podstawowa</dt><dd>{detail.revision ? unitLabel(detail.revision.baseUnitCode, unitOptions) : '—'}</dd></div>
                           <div><dt>Rodzaj jednostki</dt><dd>{detail.revision ? dimensionLabel(detail.revision.baseUnitDimension) : '—'}</dd></div>
                         </dl>
                         {detail.revision?.description && (
@@ -597,7 +601,7 @@ export default function RawMaterialDetailDrawer({
                               : detail.revision
                                 ? (
                                   <>
-                                    <PriceHistoryChart prices={referencePrices} baseUnitCode={detail.revision.baseUnitCode} />
+                                    <PriceHistoryChart prices={referencePrices} baseUnitCode={detail.revision.baseUnitCode} unitOptions={unitOptions} />
                                     <ul className="detail-list" aria-label="Szczegóły historii cen">
                                       {referencePrices.map((price) => (
                                         <li key={price.id}>
@@ -634,7 +638,7 @@ export default function RawMaterialDetailDrawer({
                       <section className="detail-section" aria-labelledby="detail-base-unit-title">
                         <h3 id="detail-base-unit-title">Jednostka podstawowa</h3>
                         <dl className="detail-grid">
-                          <div><dt>Jednostka</dt><dd>{detail.revision ? unitLabel(detail.revision.baseUnitCode) : '—'}</dd></div>
+                          <div><dt>Jednostka</dt><dd>{detail.revision ? unitLabel(detail.revision.baseUnitCode, unitOptions) : '—'}</dd></div>
                           <div><dt>Rodzaj jednostki</dt><dd>{detail.revision ? dimensionLabel(detail.revision.baseUnitDimension) : '—'}</dd></div>
                         </dl>
                       </section>
@@ -644,7 +648,7 @@ export default function RawMaterialDetailDrawer({
                           <ul className="detail-list">
                             {detail.revision.units.map((unit) => (
                               <li key={unit.unitCode}>
-                                <strong>{unitLabel(unit.unitCode)}</strong> · {dimensionLabel(unit.dimension)} · przelicznik {formatNumber(unit.toBaseFactor, { maximumFractionDigits: 12 })}
+                                <strong>{unitLabel(unit.unitCode, unitOptions)}</strong> · {dimensionLabel(unit.dimension)} · przelicznik {formatNumber(unit.toBaseFactor, { maximumFractionDigits: 12 })}
                                 {unit.basis ? ` (${unit.basis})` : ''}
                               </li>
                             ))}
@@ -691,7 +695,7 @@ export default function RawMaterialDetailDrawer({
                             {revisions.map((revision) => (
                               <li key={revision.id}>
                                 <strong>Wersja {revision.revisionNo} · {revision.name}</strong>
-                                <span>{dateLabel(revision.createdAt)} · {categoryName(revision.categoryId)} · {unitLabel(revision.baseUnitCode)} · {allergenLabel(revision.allergenState)}</span>
+                                <span>{dateLabel(revision.createdAt)} · {categoryName(revision.categoryId)} · {unitLabel(revision.baseUnitCode, unitOptions)} · {allergenLabel(revision.allergenState)}</span>
                                 <span>{revision.criticalChange ? 'Zmiana oznaczona jako krytyczna' : 'Zmiana standardowa'}</span>
                                 {revision.approvals.map((approval, index) => (
                                   <span key={`${approval.occurredAt}-${index}`}>

@@ -18,17 +18,18 @@ import {
   type RawMaterialRevision,
 } from './detail'
 import {
-  UNIT_DIMENSIONS,
   type RawMaterialPricingBasis,
   type RawMaterialCreatePayload,
   type RawMaterialCreateValues,
   type RawMaterialPricingUnit,
   type RawMaterialUnit,
+  type RawMaterialUnitOption,
 } from './create'
 
 const RAW_API = '/api/v1/raw-materials'
 const RAW_CAPABILITIES_API = '/api/v1/security/raw-materials/capabilities'
-const RAW_UNITS = ['mg', 'g', 'kg', 'ml', 'l', 'pc'] as const
+const RAW_UNIT_CODE = /^[a-z][a-z0-9_]{0,23}$/
+const RAW_DIMENSIONS = ['MASS', 'VOLUME', 'COUNT'] as const
 const DECIMAL = /^\d{1,30}(?:\.\d{1,14})?$/
 
 export type RawMaterialCapabilities = {
@@ -257,7 +258,7 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
   const baseUnitCode = revision.base_unit_code
   const name = revision.name
   if (typeof categoryId !== 'string' || !UUID.test(categoryId)
-    || typeof baseUnitCode !== 'string' || !RAW_UNITS.includes(baseUnitCode as RawMaterialUnit)
+    || typeof baseUnitCode !== 'string' || !RAW_UNIT_CODE.test(baseUnitCode)
     || typeof name !== 'string' || name.trim().length === 0
     || typeof revision.nominal_quantity !== 'string' && revision.nominal_quantity !== null
     || typeof revision.usable_quantity !== 'string' && revision.usable_quantity !== null
@@ -273,8 +274,7 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
   if (usableQuantityExplicit && revision.usable_quantity === null) throw invalid()
   let pricingBasis: RawMaterialPricingBasis = 'PACKAGE'
   let pricingAmount = ''
-  let pricingUnitCode: RawMaterialPricingUnit = UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit] === 'MASS'
-    ? 'kg' : UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit] === 'VOLUME' ? 'l' : 'pc'
+  let pricingUnitCode: RawMaterialPricingUnit = baseUnitCode
   if (value.pricing_input !== null && value.pricing_input !== undefined) {
     if (!isRecord(value.pricing_input)
       || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT')
@@ -285,8 +285,8 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
     pricingAmount = value.pricing_input.amount
     if (pricingBasis === 'NOMINAL_UNIT') {
       if (typeof value.pricing_input.unit_code !== 'string'
-        || !['kg', 'l', 'pc'].includes(value.pricing_input.unit_code)) throw invalid()
-      pricingUnitCode = value.pricing_input.unit_code as RawMaterialPricingUnit
+        || !RAW_UNIT_CODE.test(value.pricing_input.unit_code)) throw invalid()
+      pricingUnitCode = value.pricing_input.unit_code
     }
   }
   const supplierIds = value.supplier_ids === undefined
@@ -303,9 +303,8 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
   let baseUnitCount = 0
   const conversions = units.flatMap((unit) => {
     if (!isRecord(unit)) throw invalid()
-    if (typeof unit.unit_code !== 'string' || !RAW_UNITS.includes(unit.unit_code as RawMaterialUnit)
-      || typeof unit.dimension !== 'string'
-      || unit.dimension !== UNIT_DIMENSIONS[unit.unit_code as RawMaterialUnit]
+    if (typeof unit.unit_code !== 'string' || !RAW_UNIT_CODE.test(unit.unit_code)
+      || typeof unit.dimension !== 'string' || !RAW_DIMENSIONS.includes(unit.dimension as typeof RAW_DIMENSIONS[number])
       || unitCodes.has(unit.unit_code)) throw invalid()
     unitCodes.add(unit.unit_code)
     if (unit.unit_code === baseUnitCode) {
@@ -314,15 +313,21 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
     }
     const factor = nullableString(unit.to_base_factor, invalid().message)
     const basis = nullableString(unit.basis, invalid().message)
-    if (UNIT_DIMENSIONS[unit.unit_code as RawMaterialUnit] !== UNIT_DIMENSIONS[baseUnitCode as RawMaterialUnit]
+    if (unit.dimension !== revision.base_unit_dimension
       && (!factor || !basis)) throw invalid()
     return [{
-      unitCode: unit.unit_code as RawMaterialUnit,
+      unitCode: unit.unit_code,
       toBaseFactor: factor ?? '',
       basis: basis ?? '',
     }]
   })
-  if (baseUnitCount !== 1) throw invalid()
+  const baseUnit = units.find((unit) => isRecord(unit) && unit.unit_code === baseUnitCode)
+  const pricingUnit = units.find((unit) => isRecord(unit) && unit.unit_code === pricingUnitCode)
+  if (baseUnitCount !== 1 || !baseUnit || !isRecord(baseUnit)
+    || baseUnit.dimension !== revision.base_unit_dimension || baseUnit.conversion_kind !== 'BASE'
+    || pricingBasis === 'NOMINAL_UNIT' && (!pricingUnit || !isRecord(pricingUnit)
+      || pricingUnit.dimension !== revision.base_unit_dimension
+      || !['BASE', 'METRIC'].includes(String(pricingUnit.conversion_kind)))) throw invalid()
 
   return {
     id: value.id,
@@ -510,6 +515,32 @@ export async function fetchAllergenDeclaration(id: string, signal?: AbortSignal)
 
 export async function fetchCategories(signal?: AbortSignal): Promise<CategoryOption[]> {
   return parseCategories(await request(`${RAW_API}/categories`, 'GET', undefined, { signal }))
+}
+
+export async function fetchRawMaterialUnits(signal?: AbortSignal): Promise<RawMaterialUnitOption[]> {
+  const value = await request(`${RAW_API}/units`, 'GET', undefined, { signal })
+  if (!Array.isArray(value)) throw new Error('Backend zwrócił nieprawidłowy słownik jednostek RAW.')
+  return value.map((unit) => {
+    if (!isRecord(unit) || typeof unit.code !== 'string' || !RAW_UNIT_CODE.test(unit.code)
+      || typeof unit.name !== 'string' || typeof unit.symbol !== 'string'
+      || typeof unit.dimension !== 'string' || !RAW_DIMENSIONS.includes(unit.dimension as typeof RAW_DIMENSIONS[number])
+      || typeof unit.base_unit_code !== 'string' || !RAW_UNIT_CODE.test(unit.base_unit_code)
+      || typeof unit.to_base_factor !== 'string'
+      || !(unit.archived_at === null || typeof unit.archived_at === 'string')
+      || typeof unit.is_base !== 'boolean') {
+      throw new Error('Backend zwrócił nieprawidłową jednostkę RAW.')
+    }
+    return {
+      code: unit.code,
+      name: unit.name,
+      symbol: unit.symbol,
+      dimension: unit.dimension as RawMaterialUnitOption['dimension'],
+      baseUnitCode: unit.base_unit_code,
+      toBaseFactor: unit.to_base_factor,
+      archivedAt: unit.archived_at,
+      isBase: unit.is_base,
+    }
+  })
 }
 
 export type PricingPreview = {

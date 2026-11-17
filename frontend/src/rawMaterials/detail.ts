@@ -223,21 +223,19 @@ export function parseRawMaterialReferencePrices(value: unknown): RawMaterialRefe
     }
     const pricingInputUnitCode = event.pricing_input_unit_code ?? null
     if (pricingInputUnitCode !== null
-      && (typeof pricingInputUnitCode !== 'string'
-        || !['mg', 'g', 'kg', 'ml', 'l', 'pc'].includes(pricingInputUnitCode))) {
+      && (typeof pricingInputUnitCode !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(pricingInputUnitCode))) {
       throw invalidPriceHistory()
     }
     const pricingBaseUnitCode = event.pricing_base_unit_code ?? null
     if (pricingBaseUnitCode !== null
-      && !['mg', 'g', 'kg', 'ml', 'l', 'pc'].includes(String(pricingBaseUnitCode))) {
+      && (typeof pricingBaseUnitCode !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(pricingBaseUnitCode))) {
       throw invalidPriceHistory()
     }
     const pricingInputAmount = priceDecimal(event.pricing_input_amount ?? null)
     const pricingNominalQuantity = priceDecimal(event.pricing_nominal_quantity ?? null)
     const pricingUsableQuantity = priceDecimal(event.pricing_usable_quantity ?? null)
     if ((pricingInputBasis === 'PACKAGE' && pricingInputUnitCode !== null)
-      || (pricingInputBasis === 'NOMINAL_UNIT'
-        && !['kg', 'l', 'pc'].includes(String(pricingInputUnitCode)))) {
+      || (pricingInputBasis === 'NOMINAL_UNIT' && pricingInputUnitCode === null)) {
       throw invalidPriceHistory()
     }
     if (pricingInputBasis !== null && (

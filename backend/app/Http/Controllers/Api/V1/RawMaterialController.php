@@ -30,10 +30,10 @@ use App\Http\Requests\RawMaterialGrantRequest;
 use App\Http\Requests\RawMaterialHistoryRequest;
 use App\Http\Requests\RawMaterialOfferPriceRequest;
 use App\Http\Requests\RawMaterialOfferRequest;
+use App\Http\Requests\RawMaterialPricingPreviewRequest;
 use App\Http\Requests\RawMaterialProductListRequest;
 use App\Http\Requests\RawMaterialProductRequest;
 use App\Http\Requests\RawMaterialProductRevisionRequest;
-use App\Http\Requests\RawMaterialPricingPreviewRequest;
 use App\Http\Requests\RawMaterialReasonRequest;
 use App\Http\Requests\RawMaterialReferencePriceQueryRequest;
 use App\Http\Requests\RawMaterialReferencePriceRequest;
@@ -683,6 +683,14 @@ class RawMaterialController extends Controller
             $request->user(),
             $request->attributes->get('operating_location'),
         )]);
+    }
+
+    public function units(Request $request, RawMaterialService $service): JsonResponse
+    {
+        return response()->json(['data' => $service->rawMaterialUnitOptions(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+        )], 200, ['Cache-Control' => 'private, no-store']);
     }
 
     public function storeCategory(RawMaterialCategoryRequest $request, RawMaterialService $service): JsonResponse

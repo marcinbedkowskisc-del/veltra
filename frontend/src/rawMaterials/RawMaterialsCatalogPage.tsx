@@ -14,6 +14,7 @@ import {
   fetchCatalog,
   fetchCategories,
   fetchRawMaterialCapabilities,
+  fetchRawMaterialUnits,
   fetchSuppliers,
   type CreatedRawMaterial,
   type RawMaterialCapabilities,
@@ -31,6 +32,7 @@ import {
   type SortKey,
   type SupplierOption,
 } from './catalog'
+import type { RawMaterialUnitOption } from './create'
 
 type Props = {
   onSessionExpired: () => void
@@ -96,6 +98,8 @@ export default function RawMaterialsCatalogPage({
   const [catalogRequestRevision, setCatalogRequestRevision] = useState(0)
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [categoriesAvailable, setCategoriesAvailable] = useState(false)
+  const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>([])
+  const [unitOptionsError, setUnitOptionsError] = useState<string | null>(null)
   const [supplierState, setSupplierState] = useState<SupplierFilterState>('checking')
   const [supplierInput, setSupplierInput] = useState('')
   const [supplierSuggestions, setSupplierSuggestions] = useState<SupplierOption[]>([])
@@ -113,6 +117,21 @@ export default function RawMaterialsCatalogPage({
   const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null)
   const [createFormLocationId, setCreateFormLocationId] = useState<string | null>(null)
   const [categoryManagerLocationId, setCategoryManagerLocationId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetchRawMaterialUnits(controller.signal).then((result) => {
+      if (!controller.signal.aborted) {
+        setUnitOptions(result)
+        setUnitOptionsError(null)
+      }
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) {
+        setUnitOptionsError(cause instanceof Error ? cause.message : 'Nie udało się wczytać słownika jednostek.')
+      }
+    })
+    return () => controller.abort()
+  }, [])
   const [createOpeningLocationId, setCreateOpeningLocationId] = useState<string | null>(null)
   const [createReturnFocus, setCreateReturnFocus] = useState<HTMLButtonElement | null>(null)
   const [createdMaterial, setCreatedMaterial] = useState<CreatedRawMaterial | null>(null)
@@ -751,6 +770,8 @@ export default function RawMaterialsCatalogPage({
         searchLoading={tableLoading}
         categories={categories}
         categoriesAvailable={categoriesAvailable}
+        unitOptions={unitOptions}
+        unitOptionsError={unitOptionsError}
         supplierState={view === 'workbench' ? 'denied' : supplierState}
         supplierInput={supplierInput}
         supplierSuggestions={supplierSuggestions}
@@ -835,6 +856,7 @@ export default function RawMaterialsCatalogPage({
           <CatalogTable
             working={view === 'workbench'}
             rows={rows}
+            unitOptions={unitOptions}
             selectedIds={selectedIds}
             selectionDisabled={tableLoading || catalogState !== 'ready'}
             sort={sort}
@@ -908,6 +930,7 @@ export default function RawMaterialsCatalogPage({
           globalEditAllowed={globalEditAllowed}
           refreshKey={detailRefreshKey}
           categories={categories}
+          unitOptions={unitOptions}
           returnFocus={currentSelectedDetail.trigger}
           canReadReferencePrice={canReadReferencePrice}
           syntheticPreview={syntheticPreview}

@@ -138,6 +138,65 @@ abstract class TestCase extends BaseTestCase
 
     protected function resetTestDatabase(): void
     {
-        $this->setupConnection()->statement('TRUNCATE TABLE public.organizations CASCADE');
+        $connection = $this->setupConnection();
+        $connection->statement('TRUNCATE TABLE public.organizations CASCADE');
+        $connection->table('raw_material_units')->insertOrIgnore([
+            [
+                'id' => '00000000-0000-4000-8000-000000000102',
+                'code' => 'g',
+                'name' => 'gram',
+                'symbol' => 'g',
+                'dimension' => 'MASS',
+                'base_unit_code' => 'g',
+                'to_base_factor' => '1',
+            ],
+            [
+                'id' => '00000000-0000-4000-8000-000000000104',
+                'code' => 'ml',
+                'name' => 'mililitr',
+                'symbol' => 'ml',
+                'dimension' => 'VOLUME',
+                'base_unit_code' => 'ml',
+                'to_base_factor' => '1',
+            ],
+            [
+                'id' => '00000000-0000-4000-8000-000000000106',
+                'code' => 'pc',
+                'name' => 'sztuka',
+                'symbol' => 'szt.',
+                'dimension' => 'COUNT',
+                'base_unit_code' => 'pc',
+                'to_base_factor' => '1',
+            ],
+        ]);
+        $connection->table('raw_material_units')->insertOrIgnore([
+            [
+                'id' => '00000000-0000-4000-8000-000000000101',
+                'code' => 'mg',
+                'name' => 'miligram',
+                'symbol' => 'mg',
+                'dimension' => 'MASS',
+                'base_unit_code' => 'g',
+                'to_base_factor' => '0.001',
+            ],
+            [
+                'id' => '00000000-0000-4000-8000-000000000103',
+                'code' => 'kg',
+                'name' => 'kilogram',
+                'symbol' => 'kg',
+                'dimension' => 'MASS',
+                'base_unit_code' => 'g',
+                'to_base_factor' => '1000',
+            ],
+            [
+                'id' => '00000000-0000-4000-8000-000000000105',
+                'code' => 'l',
+                'name' => 'litr',
+                'symbol' => 'l',
+                'dimension' => 'VOLUME',
+                'base_unit_code' => 'ml',
+                'to_base_factor' => '1000',
+            ],
+        ]);
     }
 }

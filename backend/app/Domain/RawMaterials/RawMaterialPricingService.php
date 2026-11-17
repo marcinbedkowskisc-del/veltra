@@ -255,10 +255,13 @@ final class RawMaterialPricingService
                 'SELECT raw_materials_round_half_even_v1('.$expression.', 14)::text',
                 [$values['net_pln_per_package'], $quantities['usable_quantity'], $input['base_unit_code']],
             );
-            $result['usable_cost_basis'] = match ($input['base_unit_code']) {
-                'mg', 'g', 'kg' => 'PLN/100g',
-                'ml', 'l' => 'PLN/100ml',
-                'pc' => 'PLN/pc',
+            $result['usable_cost_basis'] = match (RawMaterialUnitRegistry::dimension($input['base_unit_code'])) {
+                'MASS' => 'PLN/100g',
+                'VOLUME' => 'PLN/100ml',
+                'COUNT' => 'PLN/pc',
+                default => throw ValidationException::withMessages([
+                    'base_unit_code' => [__('messages.raw_material_unit_invalid')],
+                ]),
             };
         }
 
@@ -278,8 +281,9 @@ final class RawMaterialPricingService
             [$amount],
         );
         if (($basis === 'PACKAGE' && $unitCode !== null)
-            || ($basis === 'NOMINAL_UNIT' && ! in_array($unitCode, ['kg', 'l', 'pc'], true))
-            || ($basis === 'LEGACY_BASE_UNIT' && ! in_array($unitCode, ['mg', 'g', 'kg', 'ml', 'l', 'pc'], true))) {
+            || ($basis !== 'PACKAGE' && ($unitCode === null
+                || ! preg_match('/^[a-z][a-z0-9_]{0,23}$/D', $unitCode)
+                || RawMaterialUnitRegistry::dimension($unitCode) === null))) {
             throw ValidationException::withMessages(['pricing.unit_code' => ['Jednostka ceny nie odpowiada wybranej podstawie.']]);
         }
 
@@ -317,13 +321,7 @@ final class RawMaterialPricingService
                     'pricing.unit_code' => ['Wybrana jednostka ceny nie jest zatwierdzoną jednostką tego surowca.'],
                 ]);
             }
-            $expectedDimension = match ($unitCode) {
-                'kg' => 'MASS',
-                'l' => 'VOLUME',
-                'pc' => 'COUNT',
-                default => null,
-            };
-            if ($unit->dimension !== $expectedDimension) {
+            if ($unit->dimension !== RawMaterialUnitRegistry::dimension($baseUnitCode)) {
                 throw ValidationException::withMessages([
                     'pricing.unit_code' => ['Jednostka ceny musi odpowiadać wymiarowi surowca.'],
                 ]);
@@ -340,21 +338,10 @@ final class RawMaterialPricingService
             return;
         }
         $unit = collect($unitData['units'])->firstWhere('unit_code', $unitCode);
-        $expectedDimension = match ($unitCode) {
-            'mg', 'g', 'kg' => 'MASS',
-            'ml', 'l' => 'VOLUME',
-            'pc' => 'COUNT',
-            default => null,
-        };
-        if (! $unit || $unit['dimension'] !== $expectedDimension
+        $baseUnit = collect($unitData['units'])->firstWhere('unit_code', $unitData['base_unit_code']);
+        if (! $unit || ! $baseUnit || $unit['dimension'] !== $baseUnit['dimension']
             || ! in_array($unit['conversion_kind'], ['BASE', 'METRIC'], true)
-            || ($basis === 'LEGACY_BASE_UNIT' && $unitCode !== $unitData['base_unit_code'])
-            || ($basis === 'NOMINAL_UNIT' && $unitCode !== match ($expectedDimension) {
-                'MASS' => 'kg',
-                'VOLUME' => 'l',
-                'COUNT' => 'pc',
-                default => null,
-            })) {
+            || ($basis === 'LEGACY_BASE_UNIT' && $unitCode !== $unitData['base_unit_code'])) {
             throw ValidationException::withMessages([
                 'pricing.unit_code' => ['Wybrana jednostka ceny nie jest zgodna z jednostkami surowca.'],
             ]);

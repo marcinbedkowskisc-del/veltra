@@ -4,18 +4,19 @@ import { formatNumber } from '../design-system/formatting'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
 import RawMaterialPricingFields from './RawMaterialPricingFields'
-import { lifecycleLabel, RAW_UNITS } from './catalog'
+import { lifecycleLabel } from './catalog'
 import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   normalizeDecimalInput,
   conversionBasisHint,
   conversionFactorHint,
-  UNIT_DIMENSIONS,
-  UNIT_LABELS,
+  unitDimension,
+  unitLabel,
   validateRawMaterialCreate,
   withPricingUnit,
   type RawMaterialConversionInput,
   type RawMaterialCreateValues,
+  type RawMaterialUnitOption,
 } from './create'
 import {
   fetchRawMaterialCapabilities,
@@ -30,6 +31,7 @@ import {
   type RevisedRawMaterial,
   type AllergenDeclaration,
   fetchSuppliers,
+  fetchRawMaterialUnits,
 } from './api'
 
 type Props = {
@@ -102,13 +104,14 @@ function buildEditPayload(
   includePricing: boolean,
   includeSuppliers: boolean,
   initialValues: RawMaterialCreateValues,
+  units: RawMaterialUnitOption[],
 ): RawMaterialEditPayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
   const conversions: RawMaterialEditPayload['conversions'] = withPricingUnit(values.conversions.map((conversion) => {
-    const unitCode = RAW_UNITS.find((unit) => unit === conversion.unitCode)
+    const unitCode = units.find((unit) => unit.code === conversion.unitCode)?.code
     if (!unitCode) throw new Error('Wybierz prawidłową jednostkę przeliczeniową.')
-    if (UNIT_DIMENSIONS[unitCode] === UNIT_DIMENSIONS[values.baseUnitCode]) {
+    if (unitDimension(unitCode, units) === unitDimension(values.baseUnitCode, units)) {
       return { unit_code: unitCode }
     }
     return {
@@ -171,6 +174,9 @@ export default function RawMaterialEditForm({
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
   const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
   const [supplierError, setSupplierError] = useState<string | null>(null)
+  const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>([])
+  const [unitsLoading, setUnitsLoading] = useState(true)
+  const [unitsError, setUnitsError] = useState<string | null>(null)
   const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
   const [focusError, setFocusError] = useState(0)
   const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
@@ -287,6 +293,23 @@ export default function RawMaterialEditForm({
   }, [materialId, operatingLocationId, returnFocus])
 
   useEffect(() => {
+    const controller = new AbortController()
+    void fetchRawMaterialUnits(controller.signal).then((result) => {
+      if (!controller.signal.aborted && active.current) {
+        setUnitOptions(result)
+        setUnitsError(null)
+      }
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted && active.current) {
+        setUnitsError(cause instanceof Error ? cause.message : 'Nie udało się wczytać słownika jednostek.')
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted && active.current) setUnitsLoading(false)
+    })
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
     if (!dirty || phase === 'saved') return
     const preventNavigation = (event: BeforeUnloadEvent) => {
       event.preventDefault()
@@ -387,8 +410,11 @@ export default function RawMaterialEditForm({
   }
 
   function setBaseUnit(value: RawMaterialCreateValues['baseUnitCode']) {
-    const pricingUnitCode = UNIT_DIMENSIONS[value] === 'MASS'
-      ? 'kg' : UNIT_DIMENSIONS[value] === 'VOLUME' ? 'l' : 'pc'
+    const dimension = unitDimension(value, unitOptions)
+    const preferred = dimension === 'MASS' ? 'kg' : dimension === 'VOLUME' ? 'l' : 'pc'
+    const pricingUnitCode = unitOptions.find((unit) => unit.code === preferred && unit.archivedAt === null)?.code
+      ?? unitOptions.find((unit) => unit.dimension === dimension && unit.archivedAt === null)?.code
+      ?? value
     setValues((current) => current ? { ...current, baseUnitCode: value, pricingUnitCode } : current)
   }
 
@@ -579,7 +605,11 @@ export default function RawMaterialEditForm({
     setAttempted(true)
     setFormError(null)
     setServerErrors({})
-    const errors = validateRawMaterialCreate(values, true)
+    if (unitsLoading || unitsError) {
+      setFormError(unitsError ?? 'Ładowanie słownika jednostek.')
+      return
+    }
+    const errors = validateRawMaterialCreate(values, true, unitOptions)
     const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
     const declarationError = allergensChanged ? allergenError(allergens, false) : null
     setAllergenValidation(declarationError)
@@ -599,6 +629,7 @@ export default function RawMaterialEditForm({
       canManageReferencePrice && canViewReferencePrice,
       canManageSuppliers && supplierOptionsLoaded,
       initialValues ?? values,
+      unitOptions,
     ),
       ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
     operationLocked.current = true
@@ -707,6 +738,7 @@ export default function RawMaterialEditForm({
         {phase === 'loading' && <p className="create-form-status" role="status">Sprawdzanie uprawnień i wczytywanie rewizji edytora…</p>}
         {phase === 'authorizing' && <p className="create-form-status" role="status">Ponowne sprawdzanie uprawnień i wersji…</p>}
         {phase === 'saving' && <p className="create-form-status" role="status">Zapisywanie nowej rewizji…</p>}
+        {unitsError && <p className="create-form-error" role="alert">Nie można wczytać słownika jednostek: {unitsError}</p>}
         {formError && (phase === 'conflict' || phase === 'uncertain' || phase === 'error'
           || phase === 'forbidden' || phase === 'not-found' || phase === 'unavailable') && (
           <div className="create-form-notice" role="alert">
@@ -797,7 +829,8 @@ export default function RawMaterialEditForm({
                     Jednostka podstawowa <span className="required-mark">wymagane</span>
                     <select id="edit-base-unit" value={values.baseUnitCode} {...fieldProps('baseUnitCode')}
                       onChange={(event) => setBaseUnit(event.target.value as RawMaterialCreateValues['baseUnitCode'])}>
-                      {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
+                      {unitOptions.filter((unit) => unit.archivedAt === null || unit.code === values.baseUnitCode)
+                        .map((unit) => <option key={unit.code} value={unit.code}>{unitLabel(unit.code, unitOptions)}{unit.archivedAt ? ' (archiwalna — bieżące przypisanie)' : ''}</option>)}
                     </select>
                     <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „szt.” oznacza jedną sztukę, nie opakowanie.</span>
                     {getError('baseUnitCode') && <span className="field-error" id="baseUnitCode-error">{getError('baseUnitCode')}</span>}
@@ -823,9 +856,9 @@ export default function RawMaterialEditForm({
                   </fieldset>
                   {canViewReferencePrice && (
                     <RawMaterialPricingFields id="edit" values={values}
-                      disabled={phase !== 'editing' || !canManageReferencePrice}
+                      disabled={phase !== 'editing' || !canManageReferencePrice || unitsLoading || Boolean(unitsError)}
                       canCalculate={canManageReferencePrice} canViewCost={canViewUsableCost}
-                      error={getError('pricingAmount')}
+                      error={getError('pricingAmount')} unitOptions={unitOptions}
                       onBasisChange={(value) => setField('pricingBasis', value)}
                       onAmountChange={(value) => setField('pricingAmount', value)}
                       onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
@@ -895,7 +928,7 @@ export default function RawMaterialEditForm({
                       <div>
                         <h3 id="edit-conversions-title">Dodatkowe jednostki miary</h3>
                         <p>
-                          Jednostka podstawowa: {UNIT_LABELS[values.baseUnitCode]}. Przelicznik mówi, ile jednostek podstawowych
+                          Jednostka podstawowa: {unitLabel(values.baseUnitCode, unitOptions)}. Przelicznik mówi, ile jednostek podstawowych
                           odpowiada jednej dodatkowej jednostce, np. 1 opakowanie = 250 g. Dla jednostek tego samego rodzaju
                           przeliczenie jest ustawiane automatycznie. Przy przeliczaniu między masą, objętością i sztukami podaj
                           przelicznik oraz opisz, czego dotyczy. Zapisz wszystkie pozycje, które mają pozostać przy surowcu.
@@ -907,9 +940,9 @@ export default function RawMaterialEditForm({
                       </button>
                     </div>
                     {values.conversions.map((conversion, index) => {
-                      const unit = conversion.unitCode as RawMaterialCreateValues['baseUnitCode']
-                      const automatic = RAW_UNITS.includes(unit)
-                        && UNIT_DIMENSIONS[unit] === UNIT_DIMENSIONS[values.baseUnitCode]
+                      const unit = conversion.unitCode
+                      const automatic = unitOptions.some((candidate) => candidate.code === unit)
+                        && unitDimension(unit, unitOptions) === unitDimension(values.baseUnitCode, unitOptions)
                       const factorField = `conversions.${index}.toBaseFactor`
                       const basisField = `conversions.${index}.basis`
                       const factorHintId = `edit-conversion-${index}-factor-hint`
@@ -923,8 +956,9 @@ export default function RawMaterialEditForm({
                               {...fieldProps(`conversions.${index}.unitCode`)}
                               onChange={(event) => updateConversion(index, { unitCode: event.target.value as RawMaterialConversionInput['unitCode'] })}>
                               <option value="">Wybierz jednostkę</option>
-                              {RAW_UNITS.filter((item) => item !== values.baseUnitCode).map((item) =>
-                                <option key={item} value={item}>{UNIT_LABELS[item]}</option>)}
+                              {unitOptions.filter((item) => item.code !== values.baseUnitCode
+                                && (item.archivedAt === null || item.code === conversion.unitCode)).map((item) =>
+                                <option key={item.code} value={item.code}>{unitLabel(item.code, unitOptions)}{item.archivedAt ? ' (archiwalna — bieżące przypisanie)' : ''}</option>)}
                             </select>
                             {getError(`conversions.${index}.unitCode`) && <span className="field-error">{getError(`conversions.${index}.unitCode`)}</span>}
                           </label>
@@ -939,7 +973,7 @@ export default function RawMaterialEditForm({
                                   aria-describedby={[factorHintId, getError(factorField) ? factorErrorId : null].filter(Boolean).join(' ')}
                                   onChange={(event) => updateConversion(index, { toBaseFactor: event.target.value })} />
                                 <span id={factorHintId} className="field-hint">
-                                  {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                  {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor, unitOptions)}
                                 </span>
                                 {getError(factorField) && <span className="field-error" id={factorErrorId}>{getError(factorField)}</span>}
                               </div>
@@ -950,7 +984,7 @@ export default function RawMaterialEditForm({
                                   aria-describedby={[basisHintId, getError(basisField) ? basisErrorId : null].filter(Boolean).join(' ')}
                                   onChange={(event) => updateConversion(index, { basis: event.target.value })} />
                                 <span id={basisHintId} className="field-hint">
-                                  {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                  {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor, unitOptions)}
                                 </span>
                                 {getError(basisField) && <span className="field-error" id={basisErrorId}>{getError(basisField)}</span>}
                               </div>

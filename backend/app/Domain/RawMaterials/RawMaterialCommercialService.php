@@ -1270,6 +1270,11 @@ final class RawMaterialCommercialService
                 'content_unit_code' => [__('messages.raw_material_unit_invalid')],
             ]);
         }
+        if (! RawMaterialUnitRegistry::isActive($input['content_unit_code'])) {
+            throw ValidationException::withMessages([
+                'content_unit_code' => ['Nie można przypisać zarchiwizowanej jednostki do nowego produktu dostawcy.'],
+            ]);
+        }
         $id = Str::uuid()->toString();
         DB::table('supplier_product_revisions')->insert([
             'id' => $id,

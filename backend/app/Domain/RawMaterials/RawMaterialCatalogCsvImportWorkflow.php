@@ -612,7 +612,7 @@ final class RawMaterialCatalogCsvImportWorkflow
         if (trim($row['name']) === '' || mb_strlen($row['name'], 'UTF-8') > 200) {
             return ['code' => 'NAME_INVALID', 'message' => 'Nazwa jest pusta albo przekracza 200 znaków.'];
         }
-        if (! in_array($row['base_unit_code'], ['mg', 'g', 'kg', 'ml', 'l', 'pc'], true)) {
+        if (! DB::table('raw_material_units')->where('code', $row['base_unit_code'])->whereNull('archived_at')->exists()) {
             return ['code' => 'BASE_UNIT_INVALID', 'message' => 'Jednostka bazowa nie jest obsługiwana dla RAW.'];
         }
         if ($row['nominal_quantity'] === null) {

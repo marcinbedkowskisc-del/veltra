@@ -7,6 +7,7 @@ import {
   createRawMaterial,
   createApprovedRawMaterial,
   fetchAllergenCatalogs,
+  fetchRawMaterialUnits,
   previewRawMaterialPricing,
   reserveRawMaterialSku,
   type CreatedRawMaterial,
@@ -18,6 +19,7 @@ vi.mock('./api', async (importOriginal) => ({
   createRawMaterial: vi.fn(),
   createApprovedRawMaterial: vi.fn(),
   fetchAllergenCatalogs: vi.fn(),
+  fetchRawMaterialUnits: vi.fn(),
   previewRawMaterialPricing: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
 }))
@@ -72,6 +74,14 @@ beforeEach(() => {
   createMock.mockResolvedValue(created)
   createApprovedMock.mockResolvedValue({ ...created, lifecycleState: 'ACTIVE' })
   vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, definitions: [] }])
+  vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
+    { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
+    { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'ml', name: 'mililitr', symbol: 'ml', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'l', name: 'litr', symbol: 'l', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'pc', name: 'sztuka', symbol: 'szt.', dimension: 'COUNT', baseUnitCode: 'pc', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+  ])
   vi.mocked(previewRawMaterialPricing).mockResolvedValue({
     netPlnPerPackage: '28.00000000000000', usableUnitCost: '1.86666666666667', usableCostBasis: 'PLN/100g',
   })

@@ -7,8 +7,8 @@ use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
-use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
+use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
@@ -18,6 +18,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use ReflectionMethod;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
@@ -186,6 +187,61 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
                 [$event->net_pln_per_package, $event->pricing_usable_quantity],
             ));
         }
+    }
+
+    public function test_archived_custom_unit_keeps_raw_revision_reference_and_locks_its_definition(): void
+    {
+        $unit = $this->rawMaterials->createAdministrationUnit($this->administrator, $this->location, [
+            'code' => 'mg_history',
+            'name' => 'Miligram historyczny',
+            'symbol' => 'mgh',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0.000001',
+        ]);
+        $material = $this->createMaterial('Materiał z niestandardową jednostką', [
+            'conversions' => [['unit_code' => 'mg_history']],
+        ]);
+        $revisionUnit = DB::table('raw_material_revision_units')
+            ->where('revision_id', $material['revision']['id'])
+            ->where('unit_code', 'mg_history')
+            ->first();
+
+        $this->assertNotNull($revisionUnit);
+        $this->assertSame('METRIC', $revisionUnit->conversion_kind);
+        $this->assertSame('0.000001000000', (string) $revisionUnit->to_base_factor);
+
+        try {
+            $this->rawMaterials->updateAdministrationUnit($this->administrator, $this->location, $unit['id'], [
+                'name' => 'Miligram historyczny',
+                'symbol' => 'mgh',
+                'dimension' => 'MASS',
+                'base_unit_code' => 'g',
+                'to_base_factor' => '0.000002',
+            ]);
+            $this->fail('A referenced unit definition must remain immutable.');
+        } catch (RawMaterialException $exception) {
+            $this->assertSame('RAW_MATERIAL_UNIT_DEFINITION_IN_USE', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+        }
+
+        $this->rawMaterials->archiveAdministrationUnit($this->administrator, $this->location, $unit['id']);
+        $this->assertSame(1, DB::table('raw_material_revision_units')
+            ->where('revision_id', $material['revision']['id'])
+            ->where('unit_code', 'mg_history')->count());
+
+        try {
+            $this->createMaterial('Materiał z archiwalną jednostką', [
+                'conversions' => [['unit_code' => 'mg_history']],
+            ]);
+            $this->fail('An archived unit must not be assigned to a new RAW revision.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('conversions.0.unit_code', $exception->errors());
+        }
+
+        $this->rawMaterials->restoreAdministrationUnit($this->administrator, $this->location, $unit['id']);
+        $this->assertSame('0.000001000000', (string) DB::table('raw_material_units')
+            ->where('id', $unit['id'])->value('to_base_factor'));
     }
 
     public function test_omitted_usable_quantity_defaults_to_nominal_and_does_not_keep_stale_yield(): void

@@ -31,10 +31,11 @@ const editorData = {
     description: 'Opis',
     category_id: '00000000-0000-4000-8000-000000000203',
     base_unit_code: 'kg',
+    base_unit_dimension: 'MASS',
     nominal_quantity: '10.000000',
     usable_quantity: '8.000000',
     units: [
-      { unit_code: 'kg', dimension: 'MASS', to_base_factor: '1.000000', basis: null },
+      { unit_code: 'kg', dimension: 'MASS', conversion_kind: 'BASE', to_base_factor: '1.000000', basis: null },
       { unit_code: 'g', dimension: 'MASS', to_base_factor: '0.001000', basis: null },
       { unit_code: 'pc', dimension: 'COUNT', to_base_factor: '2.500000', basis: '1 sztuka' },
     ],
@@ -322,16 +323,32 @@ describe('kontrakt edycji surowca', () => {
     ['brak tokena', { version: '' }],
     ['brak aliasów', { revision: { ...editorData.revision, aliases: undefined } }],
     ['brak konwersji', { revision: { ...editorData.revision, units: undefined } }],
-    ['niedozwolona jednostka', {
-      revision: { ...editorData.revision, units: [...editorData.revision.units, {
-        unit_code: 'other', dimension: 'MASS', to_base_factor: '1', basis: null,
-      }] },
-    }],
   ])('odrzuca niekompletny edytor: %s', async (_label, override) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: { ...editorData, ...override },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
     await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
+  it('akceptuje jednostki z rozszerzanego słownika RAW', async () => {
+    const dynamicUnit = {
+      unit_code: 'mg_custom',
+      dimension: 'MASS',
+      conversion_kind: 'METRIC',
+      to_base_factor: '0.000001',
+      basis: null,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        ...editorData,
+        revision: { ...editorData.revision, units: [...editorData.revision.units, dynamicUnit] },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
+      values: { conversions: expect.arrayContaining([{
+        unitCode: 'mg_custom', toBaseFactor: '0.000001', basis: '',
+      }]) },
+    })
   })
 
   it('wysyła pełny payload PATCH i nieprzezroczysty token If-Match', async () => {

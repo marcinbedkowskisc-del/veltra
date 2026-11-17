@@ -3,19 +3,21 @@ import { ApiError } from '../api'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
 import RawMaterialPricingFields from './RawMaterialPricingFields'
-import { RAW_UNITS, supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
+import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
   emptyRawMaterialCreateValues,
   conversionBasisHint,
   conversionFactorHint,
-  UNIT_DIMENSIONS,
-  UNIT_LABELS,
+  unitDimension,
+  unitLabel,
+  RAW_UNIT_OPTIONS_BASELINE,
   validateRawMaterialCreate,
   type RawMaterialConversionInput,
   type RawMaterialCreatePayload,
   type RawMaterialCreateValues,
   type RawMaterialUnit,
+  type RawMaterialUnitOption,
 } from './create'
 import {
   createRawMaterial,
@@ -27,6 +29,7 @@ import {
   type RawMaterialSkuReservation,
   type AllergenDeclaration,
   fetchSuppliers,
+  fetchRawMaterialUnits,
 } from './api'
 
 type Props = {
@@ -131,6 +134,9 @@ export default function RawMaterialCreateForm({
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
   const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
   const [supplierError, setSupplierError] = useState<string | null>(null)
+  const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>(RAW_UNIT_OPTIONS_BASELINE)
+  const [unitsLoading, setUnitsLoading] = useState(false)
+  const [unitsError, setUnitsError] = useState<string | null>(null)
   const [attempted, setAttempted] = useState(false)
   const [approving, setApproving] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
@@ -146,7 +152,7 @@ export default function RawMaterialCreateForm({
   const dirty = JSON.stringify(values) !== JSON.stringify(initialValues) || allergens.status !== 'UNKNOWN'
   const locked = isBusy(phase) || phase === 'complete'
     || phase === 'session-expired' || phase === 'forbidden'
-    || phase === 'conflict' || phase === 'unavailable'
+    || phase === 'conflict' || phase === 'unavailable' || unitsLoading || Boolean(unitsError)
 
   useEffect(() => {
     active.current = true
@@ -156,6 +162,22 @@ export default function RawMaterialCreateForm({
       if (returnFocus?.isConnected) returnFocus.focus()
     }
   }, [returnFocus])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetchRawMaterialUnits(controller.signal).then((result) => {
+      if (!active.current) return
+      setUnitOptions(result)
+      setUnitsError(null)
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted && active.current) {
+        setUnitsError(cause instanceof Error ? cause.message : 'Nie udało się wczytać słownika jednostek.')
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted && active.current) setUnitsLoading(false)
+    })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     if (!canManageSuppliers) return
@@ -240,8 +262,11 @@ export default function RawMaterialCreateForm({
   }
 
   function setBaseUnit(value: RawMaterialUnit) {
-    const pricingUnitCode = UNIT_DIMENSIONS[value] === 'MASS'
-      ? 'kg' : UNIT_DIMENSIONS[value] === 'VOLUME' ? 'l' : 'pc'
+    const dimension = unitDimension(value, unitOptions)
+    const preferred = dimension === 'MASS' ? 'kg' : dimension === 'VOLUME' ? 'l' : 'pc'
+    const pricingUnitCode = unitOptions.find((unit) => unit.code === preferred && unit.archivedAt === null)?.code
+      ?? unitOptions.find((unit) => unit.dimension === dimension && unit.archivedAt === null)?.code
+      ?? value
     setValues((current) => ({ ...current, baseUnitCode: value, pricingUnitCode }))
   }
 
@@ -409,7 +434,7 @@ export default function RawMaterialCreateForm({
     setAttempted(true)
     setFormError(null)
     setServerErrors({})
-    const errors = validateRawMaterialCreate(values, true)
+    const errors = validateRawMaterialCreate(values, true, unitOptions)
     const submitter = (event.nativeEvent as SubmitEvent).submitter
     const approve = submitter instanceof HTMLButtonElement && submitter.value === 'approve'
     const declarationError = allergenError(allergens, approve)
@@ -421,7 +446,7 @@ export default function RawMaterialCreateForm({
     }
 
     const payload = { ...buildRawMaterialCreatePayload(values, canManageSuppliers && supplierOptionsLoaded,
-      canManageReferencePrice && canViewReferencePrice),
+      canManageReferencePrice && canViewReferencePrice, unitOptions),
       ...(allergens.status !== 'UNKNOWN' ? { allergen_declaration: allergens } : {}) }
     const key = reservationKey.current ?? crypto.randomUUID()
     reservationKey.current = key
@@ -554,6 +579,7 @@ export default function RawMaterialCreateForm({
         )}
         {phase === 'reserving' && <p className="create-form-status" role="status">Przygotowywanie numeru SKU…</p>}
         {phase === 'creating' && <p className="create-form-status" role="status">{approving ? 'Dodawanie i zatwierdzanie surowca…' : 'Zapisywanie szkicu surowca…'}</p>}
+        {unitsError && <p className="create-form-error" role="alert">Nie można wczytać słownika jednostek: {unitsError}</p>}
         {formError && phase !== 'reservation-uncertain' && phase !== 'creation-uncertain' && (
           <p className="create-form-error" role="alert">{formError}</p>
         )}
@@ -621,7 +647,7 @@ export default function RawMaterialCreateForm({
                     onChange={(event) => setBaseUnit(event.target.value as RawMaterialUnit)}
                     {...fieldProps('baseUnitCode')}
                   >
-                    {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{UNIT_LABELS[unit]}</option>)}
+                    {unitOptions.filter((unit) => unit.archivedAt === null).map((unit) => <option key={unit.code} value={unit.code}>{unitLabel(unit.code, unitOptions)}</option>)}
                   </select>
                   <span className="field-hint">To jednostka, w której zapisuje się ilości surowca. „szt.” oznacza jedną sztukę, nie opakowanie.</span>
                   {getError('baseUnitCode') && <span id="baseUnitCode-error" className="field-error">{getError('baseUnitCode')}</span>}
@@ -660,7 +686,7 @@ export default function RawMaterialCreateForm({
                 </div>
                 {canManageReferencePrice && canViewReferencePrice && (
                   <RawMaterialPricingFields id="create" values={values} disabled={locked} canCalculate
-                    canViewCost={canViewUsableCost} error={getError('pricingAmount')}
+                    canViewCost={canViewUsableCost} error={getError('pricingAmount')} unitOptions={unitOptions}
                     onBasisChange={(value) => setField('pricingBasis', value)}
                     onAmountChange={(value) => setField('pricingAmount', value)}
                     onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
@@ -735,7 +761,7 @@ export default function RawMaterialCreateForm({
                     <div>
                       <h3 id="create-conversions-title">Dodatkowe jednostki miary</h3>
                       <p>
-                        Jednostka podstawowa: {UNIT_LABELS[values.baseUnitCode]}. Przelicznik mówi, ile jednostek podstawowych
+                        Jednostka podstawowa: {unitLabel(values.baseUnitCode, unitOptions)}. Przelicznik mówi, ile jednostek podstawowych
                         odpowiada jednej dodatkowej jednostce, np. 1 opakowanie = 250 g. Dla jednostek tego samego rodzaju
                         przeliczenie jest ustawiane automatycznie. Przy przeliczaniu między masą, objętością i sztukami podaj
                         przelicznik oraz opisz, czego dotyczy.
@@ -754,9 +780,9 @@ export default function RawMaterialCreateForm({
                     </button>
                   </div>
                   {values.conversions.map((conversion, index) => {
-                    const unit = conversion.unitCode as RawMaterialUnit
-                    const sameDimension = RAW_UNITS.includes(unit)
-                      && UNIT_DIMENSIONS[unit] === UNIT_DIMENSIONS[values.baseUnitCode]
+                    const unit = conversion.unitCode
+                    const sameDimension = unitOptions.some((candidate) => candidate.code === unit)
+                      && unitDimension(unit, unitOptions) === unitDimension(values.baseUnitCode, unitOptions)
                     const unitError = getError(`conversions.${index}.unitCode`)
                     const factorError = getError(`conversions.${index}.toBaseFactor`)
                     const basisError = getError(`conversions.${index}.basis`)
@@ -777,8 +803,8 @@ export default function RawMaterialCreateForm({
                             aria-describedby={unitError ? `conversion-${index}-unit-error` : undefined}
                           >
                             <option value="">Wybierz jednostkę</option>
-                            {RAW_UNITS.filter((candidate) => candidate !== values.baseUnitCode).map((candidate) => (
-                              <option key={candidate} value={candidate}>{UNIT_LABELS[candidate]}</option>
+                            {unitOptions.filter((candidate) => candidate.archivedAt === null && candidate.code !== values.baseUnitCode).map((candidate) => (
+                              <option key={candidate.code} value={candidate.code}>{unitLabel(candidate.code, unitOptions)}</option>
                             ))}
                           </select>
                           {unitError && <span id={`conversion-${index}-unit-error`} className="field-error">{unitError}</span>}
@@ -798,7 +824,7 @@ export default function RawMaterialCreateForm({
                                 aria-describedby={[factorHintId, factorError ? factorErrorId : null].filter(Boolean).join(' ')}
                               />
                               <span id={factorHintId} className="field-hint">
-                                {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                {conversionFactorHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor, unitOptions)}
                               </span>
                               {factorError && <span id={factorErrorId} className="field-error">{factorError}</span>}
                             </div>
@@ -815,7 +841,7 @@ export default function RawMaterialCreateForm({
                                 aria-describedby={[basisHintId, basisError ? basisErrorId : null].filter(Boolean).join(' ')}
                               />
                               <span id={basisHintId} className="field-hint">
-                                {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor)}
+                                {conversionBasisHint(conversion.unitCode, values.baseUnitCode, conversion.toBaseFactor, unitOptions)}
                               </span>
                               {basisError && <span id={basisErrorId} className="field-error">{basisError}</span>}
                             </div>

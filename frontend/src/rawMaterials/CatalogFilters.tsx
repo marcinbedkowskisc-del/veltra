@@ -1,13 +1,12 @@
 import {
   LIFECYCLE_STATES,
-  RAW_UNITS,
   lifecycleLabel,
   supplierLabel,
   type CatalogFilters as FilterValues,
   type CategoryOption,
   type SupplierOption,
 } from './catalog'
-import { unitLabel } from './create'
+import { unitLabel, type RawMaterialUnitOption } from './create'
 import SearchField from '../design-system/SearchField'
 
 export type SupplierFilterState = 'checking' | 'available' | 'denied' | 'unavailable' | 'module-unavailable'
@@ -18,6 +17,8 @@ type Props = {
   searchInput: string
   searchLoading: boolean
   categories: CategoryOption[]
+  unitOptions?: RawMaterialUnitOption[]
+  unitOptionsError?: string | null
   categoriesAvailable: boolean
   supplierState: SupplierFilterState
   supplierInput: string
@@ -39,6 +40,8 @@ export default function CatalogFilters({
   searchInput,
   searchLoading,
   categories,
+  unitOptions = [],
+  unitOptionsError = null,
   categoriesAvailable,
   supplierState,
   supplierInput,
@@ -55,6 +58,7 @@ export default function CatalogFilters({
 }: Props) {
   return (
     <div className="catalog-toolbar">
+      {unitOptionsError && <p className="inline-error" role="alert">Nie można wczytać słownika jednostek: {unitOptionsError}</p>}
       <div className="filter-field search-field">
         <label htmlFor="raw-material-search">Szukaj</label>
         <SearchField
@@ -161,7 +165,10 @@ export default function CatalogFilters({
           disabled={disabled}
         >
           <option value="">Wszystkie jednostki</option>
-          {RAW_UNITS.map((unit) => <option key={unit} value={unit}>{unitLabel(unit)}</option>)}
+          {unitOptions.filter((unit) => unit.archivedAt === null || unit.code === values.unit)
+            .map((unit) => <option key={unit.code} value={unit.code}>
+              {unitLabel(unit.code, unitOptions)}{unit.archivedAt ? ' (archiwalna — bieżące dane)' : ''}
+            </option>)}
         </select>
       </label>
 

@@ -9,6 +9,7 @@ import {
   fetchCatalog,
   fetchCategories,
   fetchRawMaterialCapabilities,
+  fetchRawMaterialUnits,
   fetchRawMaterialCompletion,
   fetchRawMaterialDetail,
   fetchRawMaterialEditor,
@@ -39,6 +40,7 @@ vi.mock('./api', async (importOriginal) => ({
   fetchRawMaterialReferencePrices: vi.fn(),
   fetchRawMaterialRevisions: vi.fn(),
   fetchRawMaterialCapabilities: vi.fn(),
+  fetchRawMaterialUnits: vi.fn(),
   fetchSuppliers: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
   createRawMaterial: vi.fn(),
@@ -167,6 +169,7 @@ const fetchRawMaterialEditorMock = vi.mocked(fetchRawMaterialEditor)
 const fetchRawMaterialReferencePricesMock = vi.mocked(fetchRawMaterialReferencePrices)
 const fetchRawMaterialRevisionsMock = vi.mocked(fetchRawMaterialRevisions)
 const fetchRawMaterialCapabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
+const fetchRawMaterialUnitsMock = vi.mocked(fetchRawMaterialUnits)
 const fetchSuppliersMock = vi.mocked(fetchSuppliers)
 const reserveRawMaterialSkuMock = vi.mocked(reserveRawMaterialSku)
 const createRawMaterialMock = vi.mocked(createRawMaterial)
@@ -177,6 +180,14 @@ const downloadCatalogExportMock = vi.mocked(downloadCatalogExport)
 let originalVisibilityDescriptor: PropertyDescriptor | undefined
 
 beforeEach(() => {
+  fetchRawMaterialUnitsMock.mockResolvedValue([
+    { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
+    { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'ml', name: 'mililitr', symbol: 'ml', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+    { code: 'l', name: 'litr', symbol: 'l', dimension: 'VOLUME', baseUnitCode: 'ml', toBaseFactor: '1000.000000000000', archivedAt: null, isBase: false },
+    { code: 'pc', name: 'sztuka', symbol: 'szt.', dimension: 'COUNT', baseUnitCode: 'pc', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
+  ])
   fetchCatalogMock.mockResolvedValue(page())
   fetchCategoriesMock.mockResolvedValue([{ id: 'category-1', name: 'Mąki' }])
   fetchRawMaterialDetailMock.mockImplementation(async (id) => detail(id))

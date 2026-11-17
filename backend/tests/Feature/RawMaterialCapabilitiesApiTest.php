@@ -119,6 +119,19 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         $this->prepareReadyModule();
         $this->actingAs($this->steward, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
             ->assertOk()->assertJsonPath('data.actions.manage_categories', true);
+        $this->selectContext($this->administrator, $this->location);
+        $this->postJson('/api/v1/administration/units', [
+            'code' => 'mg_pa04',
+            'name' => 'Miligram PA-04',
+            'symbol' => 'mg4',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0.000001',
+        ])->assertCreated();
+        $this->selectContext($this->steward, $this->location);
+        $unitOptions = $this->getJson('/api/v1/raw-materials/units')->assertOk()->json('data');
+        $this->assertContains('mg_pa04', collect($unitOptions)->pluck('code')->all());
+
         $category = $this->postJson('/api/v1/raw-materials/categories', [
             'code' => 'TEST_CATEGORY', 'name' => 'Kategoria testowa',
         ])->assertCreated()->assertJsonPath('data.depth', 1)->json('data.id');

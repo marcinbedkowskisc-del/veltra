@@ -8,6 +8,7 @@ type ContextItem = {
 
 type Props = {
   activePath: string
+  showAdministration?: boolean
   contexts: ContextItem[]
   account: ReactNode
   status: ReactNode
@@ -30,6 +31,7 @@ const MODULES = [
 
 export default function ApplicationShell({
   activePath,
+  showAdministration = false,
   contexts,
   account,
   status,
@@ -45,7 +47,7 @@ export default function ApplicationShell({
           <span className="brand-name">VELTRA <b>2.0</b></span>
         </a>
         <nav className="module-nav" aria-label="Moduły">
-          {MODULES.map((item) => item.href ? (
+          {[...MODULES, ...(showAdministration ? [{ label: 'Panel Administracyjny', icon: '⚙', href: '/administration' }] : [])].map((item) => item.href ? (
             <a
               key={item.label}
               className="module-nav-item"

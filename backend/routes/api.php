@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\V1\SupplyController;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuditSecurityRejection;
 use App\Http\Middleware\LocalManagementAccess;
+use App\Http\Middleware\RequireAdministrator;
 use App\Http\Middleware\RequireOperatingContext;
 use App\Http\Middleware\RequireRawMaterialsAvailability;
 use App\Http\Middleware\RequireSpaSession;
@@ -29,6 +30,18 @@ Route::get('/health', HealthController::class);
 Route::prefix('v1/account')->middleware([RequireSpaSession::class, 'throttle:account-links'])->group(function (): void {
     Route::post('/activate', [AccountLinkController::class, 'activate']);
     Route::post('/reset-password', [AccountLinkController::class, 'resetPassword']);
+});
+
+Route::prefix('v1/administration')->middleware([
+    RequireSpaSession::class,
+    'auth:sanctum',
+    ValidateIdentityContext::class,
+    AuditSecurityRejection::class,
+    RequireOperatingContext::class,
+    'throttle:security',
+    RequireAdministrator::class,
+])->group(function (): void {
+    Route::get('/access', fn () => response()->json(['data' => ['allowed' => true]]));
 });
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {

@@ -921,6 +921,17 @@ oryginalnych grantow. Odwolanie zamyka atomowo wszystkie granty danego prawa,
 takze przyszle. Nowy jawny grant po odwolaniu jest nowa decyzja, nie wznowieniem.
 Dezaktywacja przypisania zamyka jego lokalne role i granty.
 
+## PA-01: fundament Panelu Administracyjnego
+
+Frontend udostępnia `/administration` oraz podstrony będące wyłącznie
+placeholderami. Widoczność wejścia i zawartość panelu zależą od odpowiedzi
+`GET /api/v1/administration/access`. Ten endpoint wymaga sesji first-party,
+aktywnej zweryfikowanej tożsamości, aktywnego kontekstu i roli ADMINISTRATOR;
+zwraca `{"data":{"allowed":true}}`, 401 dla braku ważnej tożsamości i 403 dla
+braku kontekstu lub uprawnienia. Rola jest sprawdzana ponownie na serwerze.
+Kontrola PA nie zależy od gotowości RAW ani nie włącza jego operacji. Istniejące
+zakresowe operacje personelu poza PA pozostają pod dotychczasową autoryzacją.
+
 ## Stage 1D: API i audyt
 
 Prefiks `/api/v1/security`; sesja Sanctum first-party, CSRF przy mutacjach,

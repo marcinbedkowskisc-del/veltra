@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 import AccountLinkForm from './AccountLinkForm'
+import AdministrationPanel from './AdministrationPanel'
 import ApplicationShell from './ApplicationShell'
 import AuthPanel, { type AuthContext } from './AuthPanel'
+import { ApiError, isRecord, request } from './api'
 import { developmentStageLabel } from './config/developmentStage'
 import RawMaterialsCatalogPage from './rawMaterials/RawMaterialsCatalogPage'
 
@@ -39,7 +41,15 @@ function App() {
   const [authContext, setAuthContext] = useState<AuthContext | null>(null)
   const [authKey, setAuthKey] = useState(0)
   const [sessionExpired, setSessionExpired] = useState(false)
+  const [administrationAccess, setAdministrationAccess] = useState<{
+    key: string
+    status: 'allowed' | 'denied' | 'error'
+    message?: string
+  } | null>(null)
+  const [administrationAttempt, setAdministrationAttempt] = useState(0)
   const isRawMaterialsRoute = window.location.pathname === '/raw-materials'
+  const isAdministrationRoute = window.location.pathname === '/administration'
+    || window.location.pathname.startsWith('/administration/')
   const isActivationRoute = window.location.pathname === '/activate'
     || window.location.pathname === '/reset-password'
 
@@ -96,15 +106,46 @@ function App() {
   }, [attempt])
 
   const handleContextChange = useCallback((context: AuthContext | null) => {
+    setAdministrationAccess(null)
     setAuthContext(context)
     if (context) setSessionExpired(false)
   }, [])
 
   const handleSessionExpired = useCallback(() => {
+    setAdministrationAccess(null)
     setAuthContext(null)
     setSessionExpired(true)
     setAuthKey((key) => key + 1)
   }, [])
+
+  const administrationKey = authContext?.user && authContext.location
+    ? `${authContext.user.id}:${authContext.location.id}`
+    : null
+
+  useEffect(() => {
+    if (!administrationKey) return
+    const controller = new AbortController()
+    void request('/api/v1/administration/access', 'GET', undefined, { signal: controller.signal })
+      .then((result) => {
+        if (!isRecord(result) || result.allowed !== true) throw new Error('Nieprawidłowa odpowiedź dostępu do panelu.')
+        if (!controller.signal.aborted) setAdministrationAccess({ key: administrationKey, status: 'allowed' })
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return
+        if (cause instanceof ApiError && (cause.status === 401 || cause.status === 419)) {
+          handleSessionExpired()
+          return
+        }
+        setAdministrationAccess(cause instanceof ApiError && cause.status === 403
+          ? { key: administrationKey, status: 'denied' }
+          : { key: administrationKey, status: 'error', message: cause instanceof Error ? cause.message : 'Nie można sprawdzić dostępu do panelu.' })
+      })
+    return () => controller.abort()
+  }, [administrationKey, administrationAttempt, authContext, handleSessionExpired])
+
+  const administrationStatus = administrationKey && administrationAccess?.key === administrationKey
+    ? administrationAccess.status
+    : null
 
   if (isActivationRoute) {
     return (
@@ -130,7 +171,8 @@ function App() {
 
   return (
     <ApplicationShell
-      activePath={isRawMaterialsRoute ? '/raw-materials' : '/'}
+      activePath={isAdministrationRoute ? '/administration' : isRawMaterialsRoute ? '/raw-materials' : '/'}
+      showAdministration={administrationStatus === 'allowed'}
       contexts={[{ label: 'Lokalizacja operacyjna', value: contextValue, detail: contextDetail }]}
       footerNote={developmentStageLabel}
       status={(
@@ -167,7 +209,28 @@ function App() {
         </details>
       )}
     >
-      {isRawMaterialsRoute ? (
+      {isAdministrationRoute ? (
+        !authContext?.user ? (
+          <section className="state-panel"><h1>Panel Administracyjny</h1><p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie.' : 'Zaloguj się, aby kontynuować.'}</p></section>
+        ) : !authContext.location ? (
+          <section className="state-panel"><h1>Panel Administracyjny</h1><p>Wybierz lokalizację operacyjną, aby sprawdzić dostęp.</p></section>
+        ) : administrationStatus === 'allowed' ? (
+          <AdministrationPanel path={window.location.pathname} />
+        ) : administrationStatus === 'denied' ? (
+          <section className="state-panel" role="alert"><h1>Brak dostępu</h1><p>Panel Administracyjny jest dostępny wyłącznie dla administratorów.</p></section>
+        ) : administrationStatus === 'error' ? (
+          <section className="state-panel" role="alert">
+            <h1>Nie można sprawdzić dostępu</h1>
+            <p>{administrationAccess?.message}</p>
+            <button type="button" className="button button-secondary" onClick={() => {
+              setAdministrationAccess(null)
+              setAdministrationAttempt((value) => value + 1)
+            }}>Spróbuj ponownie</button>
+          </section>
+        ) : (
+          <section className="state-panel" role="status"><h1>Panel Administracyjny</h1><p>Sprawdzanie dostępu…</p></section>
+        )
+      ) : isRawMaterialsRoute ? (
         authContext?.user ? (
           authContext.location ? (
             <RawMaterialsCatalogPage

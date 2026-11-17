@@ -1042,6 +1042,49 @@ button:disabled, select:disabled, input:disabled {
   color: #b7dcff;
 }
 
+.administration-header h1 { margin: 0; font-size: 1.6rem; }
+.administration-header > p:last-child { color: var(--text-secondary); }
+.administration-layout {
+  display: grid;
+  grid-template-columns: minmax(13rem, 17rem) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+  margin-top: var(--space-5);
+}
+.administration-sidebar {
+  padding: var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.administration-sidebar h2 {
+  margin: var(--space-4) var(--space-2) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+.administration-sidebar ul { margin: 0; padding: 0; list-style: none; }
+.administration-sidebar a {
+  display: block;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  text-decoration: none;
+}
+.administration-sidebar a:hover { background: var(--surface-hover); color: var(--text); }
+.administration-sidebar a[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 3px 0 var(--accent);
+  font-weight: 700;
+}
+.administration-content.state-panel { max-width: none; min-width: 0; margin: 0; }
+.administration-content .button { margin-top: var(--space-4); }
+
+@media (max-width: 720px) {
+  .administration-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
 .module-nav-item.is-disabled {
   align-items: flex-start;
   cursor: not-allowed;

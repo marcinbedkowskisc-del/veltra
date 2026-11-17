@@ -18,6 +18,7 @@ use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Query\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -43,6 +44,233 @@ final class RawMaterialService
 
         return DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
             ->orderBy('depth')->orderBy('name')->get()->map(fn (object $row): array => (array) $row)->all();
+    }
+
+    public function administrationCategories(User $actor, Location $context, array $filters): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        $query = DB::table('raw_material_categories as categories')
+            ->leftJoin('raw_material_categories as parents', function ($join): void {
+                $join->on('parents.id', '=', 'categories.parent_id')
+                    ->on('parents.organization_id', '=', 'categories.organization_id');
+            })
+            ->where('categories.organization_id', $actor->organization_id)
+            ->select([
+                'categories.id',
+                'categories.organization_id',
+                'categories.parent_id',
+                'parents.name as parent_name',
+                'categories.code',
+                'categories.name',
+                'categories.description',
+                'categories.depth',
+                'categories.archived_at',
+                'categories.archived_by',
+            ])
+            ->selectRaw('EXISTS (
+                SELECT 1 FROM raw_material_categories children
+                WHERE children.organization_id = categories.organization_id
+                    AND children.parent_id = categories.id
+            ) AS has_children')
+            ->selectSub(
+                DB::table('raw_material_revisions')
+                    ->selectRaw('COUNT(DISTINCT raw_material_id)')
+                    ->whereColumn('organization_id', 'categories.organization_id')
+                    ->whereColumn('category_id', 'categories.id'),
+                'raw_material_count',
+            );
+
+        match ($filters['status'] ?? 'active') {
+            'archived' => $query->whereNotNull('categories.archived_at'),
+            'all' => null,
+            default => $query->whereNull('categories.archived_at'),
+        };
+
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $term = '%'.$search.'%';
+            $query->where(function (Builder $where) use ($term): void {
+                $where->whereRaw('categories.name ILIKE ?', [$term])
+                    ->orWhereRaw('categories.description ILIKE ?', [$term]);
+            });
+        } elseif (array_key_exists('parent_id', $filters)) {
+            $filters['parent_id'] === null
+                ? $query->whereNull('categories.parent_id')
+                : $query->where('categories.parent_id', $filters['parent_id']);
+        } else {
+            $query->whereNull('categories.parent_id');
+        }
+
+        $page = $query->orderBy('categories.name')->orderBy('categories.id')
+            ->paginate((int) ($filters['per_page'] ?? 50), ['*'], 'page', (int) ($filters['page'] ?? 1));
+        $items = $page->getCollection()->map(function (object $category): array {
+            $row = (array) $category;
+            $row['depth'] = (int) $row['depth'];
+            $row['has_children'] = in_array($row['has_children'], [true, 1, '1', 't', 'true'], true);
+            $row['raw_material_count'] = (int) $row['raw_material_count'];
+            $row['path'] = [$row['name']];
+
+            return $row;
+        })->all();
+
+        if ($search !== '') {
+            $items = $this->addCategoryPaths($actor, $items);
+        }
+
+        return [
+            'data' => $items,
+            'meta' => [
+                'current_page' => $page->currentPage(),
+                'per_page' => $page->perPage(),
+                'total' => $page->total(),
+                'last_page' => $page->lastPage(),
+                'from' => $page->firstItem(),
+                'to' => $page->lastItem(),
+            ],
+        ];
+    }
+
+    public function createAdministrationCategory(User $actor, Location $context, array $input): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, function () use (
+            $actor,
+            $context,
+            $input,
+        ): array {
+            return DB::transaction(function () use ($actor, $context, $input): array {
+                Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+                $this->assertAdministrationCategoryAccess($actor, $context);
+                $categoryId = $this->insertCategory($actor, $context, $input);
+
+                return $this->administrationCategory($actor, $categoryId);
+            });
+        });
+    }
+
+    public function updateAdministrationCategory(User $actor, Location $context, string $categoryId, array $input): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $categoryId,
+            $input,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $this->updateCategoryRecord($actor, $context, $categoryId, $input);
+
+            return $this->administrationCategory($actor, $categoryId);
+        }));
+    }
+
+    public function archiveAdministrationCategory(User $actor, Location $context, string $categoryId): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $categoryId,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+                ->where('id', $categoryId)->lockForUpdate()->first();
+            if (! $category) {
+                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($category->archived_at !== null) {
+                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_ALREADY_ARCHIVED', 'Kategoria jest już zarchiwizowana.', 409);
+            }
+
+            $hasActiveDescendant = DB::scalar(<<<'SQL'
+                WITH RECURSIVE descendants(id) AS (
+                    SELECT id FROM raw_material_categories
+                    WHERE organization_id = ? AND parent_id = ?
+                    UNION ALL
+                    SELECT children.id FROM raw_material_categories children
+                    JOIN descendants ON children.parent_id = descendants.id
+                    WHERE children.organization_id = ?
+                )
+                SELECT EXISTS (
+                    SELECT 1 FROM raw_material_categories categories
+                    JOIN descendants ON descendants.id = categories.id
+                    WHERE categories.organization_id = ? AND categories.archived_at IS NULL
+                )
+                SQL, [$actor->organization_id, $categoryId, $actor->organization_id, $actor->organization_id]);
+            if ($hasActiveDescendant) {
+                throw new RawMaterialException(
+                    'RAW_MATERIAL_CATEGORY_HAS_ACTIVE_DESCENDANTS',
+                    'Nie można zarchiwizować kategorii, ponieważ ma aktywnego potomka. Archiwizuj podkategorie od najniższego poziomu, bez kaskady.',
+                    409,
+                );
+            }
+
+            $beforeHash = $this->categoryStateHash($category);
+            DB::table('raw_material_categories')->where('id', $categoryId)->update([
+                'archived_at' => now(),
+                'archived_by' => $actor->id,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('raw_material_categories')->where('id', $categoryId)->first();
+            $this->audit($actor, $context, 'CATEGORY', $categoryId, 'CATEGORY_ARCHIVED', $beforeHash, [
+                'code' => $category->code,
+                'raw_material_count' => $this->categoryRawMaterialCount($actor, $categoryId),
+            ], afterHashOverride: $this->categoryStateHash($updated));
+
+            return $this->administrationCategory($actor, $categoryId);
+        }));
+    }
+
+    public function restoreAdministrationCategory(User $actor, Location $context, string $categoryId): array
+    {
+        $this->assertAdministrationCategoryAccess($actor, $context);
+
+        return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use (
+            $actor,
+            $context,
+            $categoryId,
+        ): array {
+            Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
+            $this->assertAdministrationCategoryAccess($actor, $context);
+            $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+                ->where('id', $categoryId)->lockForUpdate()->first();
+            if (! $category) {
+                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($category->archived_at === null) {
+                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_ARCHIVED', 'Kategoria jest już aktywna.', 409);
+            }
+            if ($category->parent_id !== null) {
+                $parent = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+                    ->where('id', $category->parent_id)->first();
+                if (! $parent || $parent->archived_at !== null) {
+                    throw new RawMaterialException(
+                        'RAW_MATERIAL_CATEGORY_PARENT_ARCHIVED',
+                        'Nie można przywrócić kategorii, dopóki jej bezpośrednia kategoria nadrzędna jest zarchiwizowana.',
+                        409,
+                    );
+                }
+            }
+
+            $beforeHash = $this->categoryStateHash($category);
+            DB::table('raw_material_categories')->where('id', $categoryId)->update([
+                'archived_at' => null,
+                'archived_by' => null,
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('raw_material_categories')->where('id', $categoryId)->first();
+            $this->audit($actor, $context, 'CATEGORY', $categoryId, 'CATEGORY_RESTORED', $beforeHash, [
+                'code' => $category->code,
+            ], afterHashOverride: $this->categoryStateHash($updated));
+
+            return $this->administrationCategory($actor, $categoryId);
+        }));
     }
 
     private function supplierIdsForEditor(User $actor, string $materialId): array
@@ -111,36 +339,8 @@ final class RawMaterialService
         return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $input): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
-            $parent = null;
-            if (isset($input['parent_id'])) {
-                $parent = DB::table('raw_material_categories')
-                    ->where('organization_id', $actor->organization_id)->where('id', $input['parent_id'])->first();
-                if (! $parent) {
-                    throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
-                }
-            }
-            $depth = $parent ? $parent->depth + 1 : 1;
-            if ($depth > 3) {
-                throw ValidationException::withMessages([
-                    'parent_id' => [__('messages.raw_material_category_depth_exceeded')],
-                ]);
-            }
-            $id = Str::uuid()->toString();
-            $now = now();
-            DB::table('raw_material_categories')->insert([
-                'id' => $id,
-                'organization_id' => $actor->organization_id,
-                'parent_id' => $parent?->id,
-                'code' => $input['code'],
-                'name' => trim($input['name']),
-                'depth' => $depth,
-                'created_by' => $actor->id,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-            $this->audit($actor, $context, 'CATEGORY', $id, 'CATEGORY_CREATED', null, ['code' => $input['code']]);
 
-            return (array) DB::table('raw_material_categories')->where('id', $id)->first();
+            return (array) DB::table('raw_material_categories')->where('id', $this->insertCategory($actor, $context, $input))->first();
         }));
     }
 
@@ -151,16 +351,234 @@ final class RawMaterialService
         return $this->contexts->run(AuthorizationMutationScope::rawMaterialMutate(), $actor->id, fn (): array => DB::transaction(function () use ($actor, $context, $categoryId, $name): array {
             Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
             $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::CategoryManage);
-            $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
-                ->where('id', $categoryId)->lockForUpdate()->first();
-            if (! $category) {
-                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
-            }
-            DB::table('raw_material_categories')->where('id', $categoryId)->update(['name' => trim($name), 'updated_at' => now()]);
-            $this->audit($actor, $context, 'CATEGORY', $categoryId, 'CATEGORY_RENAMED', null, ['code' => $category->code]);
+
+            $this->updateCategoryRecord($actor, $context, $categoryId, ['name' => trim($name)], 'CATEGORY_RENAMED');
 
             return (array) DB::table('raw_material_categories')->where('id', $categoryId)->first();
         }));
+    }
+
+    private function assertAdministrationCategoryAccess(User $actor, Location $context): void
+    {
+        $authorization = app(BusinessAuthorization::class);
+        if (! $authorization->eligible($actor, $context)
+            || ! $authorization->hasRole($actor, BusinessRole::Administrator)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+    }
+
+    private function insertCategory(User $actor, Location $context, array $input): string
+    {
+        $parent = null;
+        if (isset($input['parent_id'])) {
+            $parent = DB::table('raw_material_categories')
+                ->where('organization_id', $actor->organization_id)
+                ->where('id', $input['parent_id'])
+                ->first();
+            if (! $parent) {
+                throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
+            }
+            if ($parent->archived_at !== null) {
+                throw ValidationException::withMessages([
+                    'parent_id' => ['Nową podkategorię można dodać wyłącznie do aktywnej kategorii.'],
+                ]);
+            }
+        }
+
+        $depth = $parent ? $parent->depth + 1 : 1;
+        if ($depth > 3) {
+            throw ValidationException::withMessages([
+                'parent_id' => [__('messages.raw_material_category_depth_exceeded')],
+            ]);
+        }
+
+        $id = Str::uuid()->toString();
+        $now = now();
+        $description = isset($input['description']) ? trim($input['description']) : null;
+        $description = $description === '' ? null : $description;
+        try {
+            DB::table('raw_material_categories')->insert([
+                'id' => $id,
+                'organization_id' => $actor->organization_id,
+                'parent_id' => $parent?->id,
+                'code' => $input['code'],
+                'name' => trim($input['name']),
+                'description' => $description,
+                'depth' => $depth,
+                'created_by' => $actor->id,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        } catch (QueryException $exception) {
+            if (($exception->errorInfo[0] ?? null) === '23505'
+                && str_contains($exception->getMessage(), 'raw_material_categories_organization_id_code_key')) {
+                throw ValidationException::withMessages([
+                    'code' => ['Kod kategorii jest już używany w tej organizacji.'],
+                ]);
+            }
+            throw $exception;
+        }
+        $category = DB::table('raw_material_categories')->where('id', $id)->first();
+        $this->audit($actor, $context, 'CATEGORY', $id, 'CATEGORY_CREATED', null, [
+            'code' => $input['code'],
+            'name' => $category->name,
+            'parent_id' => $category->parent_id,
+        ], afterHashOverride: $this->categoryStateHash($category));
+
+        return $id;
+    }
+
+    private function updateCategoryRecord(
+        User $actor,
+        Location $context,
+        string $categoryId,
+        array $input,
+        string $eventCode = 'CATEGORY_UPDATED',
+    ): object {
+        $category = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+            ->where('id', $categoryId)->lockForUpdate()->first();
+        if (! $category) {
+            throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
+        }
+        if ($category->archived_at !== null) {
+            throw new RawMaterialException(
+                'RAW_MATERIAL_CATEGORY_ARCHIVED',
+                'Zarchiwizowanej kategorii nie można edytować. Najpierw ją przywróć.',
+                409,
+            );
+        }
+
+        $name = array_key_exists('name', $input) ? trim($input['name']) : $category->name;
+        $description = array_key_exists('description', $input)
+            ? (($input['description'] === null || trim($input['description']) === '') ? null : trim($input['description']))
+            : $category->description;
+        if ($name === $category->name && $description === $category->description) {
+            return $category;
+        }
+
+        $beforeHash = $this->categoryStateHash($category);
+        DB::table('raw_material_categories')->where('id', $categoryId)->update([
+            'name' => $name,
+            'description' => $description,
+            'updated_at' => now(),
+        ]);
+        $updated = DB::table('raw_material_categories')->where('id', $categoryId)->first();
+        $this->audit($actor, $context, 'CATEGORY', $categoryId, $eventCode, $beforeHash, [
+            'code' => $category->code,
+            'name_before' => $category->name,
+            'name_after' => $name,
+            'description_changed' => $description !== $category->description,
+        ], afterHashOverride: $this->categoryStateHash($updated));
+
+        return $updated;
+    }
+
+    private function administrationCategory(User $actor, string $categoryId): array
+    {
+        $category = DB::table('raw_material_categories as categories')
+            ->leftJoin('raw_material_categories as parents', function ($join): void {
+                $join->on('parents.id', '=', 'categories.parent_id')
+                    ->on('parents.organization_id', '=', 'categories.organization_id');
+            })
+            ->where('categories.organization_id', $actor->organization_id)
+            ->where('categories.id', $categoryId)
+            ->select([
+                'categories.id',
+                'categories.parent_id',
+                'parents.name as parent_name',
+                'categories.code',
+                'categories.name',
+                'categories.description',
+                'categories.depth',
+                'categories.archived_at',
+                'categories.archived_by',
+            ])
+            ->selectRaw('EXISTS (
+                SELECT 1 FROM raw_material_categories children
+                WHERE children.organization_id = categories.organization_id
+                    AND children.parent_id = categories.id
+            ) AS has_children')
+            ->first();
+        if (! $category) {
+            throw new RawMaterialException('RAW_MATERIAL_CATEGORY_NOT_FOUND', __('messages.resource_not_found'), 404);
+        }
+
+        $row = (array) $category;
+        $row['depth'] = (int) $row['depth'];
+        $row['has_children'] = in_array($row['has_children'], [true, 1, '1', 't', 'true'], true);
+        $row['raw_material_count'] = $this->categoryRawMaterialCount($actor, $categoryId);
+        $row['path'] = $this->categoryPath($actor, $category);
+
+        return $row;
+    }
+
+    private function categoryRawMaterialCount(User $actor, string $categoryId): int
+    {
+        return (int) DB::table('raw_material_revisions')->where('organization_id', $actor->organization_id)
+            ->where('category_id', $categoryId)->distinct('raw_material_id')->count('raw_material_id');
+    }
+
+    private function addCategoryPaths(User $actor, array $categories): array
+    {
+        $ancestors = [];
+        $parentIds = array_values(array_unique(array_filter(array_column($categories, 'parent_id'))));
+        while ($parentIds !== []) {
+            $parents = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+                ->whereIn('id', $parentIds)->get(['id', 'parent_id', 'name']);
+            $parentIds = [];
+            foreach ($parents as $parent) {
+                $ancestors[$parent->id] = $parent;
+                if ($parent->parent_id !== null && ! isset($ancestors[$parent->parent_id])) {
+                    $parentIds[] = $parent->parent_id;
+                }
+            }
+            $parentIds = array_values(array_unique($parentIds));
+        }
+
+        foreach ($categories as &$category) {
+            $path = [$category['name']];
+            $parentId = $category['parent_id'];
+            while ($parentId !== null && isset($ancestors[$parentId])) {
+                array_unshift($path, $ancestors[$parentId]->name);
+                $parentId = $ancestors[$parentId]->parent_id;
+            }
+            $category['path'] = $path;
+        }
+
+        return $categories;
+    }
+
+    private function categoryPath(User $actor, object $category): array
+    {
+        $ancestors = [];
+        $parentId = $category->parent_id;
+        while ($parentId !== null) {
+            $parent = DB::table('raw_material_categories')->where('organization_id', $actor->organization_id)
+                ->where('id', $parentId)->first(['id', 'parent_id', 'name']);
+            if (! $parent) {
+                break;
+            }
+            array_unshift($ancestors, $parent->name);
+            $parentId = $parent->parent_id;
+        }
+        $ancestors[] = $category->name;
+
+        return $ancestors;
+    }
+
+    private function categoryStateHash(object $category): string
+    {
+        return hash('sha256', json_encode([
+            'id' => $category->id,
+            'organization_id' => $category->organization_id,
+            'parent_id' => $category->parent_id,
+            'code' => $category->code,
+            'name' => $category->name,
+            'description' => $category->description,
+            'depth' => $category->depth,
+            'archived_at' => $category->archived_at,
+            'archived_by' => $category->archived_by,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
     }
 
     public function list(User $actor, Location $context, array $filters): array
@@ -446,7 +864,7 @@ final class RawMaterialService
                 $this->validateForm(new RawMaterialDataRequest, $input);
                 $base = DB::table('raw_material_revisions')->where('id', $snapshot['revision']['id'])->firstOrFail();
                 $input = $this->mergeRevisionInput($base, $input, RawMaterialPermission::Edit);
-                [$unitData] = $this->validateBasicData($actor, $input, $materialId);
+                [$unitData] = $this->validateBasicData($actor, $input, $materialId, $base->category_id);
                 $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $base);
             } elseif ($section === 'allergens') {
                 $this->validateForm(new RawMaterialAllergenDeclarationRequest, $input);
@@ -564,12 +982,16 @@ final class RawMaterialService
             && ($material->lifecycle_state !== 'DRAFT' || $material->working_revision_id !== null);
     }
 
-    private function validateBasicData(User $actor, array $input, ?string $materialId): array
-    {
+    private function validateBasicData(
+        User $actor,
+        array $input,
+        ?string $materialId,
+        ?string $existingCategoryId = null,
+    ): array {
         $rules = (new RawMaterialDataRequest)->rules();
         unset($rules['sku_reservation_id'], $rules['allergen_declaration']);
         Validator::make($input, $rules)->validate();
-        $this->requireCategory($actor, $input['category_id']);
+        $this->requireCategory($actor, $input['category_id'], $existingCategoryId);
         $unitData = RawMaterialUnitRegistry::resolve($input['base_unit_code'], $input['conversions'] ?? []);
         RawMaterialCatalogValues::quantities($input);
         $aliases = $this->aliases($input['name'], $input['aliases'] ?? []);
@@ -1096,7 +1518,7 @@ final class RawMaterialService
                 );
             }
             $input = $this->mergeRevisionInput($baseRevision, $input, $permission);
-            [$unitData, $aliases] = $this->validateBasicData($actor, $input, $materialId);
+            [$unitData, $aliases] = $this->validateBasicData($actor, $input, $materialId, $baseRevision->category_id);
             $input = $this->pricing->prepareRevisionInput($actor, $context, $input, $unitData, $baseRevision);
             $latestNo = (int) DB::table('raw_material_revisions')->where('raw_material_id', $materialId)->max('revision_no');
             $revisionId = Str::uuid()->toString();
@@ -2234,11 +2656,11 @@ final class RawMaterialService
         }
     }
 
-    private function requireCategory(User $actor, string $categoryId): object
+    private function requireCategory(User $actor, string $categoryId, ?string $existingCategoryId = null): object
     {
         $category = DB::table('raw_material_categories')
             ->where('organization_id', $actor->organization_id)->where('id', $categoryId)->first();
-        if (! $category) {
+        if (! $category || ($category->archived_at !== null && $categoryId !== $existingCategoryId)) {
             throw ValidationException::withMessages([
                 'category_id' => [__('messages.raw_material_category_invalid')],
             ]);

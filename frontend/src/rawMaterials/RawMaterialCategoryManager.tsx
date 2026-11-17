@@ -130,7 +130,7 @@ export default function RawMaterialCategoryManager({
             <label className="create-form-field">Kategoria nadrzędna
               <select value={parentId} onChange={(event) => setParentId(event.target.value)}>
                 <option value="">Brak</option>
-                {categories.filter((category) => category.depth !== undefined && category.depth < 3)
+                {categories.filter((category) => category.archivedAt == null && category.depth !== undefined && category.depth < 3)
                   .map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select>
             </label>

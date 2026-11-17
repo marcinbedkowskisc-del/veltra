@@ -8,11 +8,13 @@ use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
 use App\Models\LocationModuleState;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
@@ -144,6 +146,35 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.actions.manage_categories', false);
         $this->postJson('/api/v1/raw-materials/categories', ['code' => 'DENIED', 'name' => 'Odmowa'])
             ->assertForbidden();
+    }
+
+    public function test_administration_archiving_preserves_existing_raw_material_references(): void
+    {
+        $this->prepareReadyModule();
+        $category = app(RawMaterialService::class)->createCategory($this->steward, $this->location, [
+            'code' => 'PA_REFERENCE',
+            'name' => 'Kategoria z surowcem',
+        ]);
+        $material = app(RawMaterialService::class)->create($this->steward, $this->location, [
+            'category_id' => $category['id'],
+            'name' => 'Surowiec w archiwizowanej kategorii',
+            'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
+            'conversions' => [['unit_code' => 'g']],
+        ]);
+
+        $this->selectContext($this->administrator, $this->location);
+        $this->postJson('/api/v1/administration/categories/'.$category['id'].'/archive')
+            ->assertOk()->assertJsonPath('data.raw_material_count', 1);
+        $this->assertDatabaseHas('raw_material_revisions', [
+            'raw_material_id' => $material['id'],
+            'category_id' => $category['id'],
+        ]);
+
+        $this->selectContext($this->steward, $this->location);
+        $this->getJson('/api/v1/raw-materials/categories')->assertOk()
+            ->assertJsonPath('data.0.id', $category['id'])
+            ->assertJsonStructure(['data' => [['archived_at', 'archived_by']]]);
     }
 
     public function test_pricing_preview_uses_authoritative_normalization_and_cost_rules(): void
@@ -602,6 +633,8 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
     private function selectContext(User $actor, Location $location): void
     {
+        Auth::forgetGuards();
+        $this->flushSession();
         $response = $this->actingAs($actor, 'web')->putJson('/api/v1/auth/operating-location', [
             'location_id' => $location->id,
         ]);

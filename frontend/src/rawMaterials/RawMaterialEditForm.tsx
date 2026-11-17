@@ -780,7 +780,10 @@ export default function RawMaterialEditForm({
                     Kategoria <span className="required-mark">wymagane</span>
                     <select id="edit-category" value={values.categoryId} {...fieldProps('categoryId')}
                       onChange={(event) => setField('categoryId', event.target.value)}>
-                      {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                      {categories.filter((category) => category.archivedAt == null || category.id === values.categoryId)
+                        .map((category) => <option key={category.id} value={category.id}>
+                          {category.name}{category.archivedAt != null ? ' (archiwalna — bieżące przypisanie)' : ''}
+                        </option>)}
                     </select>
                     {getError('categoryId') && <span className="field-error" id="categoryId-error">{getError('categoryId')}</span>}
                   </label>

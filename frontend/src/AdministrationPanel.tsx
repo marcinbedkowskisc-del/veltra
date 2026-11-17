@@ -1,4 +1,5 @@
 import { administrationGroups } from './administrationNavigation'
+import CategoryManagementPage from './administration/CategoryManagementPage'
 
 export default function AdministrationPanel({ path }: { path: string }) {
   const selected = administrationGroups.flatMap((group) => group.items).find((item) => item.path === path)
@@ -18,10 +19,14 @@ export default function AdministrationPanel({ path }: { path: string }) {
             <p>Wybierz sekcję z menu. Funkcje administracyjne będą dostępne w kolejnych etapach.</p>
           </>
         ) : selected ? (
-          <>
-            <h2>{selected.label}</h2>
-            <p>Ta funkcjonalność nie została jeszcze zaimplementowana.</p>
-          </>
+          selected.path === '/administration/categories' ? (
+            <CategoryManagementPage />
+          ) : (
+            <>
+              <h2>{selected.label}</h2>
+              <p>Ta funkcjonalność nie została jeszcze zaimplementowana.</p>
+            </>
+          )
         ) : (
           <>
             <h2>Nie znaleziono sekcji</h2>

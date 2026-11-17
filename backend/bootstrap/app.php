@@ -64,7 +64,8 @@ return Application::configure(basePath: dirname(__DIR__))
             }
         });
         $exceptions->render(function (RawMaterialException $exception, Request $request) {
-            if ($request->is('api/v1/raw-materials/*') || $request->is('api/v1/raw-materials')) {
+            if ($request->is('api/v1/raw-materials/*') || $request->is('api/v1/raw-materials')
+                || $request->is('api/v1/administration/categories/*') || $request->is('api/v1/administration/categories')) {
                 return response()->json([
                     'error' => [
                         'code' => $exception->errorCode,

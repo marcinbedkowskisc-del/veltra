@@ -1,17 +1,18 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AccountLinkController;
+use App\Http\Controllers\Api\V1\AdministrationCategoryController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
 use App\Http\Controllers\Api\V1\OrganizationController;
+use App\Http\Controllers\Api\V1\RawMaterialCapabilitiesController;
 use App\Http\Controllers\Api\V1\RawMaterialCatalogCsvImportController;
 use App\Http\Controllers\Api\V1\RawMaterialController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvCatalogExportController;
 use App\Http\Controllers\Api\V1\RawMaterialCsvImportController;
 use App\Http\Controllers\Api\V1\RawMaterialDocumentController;
-use App\Http\Controllers\Api\V1\RawMaterialCapabilitiesController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
@@ -42,6 +43,11 @@ Route::prefix('v1/administration')->middleware([
     RequireAdministrator::class,
 ])->group(function (): void {
     Route::get('/access', fn () => response()->json(['data' => ['allowed' => true]]));
+    Route::get('/categories', [AdministrationCategoryController::class, 'index']);
+    Route::post('/categories', [AdministrationCategoryController::class, 'store']);
+    Route::patch('/categories/{category}', [AdministrationCategoryController::class, 'update'])->whereUuid('category');
+    Route::post('/categories/{category}/archive', [AdministrationCategoryController::class, 'archive'])->whereUuid('category');
+    Route::post('/categories/{category}/restore', [AdministrationCategoryController::class, 'restore'])->whereUuid('category');
 });
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {

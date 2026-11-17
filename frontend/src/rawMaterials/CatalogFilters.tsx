@@ -80,7 +80,9 @@ export default function CatalogFilters({
           aria-label="Filtruj według kategorii"
         >
           <option value="">Wszystkie kategorie</option>
-          {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          {categories.map((category) => <option key={category.id} value={category.id}>
+            {category.name}{category.archivedAt != null ? ' (archiwalna)' : ''}
+          </option>)}
         </select>
         {!categoriesAvailable && <small className="filter-hint" role="status">Lista kategorii chwilowo niedostępna.</small>}
       </label>

@@ -590,7 +590,8 @@ export default function RawMaterialCreateForm({
                     {...fieldProps('categoryId')}
                   >
                     <option value="">Wybierz kategorię</option>
-                    {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                    {categories.filter((category) => category.archivedAt == null)
+                      .map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                   </select>
                   {getError('categoryId') && <span id="categoryId-error" className="field-error">{getError('categoryId')}</span>}
                 </label>

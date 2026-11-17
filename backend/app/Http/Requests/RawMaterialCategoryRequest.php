@@ -10,6 +10,7 @@ class RawMaterialCategoryRequest extends InstallationRequest
             'parent_id' => ['sometimes', 'nullable', 'uuid'],
             'code' => ['required', 'string', 'max:40', 'regex:/^[A-Z0-9_-]+$/D'],
             'name' => ['required', 'string', 'max:160'],
+            'description' => ['sometimes', 'nullable', 'string', 'max:4000'],
         ];
     }
 }

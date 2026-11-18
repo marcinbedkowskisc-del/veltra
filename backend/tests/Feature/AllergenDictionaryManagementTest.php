@@ -77,6 +77,27 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
         $this->assertCount(8, $sources);
         $versions = collect($sources)->flatMap(fn (array $source) => $source['versions']);
         $this->assertCount(9, $versions);
+        $expectedEntryCounts = [
+            'EU_1169_2011_ANNEX_II' => 28,
+            'US_FDA_MAJOR_ALLERGENS' => 24,
+            'CODEX_CXS_1_1985_2024' => 25,
+            'JP_CAA_ALLERGENS_2026_04' => 29,
+            'CN_GB7718_2011_CURRENT' => 8,
+            'CN_GB7718_2025_FUTURE' => 8,
+            'KR_MFDS_ALLERGENS' => 19,
+            'TW_TFDA_ALLERGENS_2020' => 17,
+            'TH_FDA_NOTIFICATION_474_2026' => 20,
+        ];
+        foreach ($versions as $version) {
+            $databaseCount = DB::table('international_allergen_source_entries')
+                ->where('dictionary_version_id', $version['id'])
+                ->count();
+            $this->assertSame($expectedEntryCounts[$version['code']], $databaseCount, $version['code'].' database count');
+            $this->assertSame($databaseCount, $version['entry_count'], $version['code'].' dictionary count');
+            $entriesResponse = $this->getJson('/api/v1/administration/allergens/dictionaries/'.$version['id'].'/entries')
+                ->assertOk()->json('data');
+            $this->assertCount($expectedEntryCounts[$version['code']], $entriesResponse, $version['code'].' API count');
+        }
         $canonicalResponse = $this->getJson('/api/v1/administration/allergens/canonical')->assertOk();
         $this->assertCount(54, $canonicalResponse->json('data'));
         $canonicalPayload = json_decode($canonicalResponse->getContent(), flags: JSON_THROW_ON_ERROR);
@@ -149,22 +170,23 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
                 $entry = $service->createEntry($admin, $location, $versionId, [
                     ...$input,
                     'new_canonical' => [
-                        'id' => $canonicalId,
                         'canonical_pl' => 'Alergen próbny '.$canonicalId,
                         'parent_id' => null,
                         'synonyms_pl' => [],
                         'original_names' => [],
                     ],
                 ]);
+                $generatedCanonicalId = $entry['allergen_id'];
+                $this->assertMatchesRegularExpression('/^ALG_[A-Z0-9_]{1,35}$/', $generatedCanonicalId);
                 $this->assertSame('RECOMMENDED', $entry['status']);
                 $this->assertSame(['Testowy wyjątek'], $entry['exceptions']);
                 $this->assertSame('2030-01-01', $entry['legal_effective_from']);
                 $this->assertSame($admin->id, DB::table('international_allergen_canonical_definitions')
-                    ->where('id', $canonicalId)->value('last_manual_edit_by'));
+                    ->where('id', $generatedCanonicalId)->value('last_manual_edit_by'));
                 $sourceCodes = DB::table('raw_material_allergen_definitions')
                     ->where('catalog_version_id', DB::table('raw_material_allergen_pool_versions')
                         ->orderByDesc('version_number')->value('catalog_version_id'))
-                    ->where('canonical_allergen_id', $canonicalId)
+                    ->where('canonical_allergen_id', $generatedCanonicalId)
                     ->value('source_codes');
                 $this->assertSame(['EU'], json_decode($sourceCodes, true, flags: JSON_THROW_ON_ERROR));
                 $this->assertDatabaseHas('raw_material_audit_events', [
@@ -181,21 +203,21 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
                     ->orderByDesc('version_number')->value('catalog_version_id');
                 $archivedSourceCodes = DB::table('raw_material_allergen_definitions')
                     ->where('catalog_version_id', $entryArchiveCatalogId)
-                    ->where('canonical_allergen_id', $canonicalId)
+                    ->where('canonical_allergen_id', $generatedCanonicalId)
                     ->value('source_codes');
                 $this->assertSame([], json_decode($archivedSourceCodes, true, flags: JSON_THROW_ON_ERROR));
 
-                $archivedCanonical = $service->archiveCanonical($admin, $location, $versionId, $canonicalId);
+                $archivedCanonical = $service->archiveCanonical($admin, $location, $versionId, $generatedCanonicalId);
                 $this->assertSame('ARCHIVED', $archivedCanonical['record_status']);
                 $finalCatalogId = DB::table('raw_material_allergen_pool_versions')
                     ->orderByDesc('version_number')->value('catalog_version_id');
                 $this->assertDatabaseMissing('raw_material_allergen_definitions', [
                     'catalog_version_id' => $finalCatalogId,
-                    'canonical_allergen_id' => $canonicalId,
+                    'canonical_allergen_id' => $generatedCanonicalId,
                 ]);
                 $this->assertDatabaseHas('raw_material_allergen_definitions', [
                     'catalog_version_id' => $createdCatalogId,
-                    'canonical_allergen_id' => $canonicalId,
+                    'canonical_allergen_id' => $generatedCanonicalId,
                 ]);
                 $this->assertDatabaseHas('raw_material_allergen_catalog_versions', [
                     'id' => $seedCatalogId,
@@ -208,6 +230,6 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
         }
 
         $this->assertSame($poolCount, DB::table('raw_material_allergen_pool_versions')->count());
-        $this->assertDatabaseMissing('international_allergen_canonical_definitions', ['id' => $canonicalId]);
+        $this->assertDatabaseMissing('international_allergen_canonical_definitions', ['canonical_pl' => 'Alergen próbny '.$canonicalId]);
     }
 }

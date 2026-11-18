@@ -11,7 +11,7 @@ class AdministrationAllergenEntryCreateRequest extends InstallationRequest
         return [
             'canonical_allergen_id' => ['nullable', 'required_without:new_canonical', 'prohibited_with:new_canonical', 'string', 'max:40', 'regex:/^[A-Z][A-Z0-9_]{0,39}$/D'],
             'new_canonical' => ['nullable', 'required_without:canonical_allergen_id', 'array:id,parent_id,canonical_pl,synonyms_pl,original_names'],
-            'new_canonical.id' => ['required_with:new_canonical', 'string', 'max:40', 'regex:/^[A-Z][A-Z0-9_]{0,39}$/D'],
+            'new_canonical.id' => ['nullable', 'string', 'max:40', 'regex:/^[A-Z][A-Z0-9_]{0,39}$/D'],
             'new_canonical.parent_id' => ['nullable', 'string', 'max:40', 'regex:/^[A-Z][A-Z0-9_]{0,39}$/D'],
             'new_canonical.canonical_pl' => ['required_with:new_canonical', 'string', 'max:160'],
             'new_canonical.synonyms_pl' => ['nullable', 'array', 'max:20'],

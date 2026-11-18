@@ -415,11 +415,11 @@ final class InternationalAllergenDictionaryService
 
     private function createCanonical(User $actor, array $input): array
     {
-        $id = trim($input['id']);
         $name = trim($input['canonical_pl']);
+        $id = trim($input['id'] ?? '') ?: $this->generatedCanonicalId($name);
         if (DB::table('international_allergen_canonical_definitions')->where('id', $id)->exists()) {
             throw ValidationException::withMessages([
-                'new_canonical.id' => ['Identyfikator istnieje już w puli. Wybierz istniejący alergen.'],
+                'new_canonical.id' => ['Nie udało się utworzyć unikalnego identyfikatora. Sprawdź, czy alergen o tej nazwie nie istnieje już w puli.'],
             ]);
         }
         $this->assertUniqueCanonicalName($name);
@@ -452,6 +452,29 @@ final class InternationalAllergenDictionaryService
         ]);
 
         return $state;
+    }
+
+    private function generatedCanonicalId(string $name): string
+    {
+        $slug = Str::upper(Str::slug($name, '_'));
+        if ($slug === '') {
+            $slug = 'ALLERGEN';
+        }
+
+        $candidate = 'ALG_'.substr($slug, 0, 35);
+        if (! DB::table('international_allergen_canonical_definitions')->where('id', $candidate)->exists()) {
+            return $candidate;
+        }
+
+        $suffix = '_'.substr(hash('sha256', mb_strtolower($name)), 0, 8);
+        $candidate = 'ALG_'.substr($slug, 0, 27).$suffix;
+        if (DB::table('international_allergen_canonical_definitions')->where('id', $candidate)->exists()) {
+            throw ValidationException::withMessages([
+                'new_canonical.canonical_pl' => ['Nie udało się utworzyć unikalnego identyfikatora. Zmień nazwę lub sprawdź pulę alergenów.'],
+            ]);
+        }
+
+        return $candidate;
     }
 
     private function assertUniqueCanonicalName(string $name, ?string $excludeId = null): void

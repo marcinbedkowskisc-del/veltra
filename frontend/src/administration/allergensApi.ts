@@ -68,7 +68,7 @@ export type AllergenSourceEntryInput = {
   metadata: Record<string, unknown>
 }
 export type NewCanonicalAllergen = {
-  id: string
+  id?: string
   canonical_pl: string
   parent_id: string | null
   synonyms_pl: string[]

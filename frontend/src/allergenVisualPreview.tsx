@@ -132,7 +132,7 @@ export default function AllergenVisualPreview() {
       <section className="preview-toolbar" aria-label="Sterowanie podglądem PA-05">
         <div className="preview-toolbar-heading">
           <strong>PODGLĄD PA-05 — DANE SYNTETYCZNE</strong>
-          <span>Przykłady słowników oparte na strukturze MASTER v1.1. Bez połączenia ze Stage lub produkcją.</span>
+          <span>Pełne MASTER v1.1: 178 relacji w 9 wersjach. Bez połączenia ze Stage lub produkcją.</span>
         </div>
         <div className="preview-toolbar-controls">
           <button type="button" className={`button ${rawView ? 'button-secondary' : 'button-primary'}`}

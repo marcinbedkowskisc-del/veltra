@@ -39,7 +39,7 @@ describe('Panel Administracyjny', () => {
     render(<App />)
 
     const nav = await screen.findByRole('navigation', { name: 'Moduły' })
-    await screen.findByRole('heading', { name: 'Międzynarodowe słowniki alergenów' })
+    await screen.findByRole('heading', { name: 'Słowniki alergenów' })
     expect(screen.getAllByRole('complementary', { name: 'Nawigacja modułowa' })).toHaveLength(1)
     expect(screen.getAllByRole('navigation')).toHaveLength(1)
     expect(screen.getByRole('link', { name: 'Panel Administracyjny' }).getAttribute('href')).toBe('/administration')

@@ -1128,41 +1128,39 @@ button:disabled, select:disabled, input:disabled {
 .admin-category-confirm p, .admin-category-refresh p { margin-top: 0; }
 .admin-allergen-page { display: grid; gap: var(--space-4); min-width: 0; }
 .admin-allergen-source-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: var(--space-3); }
-.admin-allergen-column { display: grid; align-content: start; gap: var(--space-3); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
-.admin-allergen-column-header { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
-.admin-allergen-source-title { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.admin-allergen-source-title h3 { margin: 0; overflow-wrap: anywhere; }
-.admin-allergen-jurisdiction { flex: 0 0 auto; padding: 0.15rem 0.45rem; border-radius: var(--radius-sm); background: var(--surface); color: var(--text-secondary); font-size: var(--font-size-sm); }
-.admin-allergen-version-code { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
-.admin-allergen-column-header .create-form-field { min-width: 0; }
-.admin-allergen-version-state { display: grid; gap: 0.25rem; color: var(--text-secondary); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
-.admin-allergen-status { justify-self: start; padding: 0.15rem 0.45rem; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); font-size: var(--font-size-sm); line-height: 1.4; }
-.admin-allergen-status.status-future, .admin-allergen-status.status-future_mandatory { border-color: var(--warning); color: var(--warning); }
-.admin-allergen-status.status-historical { color: var(--text-muted); }
-.admin-allergen-column-search, .admin-allergen-column-filter { display: grid; gap: 0.35rem; min-width: 0; font-size: var(--font-size-sm); }
-.admin-allergen-column-search input, .admin-allergen-column-filter select { width: 100%; min-width: 0; }
+.admin-allergen-column { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
+.admin-allergen-column-header { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
+.admin-allergen-column-header h3 { margin: 0; overflow-wrap: anywhere; }
+.admin-allergen-version-picker, .admin-allergen-column-search, .admin-allergen-column-filter { display: grid; gap: 0.35rem; min-width: 0; font-size: var(--font-size-sm); }
+.admin-allergen-version-picker select, .admin-allergen-column-search input, .admin-allergen-column-filter select { width: 100%; min-width: 0; }
+.admin-allergen-version-summary { display: grid; gap: 0.12rem; margin: 0; color: var(--text-muted); font-size: 0.68rem; line-height: 1.35; }
+.admin-allergen-source-info { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.admin-allergen-source-info summary { cursor: pointer; }
+.admin-allergen-source-info dl { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; }
+.admin-allergen-source-info dt { color: var(--text-muted); }
+.admin-allergen-source-info dd { margin: 0; overflow-wrap: anywhere; }
+.admin-allergen-entries { display: grid; align-content: start; margin: 0; padding: 0; list-style: none; }
+.admin-allergen-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; padding: 0.35rem 0.15rem; border-bottom: 1px solid var(--border); }
+.admin-allergen-row-name { min-width: 0; overflow-wrap: anywhere; }
+.admin-allergen-menu-button { display: inline-grid; flex: 0 0 2rem; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: 1.35rem; line-height: 1; cursor: pointer; }
+.admin-allergen-menu-button:hover, .admin-allergen-menu-button[aria-expanded="true"] { background: var(--surface); color: var(--text); }
+.admin-allergen-menu-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.admin-allergen-context-menu { position: absolute; z-index: 5; top: calc(100% - 0.15rem); right: 0; display: grid; min-width: 12rem; padding: 0.25rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.admin-allergen-context-menu button { padding: 0.55rem 0.65rem; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.admin-allergen-context-menu button:hover, .admin-allergen-context-menu button:focus-visible { background: var(--surface); }
+.admin-allergen-count { margin: 0; color: var(--text-muted); font-size: var(--font-size-sm); }
 .admin-allergen-add { width: 100%; }
-.admin-allergen-entries { display: grid; align-content: start; gap: var(--space-3); }
-.admin-allergen-entry { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
-.admin-allergen-canonical, .admin-allergen-source-entry { display: grid; gap: 0.2rem; min-width: 0; }
-.admin-allergen-canonical > span, .admin-allergen-source-entry > span:first-child { color: var(--text-muted); font-size: var(--font-size-sm); }
-.admin-allergen-canonical strong, .admin-allergen-source-entry strong { overflow-wrap: anywhere; }
-.admin-allergen-canonical code { color: var(--text-secondary); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
-.admin-allergen-entry dl { display: grid; gap: var(--space-2); margin: 0; }
-.admin-allergen-entry dl > div { min-width: 0; }
-.admin-allergen-entry dt { color: var(--text-muted); font-size: var(--font-size-sm); }
-.admin-allergen-entry dd { margin: 0.15rem 0 0; overflow-wrap: anywhere; }
-.admin-allergen-entry p, .admin-allergen-entry ul { margin: 0; overflow-wrap: anywhere; }
-.admin-allergen-entry pre, .admin-allergen-column-history pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.admin-allergen-entry-actions { display: grid; grid-template-columns: 1fr; }
 .admin-allergen-empty { color: var(--text-secondary); }
-.admin-allergen-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
+.admin-allergen-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
 .admin-allergen-form h3, .admin-allergen-wide { grid-column: 1 / -1; }
 .admin-allergen-form h3 { margin: 0; }
-.admin-allergen-form textarea { min-height: 5rem; resize: vertical; }
+.admin-allergen-form textarea { min-height: 4rem; resize: vertical; }
 .admin-allergen-form-context { margin: 0; color: var(--text-secondary); }
-.admin-allergen-column-history { min-width: 0; border-top: 1px solid var(--border); padding-top: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-sm); }
-.admin-allergen-column-history ol { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding-left: 1.25rem; }
+.admin-allergen-legal-metadata { display: grid; gap: var(--space-2); min-width: 0; margin: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.admin-allergen-legal-metadata legend { padding: 0 0.25rem; font-weight: 600; }
+.admin-allergen-legal-metadata p { margin: 0; color: var(--text-secondary); }
+.admin-allergen-legal-metadata .create-form-field { min-width: 0; }
+.admin-allergen-field-help { color: var(--text-secondary); font-size: var(--font-size-sm); }
 
 @media (max-width: 1500px) {
   .admin-allergen-source-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1170,6 +1168,11 @@ button:disabled, select:disabled, input:disabled {
 
 @media (max-width: 1100px) {
   .admin-allergen-source-grid, .admin-allergen-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .admin-allergen-source-grid, .admin-allergen-form { grid-template-columns: minmax(0, 1fr); }
+  .admin-allergen-form h3, .admin-allergen-wide { grid-column: auto; }
 }
 
 .module-nav-item.is-disabled {

@@ -26,7 +26,12 @@ class SystemPermissionManifestRegistryTest extends TestCase
             'Changing an approved manifest requires a new version and approval.',
         );
         $this->assertSame($manifest->contentHash(), $registry->find($manifest->id, $manifest->version)->contentHash());
-        $this->assertNull($registry->find($manifest->id, 2));
+        $recovery = $registry->find($manifest->id, 2);
+        $this->assertNotNull($recovery);
+        $this->assertSame('RECOVERY', $recovery->applicability);
+        $this->assertSame('RAW_MATERIALS', $recovery->module);
+        $this->assertSame(BusinessRole::Administrator, $recovery->eligibleRole);
+        $this->assertNull($registry->find($manifest->id, 3));
         $this->assertNull($registry->find('unregistered', 1));
     }
 

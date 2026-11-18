@@ -83,6 +83,7 @@ export type AllergenDictionaryHistoryEvent = {
   before: unknown
   after: unknown
 }
+export type GlobalPrecautionaryAllergen = { allergenId: string; canonicalPl: string }
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === 'string'
@@ -194,6 +195,13 @@ function parseEntry(value: unknown): AllergenSourceEntry {
   }
 }
 
+function parseGlobalPrecautionaryAllergen(value: unknown): GlobalPrecautionaryAllergen {
+  if (!isRecord(value) || typeof value.allergen_id !== 'string' || typeof value.canonical_pl !== 'string') {
+    throw new Error('Nie udało się odczytać listy MOŻE ZAWIERAĆ.')
+  }
+  return { allergenId: value.allergen_id, canonicalPl: value.canonical_pl }
+}
+
 function parseArray<T>(value: unknown, parser: (item: unknown) => T, message: string): T[] {
   if (!Array.isArray(value)) throw new Error(message)
   return value.map(parser)
@@ -207,6 +215,19 @@ export async function fetchAllergenSources(signal?: AbortSignal): Promise<Allerg
 export async function fetchCanonicalAllergens(signal?: AbortSignal): Promise<CanonicalAllergen[]> {
   const response = await requestEnvelope(`${API}/canonical`, 'GET', undefined, { signal })
   return parseArray(response.data, parseCanonical, 'Nie udało się odczytać listy alergenów.')
+}
+
+export async function fetchGlobalPrecautionaryAllergens(signal?: AbortSignal): Promise<GlobalPrecautionaryAllergen[]> {
+  const response = await requestEnvelope(`${API}/maybe-contains`, 'GET', undefined, { signal })
+  return parseArray(response.data, parseGlobalPrecautionaryAllergen, 'Nie udało się odczytać listy MOŻE ZAWIERAĆ.')
+}
+
+export async function addGlobalPrecautionaryAllergen(allergenId: string): Promise<GlobalPrecautionaryAllergen> {
+  return parseGlobalPrecautionaryAllergen(await request(`${API}/maybe-contains`, 'POST', { allergen_id: allergenId }))
+}
+
+export async function removeGlobalPrecautionaryAllergen(allergenId: string): Promise<GlobalPrecautionaryAllergen> {
+  return parseGlobalPrecautionaryAllergen(await request(`${API}/maybe-contains/${encodeURIComponent(allergenId)}`, 'DELETE'))
 }
 
 export async function fetchAllergenEntries(versionId: string, signal?: AbortSignal): Promise<AllergenSourceEntry[]> {

@@ -27,6 +27,7 @@ function json(data: unknown, status = 200) {
 
 function previewApi(includeArchived = false) {
   const requests: Array<{ method: string; path: string; body: Record<string, unknown> }> = []
+  const globalPrecautionaryIds = new Set(['ALG_SOY', 'ALG_MUSTARD', 'ALG_CELERY'])
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
     const method = init?.method ?? 'GET'
@@ -35,6 +36,25 @@ function previewApi(includeArchived = false) {
 
     if (method === 'GET' && url.pathname.endsWith('/dictionaries')) return json(previewAllergenSources)
     if (method === 'GET' && url.pathname.endsWith('/canonical')) return json(previewCanonicalAllergens)
+    if (method === 'GET' && url.pathname.endsWith('/maybe-contains')) {
+      return json([...globalPrecautionaryIds].flatMap((allergenId) => {
+        const allergen = previewCanonicalAllergens.find((item) => item.id === allergenId)
+        return allergen ? [{ allergen_id: allergen.id, canonical_pl: allergen.canonical_pl }] : []
+      }))
+    }
+    if (method === 'POST' && url.pathname.endsWith('/maybe-contains')) {
+      const allergenId = body.allergen_id
+      const allergen = previewCanonicalAllergens.find((item) => item.id === allergenId)
+      if (!allergen || globalPrecautionaryIds.has(allergen.id)) throw new Error('Nie można dodać alergenu do podglądu.')
+      globalPrecautionaryIds.add(allergen.id)
+      return json({ allergen_id: allergen.id, canonical_pl: allergen.canonical_pl })
+    }
+    if (method === 'DELETE' && url.pathname.includes('/maybe-contains/')) {
+      const allergenId = url.pathname.split('/').at(-1) ?? ''
+      const allergen = previewCanonicalAllergens.find((item) => item.id === allergenId)
+      if (!allergen || !globalPrecautionaryIds.delete(allergenId)) throw new Error('Nie ma tego alergenu na liście w podglądzie.')
+      return json({ allergen_id: allergen.id, canonical_pl: allergen.canonical_pl })
+    }
     if (method === 'GET' && url.pathname.endsWith('/entries')) {
       const versionId = url.pathname.split('/').at(-2) ?? ''
       const entries = previewAllergenEntries[versionId] ?? []
@@ -344,5 +364,36 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
       listing_rule: 'DIRECT',
       source_scope: 'LEGAL_LIST',
     })
+  })
+
+  it('manages the shared MOŻE ZAWIERAĆ list without exposing canonical identifiers', async () => {
+    const requests = previewApi()
+    render(<AllergenDictionaryManagementPage />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'MOŻE ZAWIERAĆ' }))
+    const list = await screen.findByRole('region', { name: 'MOŻE ZAWIERAĆ' })
+    expect(within(list).getByText('SOJA')).toBeTruthy()
+    expect(within(list).getByText('GORCZYCA')).toBeTruthy()
+    expect(within(list).getByText('SELER')).toBeTruthy()
+    expect(within(list).queryByText(/ALG_/)).toBeNull()
+
+    fireEvent.click(within(list).getByRole('button', { name: '+ Dodaj alergen' }))
+    fireEvent.change(within(list).getByLabelText('Szukaj alergenu'), { target: { value: 'MLEKO' } })
+    fireEvent.change(within(list).getByLabelText('Nazwa alergenu'), { target: { value: 'ALG_MILK' } })
+    fireEvent.click(within(list).getByRole('button', { name: 'Dodaj do listy' }))
+
+    await waitFor(() => expect(within(list).getByText('MLEKO')).toBeTruthy())
+    expect(requests.some((request) => request.method === 'POST'
+      && request.path === '/api/v1/administration/allergens/maybe-contains')).toBe(true)
+
+    fireEvent.click(within(list).getByRole('button', { name: 'Opcje dla: MLEKO' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Usuń z listy' }))
+    await waitFor(() => expect(within(list).queryByText('MLEKO')).toBeNull())
+    expect(requests.some((request) => request.method === 'DELETE'
+      && request.path.endsWith('/maybe-contains/ALG_MILK'))).toBe(true)
+
+    fireEvent.click(within(list).getByRole('button', { name: '+ Dodaj alergen' }))
+    fireEvent.change(within(list).getByLabelText('Szukaj alergenu'), { target: { value: 'SOJA' } })
+    expect(within(list).queryByRole('option', { name: 'SOJA' })).toBeNull()
   })
 })

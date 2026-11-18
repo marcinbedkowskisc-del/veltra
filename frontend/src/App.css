@@ -1114,6 +1114,13 @@ button:disabled, select:disabled, input:disabled {
 .admin-category-form textarea { min-height: 5rem; resize: vertical; }
 .admin-category-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) 0; }
 .admin-category-pagination span { color: var(--text-secondary); }
+.admin-allergen-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+#admin-allergen-precautionary-panel { min-width: 0; }
+.admin-allergen-precautionary { display: grid; gap: var(--space-3); max-width: 48rem; }
+.admin-allergen-precautionary .admin-category-header { align-items: center; }
+.admin-allergen-precautionary .admin-category-header h3 { margin: 0; }
+.admin-allergen-precautionary .admin-category-header p { margin-bottom: 0; }
+.admin-allergen-precautionary-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .admin-unit-page { display: grid; gap: var(--space-4); min-width: 0; }
 .admin-unit-group { display: grid; gap: var(--space-2); }
 .admin-unit-group h3 { margin: 0; }
@@ -1173,6 +1180,9 @@ button:disabled, select:disabled, input:disabled {
 @media (max-width: 600px) {
   .admin-allergen-source-grid, .admin-allergen-form { grid-template-columns: minmax(0, 1fr); }
   .admin-allergen-form h3, .admin-allergen-wide { grid-column: auto; }
+  .admin-allergen-precautionary-form { grid-template-columns: minmax(0, 1fr); }
+  .admin-allergen-precautionary .admin-category-header { align-items: flex-start; flex-direction: column; }
+  .admin-allergen-precautionary .admin-category-header > .button { width: 100%; }
 }
 
 .module-nav-item.is-disabled {

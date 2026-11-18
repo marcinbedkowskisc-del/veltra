@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domain\Allergens\InstallationPrecautionaryAllergenService;
 use App\Domain\Allergens\InternationalAllergenDictionaryService;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AdministrationAllergenCanonicalUpdateRequest;
@@ -49,6 +50,43 @@ final class AdministrationAllergenController extends Controller
             $request->user(),
             $request->attributes->get('operating_location'),
             $validated['search'] ?? null,
+        )], 200, ['Cache-Control' => 'private, no-store']);
+    }
+
+    public function precautionaryAllergens(
+        Request $request,
+        InstallationPrecautionaryAllergenService $service,
+    ): JsonResponse {
+        return response()->json(['data' => $service->listForAdministration(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+        )], 200, ['Cache-Control' => 'private, no-store']);
+    }
+
+    public function addPrecautionaryAllergen(
+        Request $request,
+        InstallationPrecautionaryAllergenService $service,
+    ): JsonResponse {
+        $validated = $request->validate([
+            'allergen_id' => ['required', 'string', 'regex:/\A[A-Z][A-Z0-9_]{0,39}\z/'],
+        ]);
+
+        return response()->json(['data' => $service->add(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $validated['allergen_id'],
+        )], 201, ['Cache-Control' => 'private, no-store']);
+    }
+
+    public function removePrecautionaryAllergen(
+        Request $request,
+        string $allergen,
+        InstallationPrecautionaryAllergenService $service,
+    ): JsonResponse {
+        return response()->json(['data' => $service->remove(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $allergen,
         )], 200, ['Cache-Control' => 'private, no-store']);
     }
 

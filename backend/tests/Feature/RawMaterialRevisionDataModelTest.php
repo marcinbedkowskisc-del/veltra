@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Allergens\InstallationPrecautionaryAllergenService;
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
@@ -14,6 +15,7 @@ use App\Domain\RawMaterials\RawMaterialService;
 use App\Models\Location;
 use App\Models\LocationModuleState;
 use App\Models\User;
+use Database\Seeders\AllergenDictionariesSeeder;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -62,6 +64,66 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             'name' => 'Dane testowe',
         ]);
         $this->categoryId = $category['id'];
+    }
+
+    public function test_installation_precautionary_updates_leave_raw_declarations_and_history_unchanged(): void
+    {
+        $catalogVersionId = $this->publishedCatalog([
+            ['allergen_code' => 'TEST_WHEAT', 'name_pl' => 'Pszenica'],
+            ['allergen_code' => 'TEST_MILK', 'name_pl' => 'Mleko'],
+        ]);
+        $material = $this->createMaterial('Surowiec z deklaracjami', [
+            'allergen_declaration' => [
+                'status' => 'DECLARED',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [
+                    ['allergen_code' => 'TEST_WHEAT', 'exposure_kind' => 'DIRECT'],
+                    ['allergen_code' => 'TEST_MILK', 'exposure_kind' => 'CROSS_CONTACT_POTENTIAL'],
+                ],
+            ],
+        ]);
+        $revisionId = $material['revision']['id'];
+        $declarationsBefore = DB::table('raw_material_revision_allergen_declarations')
+            ->where('revision_id', $revisionId)
+            ->orderBy('allergen_code')
+            ->get(['catalog_version_id', 'allergen_code', 'exposure_kind'])
+            ->toArray();
+        $revisionBefore = DB::table('raw_material_revisions')
+            ->where('id', $revisionId)
+            ->first(['allergen_state', 'content_hash', 'revision_no']);
+        $historyBefore = DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL')
+            ->where('subject_id', $material['id'])
+            ->orderBy('occurred_at')
+            ->get(['id', 'event_code', 'before_hash', 'after_hash', 'metadata'])
+            ->toArray();
+
+        $this->withSetupConnection(function (): void {
+            DB::setDefaultConnection('pgsql_setup');
+            try {
+                app(AllergenDictionariesSeeder::class)->run();
+            } finally {
+                DB::setDefaultConnection('pgsql');
+            }
+        });
+        $globalList = app(InstallationPrecautionaryAllergenService::class);
+        $globalList->add($this->administrator, $this->location, 'ALG_SOY');
+        $globalList->remove($this->administrator, $this->location, 'ALG_SOY');
+
+        $this->assertEquals($declarationsBefore, DB::table('raw_material_revision_allergen_declarations')
+            ->where('revision_id', $revisionId)
+            ->orderBy('allergen_code')
+            ->get(['catalog_version_id', 'allergen_code', 'exposure_kind'])
+            ->toArray());
+        $this->assertEquals($revisionBefore, DB::table('raw_material_revisions')
+            ->where('id', $revisionId)
+            ->first(['allergen_state', 'content_hash', 'revision_no']));
+        $this->assertEquals($historyBefore, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL')
+            ->where('subject_id', $material['id'])
+            ->orderBy('occurred_at')
+            ->get(['id', 'event_code', 'before_hash', 'after_hash', 'metadata'])
+            ->toArray());
     }
 
     public function test_unknown_and_no_known_allergen_states_are_distinct_in_the_revision_snapshot(): void

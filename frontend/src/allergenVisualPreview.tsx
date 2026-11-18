@@ -41,6 +41,7 @@ function json(data: unknown): Response {
 
 function installSyntheticApi() {
   const entries = previewAllergenEntries as Record<string, Array<Record<string, unknown>>>
+  const precautionaryIds = new Set(['ALG_SOY', 'ALG_MUSTARD', 'ALG_CELERY'])
   const originalFetch = window.fetch.bind(window)
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -50,6 +51,29 @@ function installSyntheticApi() {
 
     if (path === '/api/v1/administration/allergens/dictionaries') return json({ data: previewAllergenSources })
     if (path === '/api/v1/administration/allergens/canonical') return json({ data: previewCanonicalAllergens })
+    if (path === '/api/v1/administration/allergens/maybe-contains' && method === 'GET') {
+      return json({ data: [...precautionaryIds].flatMap((allergenId) => {
+        const canonical = previewCanonicalAllergens.find((item) => item.id === allergenId)
+        return canonical ? [{ allergen_id: canonical.id, canonical_pl: canonical.canonical_pl }] : []
+      }) })
+    }
+    if (path === '/api/v1/administration/allergens/maybe-contains' && method === 'POST') {
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {}
+      const allergenId = body.allergen_id
+      const canonical = previewCanonicalAllergens.find((item) => item.id === allergenId)
+      if (!canonical) throw new Error('Wybierz alergen z dostępnej listy.')
+      if (precautionaryIds.has(canonical.id)) throw new Error('Ten alergen jest już na liście MOŻE ZAWIERAĆ.')
+      precautionaryIds.add(canonical.id)
+      return json({ data: { allergen_id: canonical.id, canonical_pl: canonical.canonical_pl } })
+    }
+    if (path.startsWith('/api/v1/administration/allergens/maybe-contains/') && method === 'DELETE') {
+      const allergenId = path.split('/').at(-1) ?? ''
+      const canonical = previewCanonicalAllergens.find((item) => item.id === allergenId)
+      if (!canonical || !precautionaryIds.delete(allergenId)) {
+        throw new Error('Tego alergenu nie ma na liście MOŻE ZAWIERAĆ.')
+      }
+      return json({ data: { allergen_id: canonical.id, canonical_pl: canonical.canonical_pl } })
+    }
     if (path.includes('/api/v1/administration/allergens/dictionaries/') && path.endsWith('/entries')) {
       const versionId = path.split('/').at(-2) ?? ''
       return json({ data: entries[versionId] ?? [] })
@@ -122,7 +146,7 @@ export default function AllergenVisualPreview() {
         { label: 'Organizacja', value: 'VELTRA — podgląd' },
         { label: 'Lokalizacja', value: 'Kuchnia demonstracyjna', detail: 'Dane syntetyczne' },
       ]}
-      footerNote="Podgląd PA-05 · dane syntetyczne"
+      footerNote="Podgląd PA-05F · dane syntetyczne"
       status={<span className="topbar-health"><span className="status-indicator" data-status="down" aria-hidden="true" />API symulowane</span>}
       account={<div className="preview-account" aria-label="Użytkownik demonstracyjny">
         <span className="account-avatar" aria-hidden="true">UD</span>
@@ -131,7 +155,7 @@ export default function AllergenVisualPreview() {
     >
       <section className="preview-toolbar" aria-label="Sterowanie podglądem PA-05">
         <div className="preview-toolbar-heading">
-          <strong>PODGLĄD PA-05 — DANE SYNTETYCZNE</strong>
+          <strong>PODGLĄD PA-05F — DANE SYNTETYCZNE</strong>
           <span>Pełne MASTER v1.1: 178 relacji w 9 wersjach. Bez połączenia ze Stage lub produkcją.</span>
         </div>
         <div className="preview-toolbar-controls">
@@ -143,7 +167,7 @@ export default function AllergenVisualPreview() {
         <p className="preview-toolbar-status">
           {rawView
             ? 'Surowiec demonstracyjny: Mąka pszenna · deklaracja zawiera ekspozycję bezpośrednią i ryzyko zanieczyszczenia krzyżowego.'
-            : 'Źródła: UE, USA, Codex, Japonia, Chiny, Korea Południowa, Tajwan i Tajlandia · Chiny: wersja bieżąca oraz przyszła.'}
+            : 'Źródła: UE, USA, Codex, Japonia, Chiny, Korea Południowa, Tajwan i Tajlandia · globalna lista MOŻE ZAWIERAĆ.'}
         </p>
       </section>
       {rawView

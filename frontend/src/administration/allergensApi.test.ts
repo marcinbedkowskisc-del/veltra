@@ -1,5 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { fetchAllergenEntries, fetchAllergenSources, fetchCanonicalAllergens } from './allergensApi'
+import {
+  addGlobalPrecautionaryAllergen,
+  fetchAllergenEntries,
+  fetchAllergenSources,
+  fetchCanonicalAllergens,
+  fetchGlobalPrecautionaryAllergens,
+  removeGlobalPrecautionaryAllergen,
+} from './allergensApi'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -59,4 +66,39 @@ it('parses empty JSON objects in dictionary, canonical and source-entry response
   await expect(fetchAllergenSources()).resolves.toMatchObject([{ versions: [{ metadata: {} }] }])
   await expect(fetchCanonicalAllergens()).resolves.toMatchObject([{ originalNames: {} }])
   await expect(fetchAllergenEntries(versionId)).resolves.toMatchObject([{ metadata: {}, exceptions: [] }])
+})
+
+it('reads, adds and removes installation-wide precautionary allergens by canonical identity', async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
+      { allergen_id: 'ALG_SOY', canonical_pl: 'SOJA' },
+    ] }), { headers: { 'Content-Type': 'application/json' } }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+      allergen_id: 'ALG_MILK',
+      canonical_pl: 'MLEKO',
+    } }), { headers: { 'Content-Type': 'application/json' } }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+      allergen_id: 'ALG_MILK',
+      canonical_pl: 'MLEKO',
+    } }), { headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetchMock)
+
+  await expect(fetchGlobalPrecautionaryAllergens()).resolves.toEqual([
+    { allergenId: 'ALG_SOY', canonicalPl: 'SOJA' },
+  ])
+  await expect(addGlobalPrecautionaryAllergen('ALG_MILK')).resolves.toEqual({
+    allergenId: 'ALG_MILK',
+    canonicalPl: 'MLEKO',
+  })
+  await expect(removeGlobalPrecautionaryAllergen('ALG_MILK')).resolves.toEqual({
+    allergenId: 'ALG_MILK',
+    canonicalPl: 'MLEKO',
+  })
+
+  expect(fetchMock.mock.calls.map(([url, init]) => [String(url), init?.method])).toEqual([
+    ['/api/v1/administration/allergens/maybe-contains', 'GET'],
+    ['/api/v1/administration/allergens/maybe-contains', 'POST'],
+    ['/api/v1/administration/allergens/maybe-contains/ALG_MILK', 'DELETE'],
+  ])
+  expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ allergen_id: 'ALG_MILK' })
 })

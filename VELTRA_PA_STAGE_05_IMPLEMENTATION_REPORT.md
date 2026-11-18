@@ -158,6 +158,37 @@ Tekst formularza edycji zastąpiono zatwierdzonym, prostszym wyjaśnieniem: „T
 
 Zmiany nie obejmują formularzy, typów deklaracji, snapshotów, historii ani workflow RAW; brak wpływu na zachowanie RAW. Zmiany PHP dotyczą wyłącznie komunikatów — obsługa słownika, autoryzacja, audyt i klasyfikacja prawna pozostały bez zmian.
 
+## 11. PA-05F — instalacyjna lista „MOŻE ZAWIERAĆ”
+
+### Zakres i implementacja
+
+Dodano jedną trwałą listę dla całej instalacji VELTRA, bez wymiaru organizacji, lokalizacji ani modułu. Tabela `installation_precautionary_allergens` przechowuje wyłącznie odwołania do istniejącego katalogu alergenów; klucz główny `allergen_id` zapobiega duplikatom, a klucz obcy chroni definicje katalogu. Dodawanie i usuwanie korzysta z istniejącego uprawnienia administracyjnego oraz mechanizmu audytu. Usunięcie z listy nie usuwa ani nie archiwizuje alergenu, powiązań słownikowych ani danych RAW.
+
+Administracja ma osobną zakładkę „MOŻE ZAWIERAĆ” obok niezmienionego porównania ośmiu słowników międzynarodowych. Widok pokazuje polskie nazwy wielkimi literami, zwarte wiersze z menu ⋯ i wyszukiwany wybór istniejących pozycji; pozycje już na liście są wykluczone z wyboru. Nie pokazuje identyfikatorów ani metadanych technicznych.
+
+API administracyjne udostępnia odczyt, dodawanie i usuwanie wpisów. `InstallationPrecautionaryAllergenService` zachowuje administratora, kontekst i zapis audytowy zgodne z istniejącymi wzorcami VELTRA. `EffectivePrecautionaryAllergenService` udostępnia wielokrotnego użytku obliczenie: łączy globalne wpisy z zachowanymi deklaracjami ostrożnościowymi danego surowca, deduplikuje po identyfikatorze katalogowym i usuwa wyłącznie dokładne identyfikatory obecne w deklaracjach „ZAWIERA”. Wynik nie zmienia globalnej listy ani zapisów konkretnego surowca.
+
+Relacje nadrzędny/potomny nie są traktowane jako równoznaczne. Przykładowo bezpośrednia deklaracja PSZENICY nie usuwa osobnej pozycji ZBOŻA ZAWIERAJĄCE GLUTEN. Nie wprowadzono reguł klasyfikacji ani generowania etykiet; ich prawny zakres wymaga osobnego zatwierdzenia.
+
+### Podgląd i weryfikacja PA-05F
+
+Podgląd `http://localhost:5175/allergen-preview.html` renderuje rzeczywisty komponent administracyjny React z syntetycznym API; nie łączy się z Stage ani produkcją. Zakładka pokazuje przykładową listę SOJA, GORCZYCA i SELER, formularz wyszukiwania i dodawania istniejącego alergenu oraz menu usunięcia. Widoki listy i formularza zostały sprawdzone w przeglądarce w bieżącej sesji.
+
+| Zakres | Wynik |
+|---|---|
+| Pełna backend suite w izolowanym Compose/PostgreSQL | **PASS: 473 testy, 4 660 asercji, 0 failures**; 823,26 s. |
+| Izolowane testy backendowe PA-05F, słowników, RBAC i RAW | **PASS: 12 testów, 222 asercje**; obejmują trwałość instalacyjną, odmowę dla nie-administratora, deduplikację, obliczanie po ID oraz niezmienność deklaracji i historii RAW. |
+| PHP Pint dla zmienionych plików | **PASS** (`vendor/bin/pint --test`). |
+| Pełna suita frontendowa | **PASS: 19 plików, 223 testy**. |
+| TypeScript i build produkcyjny | **PASS** (`npm run build`). |
+| Lint | Kod wyjścia 0; pozostało istniejące ostrzeżenie `src/visualPreview.tsx:39` (`react(only-export-components`). |
+| Build podglądu interaktywnego | **PASS** (`npx vite build --config vite.interactive-preview.config.ts`). |
+| `git diff --check` | **PASS**. |
+
+Zmiany nie modyfikują seedów MASTER v1.1, formularzy i przepływów RAW, typów deklaracji, rewizji ani historycznych snapshotów. Test RAW potwierdza, że operacje na liście globalnej nie zmieniają zapisanych deklaracji ani historii. Podgląd korzysta z danych syntetycznych, więc nie jest testem integracyjnym API z bazą.
+
+**Ograniczenia:** lista i obliczenie efektywne są gotowe do ponownego użycia przez przyszłe moduły, ale nie uruchamiają drukowania ani generowania etykiet. Nie rozstrzygają też prawnej równoważności kategorii. PA-05F pozostaje częścią PA-05 i wymaga końcowego odbioru właściciela; PA-06 nie rozpoczęto.
+
 Weryfikacja tej poprawki:
 
 | Zakres | Wynik |

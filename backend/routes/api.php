@@ -57,6 +57,10 @@ Route::prefix('v1/administration')->middleware([
     Route::post('/units/{unit}/restore', [AdministrationUnitController::class, 'restore'])->whereUuid('unit');
     Route::get('/allergens/dictionaries', [AdministrationAllergenController::class, 'dictionaries']);
     Route::get('/allergens/canonical', [AdministrationAllergenController::class, 'canonicalAllergens']);
+    Route::get('/allergens/maybe-contains', [AdministrationAllergenController::class, 'precautionaryAllergens']);
+    Route::post('/allergens/maybe-contains', [AdministrationAllergenController::class, 'addPrecautionaryAllergen']);
+    Route::delete('/allergens/maybe-contains/{allergen}', [AdministrationAllergenController::class, 'removePrecautionaryAllergen'])
+        ->where('allergen', '[A-Z][A-Z0-9_]{0,39}');
     Route::get('/allergens/dictionaries/{version}/entries', [AdministrationAllergenController::class, 'entries'])->whereUuid('version');
     Route::get('/allergens/dictionaries/{version}/history', [AdministrationAllergenController::class, 'history'])->whereUuid('version');
     Route::post('/allergens/dictionaries/{version}/entries', [AdministrationAllergenController::class, 'storeEntry'])->whereUuid('version');

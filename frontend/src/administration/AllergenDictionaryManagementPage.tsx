@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../api'
 import { allergenDisplayName } from './allergenDisplayNames'
+import GlobalPrecautionaryAllergenSection from './GlobalPrecautionaryAllergenSection'
 import {
   archiveAllergenEntry,
   createAllergenEntry,
@@ -107,6 +108,7 @@ function dateLabel(value: string | null, emptyLabel: string): string {
 }
 
 export default function AllergenDictionaryManagementPage() {
+  const [activeSection, setActiveSection] = useState<'dictionaries' | 'precautionary'>('dictionaries')
   const [sources, setSources] = useState<AllergenSource[]>([])
   const [canonical, setCanonical] = useState<CanonicalAllergen[]>([])
   const [selectedVersionIds, setSelectedVersionIds] = useState<Record<string, string>>({})
@@ -345,9 +347,29 @@ export default function AllergenDictionaryManagementPage() {
     {success && <p className="notice notice-success" role="status">{success}</p>}
     {error && <p className="inline-error" role="alert">{error}</p>}
 
-    {sourcesLoading ? <p role="status">Ładowanie słowników alergenów…</p> : columns.length === 0
-      ? <p className="admin-allergen-empty">Brak dostępnych list alergenów.</p>
-      : <div className="admin-allergen-source-grid" aria-label="Słowniki alergenów">
+    <div className="admin-allergen-tabs" role="tablist" aria-label="Sekcje alergenów">
+      <button type="button" className={`button ${activeSection === 'dictionaries' ? 'button-primary' : 'button-secondary'}`}
+        id="admin-allergen-dictionaries-tab" role="tab" aria-selected={activeSection === 'dictionaries'}
+        aria-controls="admin-allergen-dictionaries-panel" tabIndex={activeSection === 'dictionaries' ? 0 : -1}
+        onClick={() => setActiveSection('dictionaries')}>
+        Słowniki międzynarodowe
+      </button>
+      <button type="button" className={`button ${activeSection === 'precautionary' ? 'button-primary' : 'button-secondary'}`}
+        id="admin-allergen-precautionary-tab" role="tab" aria-selected={activeSection === 'precautionary'}
+        aria-controls="admin-allergen-precautionary-panel" tabIndex={activeSection === 'precautionary' ? 0 : -1}
+        onClick={() => setActiveSection('precautionary')}>
+        MOŻE ZAWIERAĆ
+      </button>
+    </div>
+
+    {activeSection === 'precautionary'
+      ? <div id="admin-allergen-precautionary-panel" role="tabpanel" aria-labelledby="admin-allergen-precautionary-tab">
+        <GlobalPrecautionaryAllergenSection canonical={canonical} />
+      </div>
+      : <div id="admin-allergen-dictionaries-panel" role="tabpanel" aria-labelledby="admin-allergen-dictionaries-tab">
+        {sourcesLoading ? <p role="status">Ładowanie słowników alergenów…</p> : columns.length === 0
+          ? <p className="admin-allergen-empty">Brak dostępnych list alergenów.</p>
+          : <div className="admin-allergen-source-grid" aria-label="Słowniki alergenów">
         {columns.map(({ source, version }) => {
           const sourceEntries = entriesByVersion[version.id] ?? []
           const filter = statusBySource[source.sourceCode] ?? 'active'
@@ -444,9 +466,9 @@ export default function AllergenDictionaryManagementPage() {
               onClick={() => openAddForm(version.id)}>+ Dodaj alergen</button>
           </section>
         })}
-      </div>}
+          </div>}
 
-    {form && <form className="admin-allergen-form admin-category-form" onSubmit={(event) => void submitEntry(event)}>
+        {form && <form className="admin-allergen-form admin-category-form" onSubmit={(event) => void submitEntry(event)}>
       <h3>{form.entry ? 'Edytuj alergen' : 'Dodaj alergen do słownika'}</h3>
       <p className="admin-allergen-form-context admin-allergen-wide">
         Słownik: <strong>{formSource?.namePl}</strong>{formVersion?.status === 'FUTURE' ? ' — przyszła wersja' : ''}
@@ -533,6 +555,7 @@ export default function AllergenDictionaryManagementPage() {
         <button type="button" className="button button-secondary" disabled={busy}
           onClick={() => { setForm(null); setFormError(null) }}>Anuluj</button>
       </div>
-    </form>}
+        </form>}
+      </div>}
   </section>
 }

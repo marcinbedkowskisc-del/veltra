@@ -255,3 +255,5 @@ Zintegrowane narzędzia nie udostępniły eksportu nagrania wideo. Zamiast dekla
 | `git diff --check` | **PASS**. |
 
 Pozostałe statyczne ujawnienia poza PA, w szczególności potwierdzenia/edytor RAW, account/health details i formularze kategorii/jednostek, są zinwentaryzowane powyżej do późniejszej pracy. Nie rozpoczęto ich zmian, nie użyto Stage ani produkcji, nie wykonano pushu/deployu i nie rozpoczęto PA-06.
+
+**Lokalny commit implementacji PA-05G:** `84b7171` (`fix(ui): animate allergen disclosures and forms`).

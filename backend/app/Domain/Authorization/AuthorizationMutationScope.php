@@ -219,6 +219,11 @@ final readonly class AuthorizationMutationScope
         return new self('raw-material.supplier.correct');
     }
 
+    public static function administrationSupplierRestore(): self
+    {
+        return new self('administration.supplier.restore');
+    }
+
     public static function rawMaterialCsvImport(): self
     {
         return new self('raw-material.csv-import');

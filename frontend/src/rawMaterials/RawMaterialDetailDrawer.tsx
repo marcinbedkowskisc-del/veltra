@@ -548,6 +548,7 @@ export default function RawMaterialDetailDrawer({
                             ? `Wersja ${detail.revision.revisionNo} — ${detail.revision.id === detail.approvedRevisionId ? 'zatwierdzona i obowiązująca' : 'robocza'}`
                             : 'Brak wersji'}</dd></div>
                           <div><dt>Kategoria</dt><dd>{categoryName(detail.revision?.categoryId ?? null)}</dd></div>
+                          <div><dt>Dostawca</dt><dd>{detail.supplierNames.length > 0 ? detail.supplierNames.join(', ') : '—'}</dd></div>
                           <div><dt>Jednostka podstawowa</dt><dd>{detail.revision ? unitLabel(detail.revision.baseUnitCode, unitOptions) : '—'}</dd></div>
                           <div><dt>Rodzaj jednostki</dt><dd>{detail.revision ? dimensionLabel(detail.revision.baseUnitDimension) : '—'}</dd></div>
                         </dl>

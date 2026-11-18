@@ -110,6 +110,9 @@ export default function CatalogTable({
                 >
                   {row.name}
                 </button>
+                {row.supplierNames.length > 0 && (
+                  <small className="raw-supplier-name">Dostawca: {row.supplierNames.join(', ')}</small>
+                )}
                 {row.workflowState && <small className="detail-muted"> · {lifecycleLabel(row.workflowState)}</small>}
               </span>
             )

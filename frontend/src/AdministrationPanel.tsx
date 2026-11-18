@@ -2,6 +2,7 @@ import { administrationGroups } from './administrationNavigation'
 import AllergenDictionaryManagementPage from './administration/AllergenDictionaryManagementPage'
 import CategoryManagementPage from './administration/CategoryManagementPage'
 import UnitManagementPage from './administration/UnitManagementPage'
+import SupplierManagementPage from './administration/SupplierManagementPage'
 
 export default function AdministrationPanel({ path }: { path: string }) {
   const selected = administrationGroups.flatMap((group) => group.items).find((item) => item.path === path)
@@ -27,6 +28,8 @@ export default function AdministrationPanel({ path }: { path: string }) {
             <UnitManagementPage />
           ) : selected.path === '/administration/allergens' ? (
             <AllergenDictionaryManagementPage />
+          ) : selected.path === '/administration/suppliers' ? (
+            <SupplierManagementPage />
           ) : (
             <>
               <h2>{selected.label}</h2>

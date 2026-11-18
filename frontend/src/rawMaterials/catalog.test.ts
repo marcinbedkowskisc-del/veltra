@@ -120,12 +120,22 @@ describe('kontrakt katalogu RAW', () => {
     expect(empty.canReadUsableCost).toBeNull()
   })
 
+  it('zachowuje wyłącznie czytelne nazwy dostawców surowca w odpowiedzi katalogu', () => {
+    const parsed = parseCatalogEnvelope(envelope([
+      row({ supplier_names: ['Dostawca BANASIK', 'Młyn Przykład'] }),
+    ]))
+    expect(parsed.rows[0].supplierNames).toEqual(['Dostawca BANASIK', 'Młyn Przykład'])
+    expect(() => parseCatalogEnvelope(envelope([
+      row({ supplier_names: ['Dostawca BANASIK', 7] }),
+    ]))).toThrow('Backend zwrócił nieprawidłową listę dostawców surowca.')
+  })
+
   it('parsuje dostępne dane filtrów i zachowuje ich UUID', () => {
     expect(parseCategories([{ id: 'category-1', name: 'Mąki' }])).toEqual([{ id: 'category-1', name: 'Mąki' }])
     expect(parseSuppliers({
       data: [{ id: 'supplier-1', supplier_code: 'SUP-01', display_name: 'Dostawca A' }],
       meta: { current_page: 1, per_page: 100, total: 1 },
-    })).toEqual([{ id: 'supplier-1', code: 'SUP-01', name: 'Dostawca A' }])
+    })).toEqual([{ id: 'supplier-1', name: 'Dostawca A' }])
   })
 
   it('formatuje kwoty i ilości bez konwersji do liczb zmiennoprzecinkowych', () => {

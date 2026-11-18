@@ -4,10 +4,14 @@ namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
+use App\Domain\Suppliers\SupplierTaxIdentifier;
 use App\Models\Location;
 use App\Models\Organization;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +26,7 @@ final class RawMaterialCommercialService
         private RawMaterialLocationSharePolicy $sharePolicy,
         private AuthorizationMutationContext $contexts,
         private RawMaterialPricingService $pricing,
+        private BusinessAuthorization $businessAuthorization,
     ) {}
 
     public function suppliers(User $actor, Location $context, array $filters = []): array
@@ -29,13 +34,18 @@ final class RawMaterialCommercialService
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
         $query = DB::table('organization_suppliers')
             ->where('organization_id', $actor->organization_id)
-            ->select(['id', 'supplier_code', 'display_name', 'legal_name', 'lifecycle_state', 'created_at']);
+            ->select([
+                'id',
+                DB::raw("coalesce(nullif(btrim(display_name), ''), legal_name) as display_name"),
+                'lifecycle_state',
+            ]);
         if (isset($filters['search'])) {
-            $query->where('display_name', 'ilike', '%'.addcslashes($filters['search'], '%_\\').'%');
+            $query->whereRaw(
+                "coalesce(nullif(btrim(display_name), ''), legal_name) ilike ?",
+                ['%'.addcslashes($filters['search'], '%_\\').'%'],
+            );
         }
-        if (isset($filters['lifecycle_state'])) {
-            $query->where('lifecycle_state', $filters['lifecycle_state']);
-        }
+        $query->where('lifecycle_state', $filters['lifecycle_state'] ?? 'ACTIVE');
         $page = $query->orderBy('display_name')->orderBy('id')->paginate($filters['per_page'] ?? 20);
 
         return [
@@ -112,15 +122,21 @@ final class RawMaterialCommercialService
             $input,
             function (string $operationId) use ($actor, $context, $input): array {
                 $id = Str::uuid()->toString();
+                $taxIdentifier = filled($input['tax_identifier'] ?? null)
+                    ? trim($input['tax_identifier'])
+                    : null;
+                if ($taxIdentifier !== null) {
+                    $this->assertSupplierTaxIdentifierAvailable($actor->organization_id, $taxIdentifier);
+                }
                 DB::table('organization_suppliers')->insert([
                     'id' => $id,
                     'organization_id' => $actor->organization_id,
                     'supplier_code' => $input['supplier_code'],
                     'display_name' => trim($input['display_name']),
                     'legal_name' => isset($input['legal_name']) ? trim($input['legal_name']) : null,
-                    'tax_identifier_ciphertext' => filled($input['tax_identifier'] ?? null)
-                        ? Crypt::encryptString(trim($input['tax_identifier']))
-                        : null,
+                    'tax_identifier_ciphertext' => $taxIdentifier === null ? null : Crypt::encryptString($taxIdentifier),
+                    'tax_identifier_fingerprint' => $taxIdentifier === null
+                        ? null : SupplierTaxIdentifier::fingerprint($taxIdentifier),
                     'created_by' => $actor->id,
                 ]);
                 $supplier = $this->supplier($actor, $id);
@@ -204,9 +220,12 @@ final class RawMaterialCommercialService
 
                 $updates = [];
                 $changedFields = [];
-                foreach (['display_name', 'legal_name'] as $field) {
+                foreach (['display_name', 'legal_name', 'street_address', 'city', 'phone', 'email', 'website'] as $field) {
                     if (array_key_exists($field, $changes)) {
                         $value = $changes[$field] === null ? null : trim($changes[$field]);
+                        if ($value === '') {
+                            $value = null;
+                        }
                         if ($value !== $supplier->{$field}) {
                             $updates[$field] = $value;
                             $changedFields[] = $field;
@@ -222,9 +241,19 @@ final class RawMaterialCommercialService
                         ? null
                         : Crypt::decryptString($supplier->tax_identifier_ciphertext);
                     if ($taxIdentifier !== $currentTaxIdentifier) {
+                        if ($taxIdentifier !== null) {
+                            $this->assertSupplierTaxIdentifierAvailable(
+                                $actor->organization_id,
+                                $taxIdentifier,
+                                $supplierId,
+                            );
+                        }
                         $updates['tax_identifier_ciphertext'] = $taxIdentifier === null
                             ? null
                             : Crypt::encryptString($taxIdentifier);
+                        $updates['tax_identifier_fingerprint'] = $taxIdentifier === null
+                            ? null
+                            : SupplierTaxIdentifier::fingerprint($taxIdentifier);
                         $changedFields[] = 'tax_identifier';
                         $afterTaxFingerprint = $this->supplierTaxIdentifierFingerprint($updates['tax_identifier_ciphertext']);
                     }
@@ -275,6 +304,63 @@ final class RawMaterialCommercialService
         );
     }
 
+    public function assertAdministrationSupplierAccess(User $actor, Location $context): void
+    {
+        if (! $this->businessAuthorization->eligible($actor, $context)
+            || ! $this->businessAuthorization->hasRole($actor, BusinessRole::Administrator)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+    }
+
+    public function runAdministrationSupplierMutation(
+        User $actor,
+        Location $context,
+        string $operationCode,
+        string $idempotencyKey,
+        array $payload,
+        callable $operation,
+    ): array {
+        $this->assertAdministrationSupplierAccess($actor, $context);
+
+        return $this->mutate(
+            $actor,
+            $context,
+            [],
+            $operationCode,
+            $idempotencyKey,
+            $payload,
+            function (string $operationId) use ($actor, $context, $operation): array {
+                $this->assertAdministrationSupplierAccess($actor, $context);
+
+                return $operation($operationId);
+            },
+        );
+    }
+
+    public function auditAdministrationSupplierChange(
+        User $actor,
+        Location $context,
+        string $operationId,
+        string $subjectType,
+        string $subjectId,
+        string $eventCode,
+        mixed $before,
+        mixed $after,
+        array $additionalMetadata = [],
+    ): void {
+        $this->audit(
+            $actor,
+            $context,
+            $operationId,
+            $subjectType,
+            $subjectId,
+            $eventCode,
+            $before,
+            $after,
+            additionalMetadata: $additionalMetadata,
+        );
+    }
+
     public function products(User $actor, Location $context, string $materialId, array $filters = []): array
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::SupplierView);
@@ -307,7 +393,8 @@ final class RawMaterialCommercialService
                     AND latest.organization_id = products.organization_id)')
             ->select([
                 'products.id', 'products.lifecycle_state', 'products.created_at',
-                'suppliers.id as supplier_id', 'suppliers.supplier_code', 'suppliers.display_name as supplier_name',
+                'suppliers.id as supplier_id', 'suppliers.supplier_code',
+                DB::raw("coalesce(nullif(btrim(suppliers.display_name), ''), suppliers.legal_name) as supplier_name"),
                 'revisions.id as revision_id', 'revisions.revision_no', 'revisions.product_name',
                 'revisions.supplier_sku', 'revisions.gtin', 'revisions.purchase_unit_code',
                 'revisions.content_quantity', 'revisions.content_unit_code', 'revisions.base_quantity_snapshot',
@@ -1620,6 +1707,24 @@ final class RawMaterialCommercialService
         }
 
         return (array) $supplier;
+    }
+
+    private function assertSupplierTaxIdentifierAvailable(
+        string $organizationId,
+        string $taxIdentifier,
+        ?string $exceptSupplierId = null,
+    ): void {
+        $query = DB::table('organization_suppliers')
+            ->where('organization_id', $organizationId)
+            ->where('tax_identifier_fingerprint', SupplierTaxIdentifier::fingerprint($taxIdentifier));
+        if ($exceptSupplierId !== null) {
+            $query->where('id', '<>', $exceptSupplierId);
+        }
+        if ($query->exists()) {
+            throw ValidationException::withMessages([
+                'tax_identifier' => ['Dostawca z tym identyfikatorem podatkowym już istnieje.'],
+            ]);
+        }
     }
 
     private function presentProduct(User $actor, string $productId): array

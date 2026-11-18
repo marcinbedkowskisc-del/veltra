@@ -15,6 +15,7 @@ export type RawMaterialDetail = {
   sku: string
   lifecycleState: string
   approvedRevisionId: string | null
+  supplierNames: string[]
   revision: {
     id: string
     revisionNo: number
@@ -127,6 +128,10 @@ function parseRevision(value: unknown): RawMaterialDetail['revision'] {
 
 export function parseRawMaterialDetail(value: unknown): RawMaterialDetail {
   if (!isRecord(value)) throw new Error('Backend zwrócił nieprawidłowe szczegóły surowca.')
+  const supplierNames = value.supplier_names ?? []
+  if (!Array.isArray(supplierNames) || !supplierNames.every((name): name is string => typeof name === 'string')) {
+    throw new Error('Backend zwrócił nieprawidłową listę dostawców surowca.')
+  }
   const revision = parseRevision(value.revision)
   let lastUpdate: RawMaterialDetail['lastUpdate'] = null
   if (value.last_update !== null) {
@@ -153,6 +158,7 @@ export function parseRawMaterialDetail(value: unknown): RawMaterialDetail {
     sku: requiredString(value.sku, 'sku'),
     lifecycleState: requiredString(value.lifecycle_state, 'lifecycle_state'),
     approvedRevisionId: nullableString(value.approved_revision_id, 'approved_revision_id'),
+    supplierNames,
     revision,
     nominalQuantity: nullableDecimal(value.nominal_quantity, 'nominal_quantity'),
     usableQuantity: nullableDecimal(value.usable_quantity, 'usable_quantity'),

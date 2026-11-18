@@ -3236,6 +3236,71 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('id', $eventId)->update(['net_amount_per_purchase_unit' => '100']));
     }
 
+    public function test_raw_material_supplier_names_are_visible_without_supplier_or_cost_permissions(): void
+    {
+        $category = $this->category();
+        $materialId = $this->declaredMaterial($category['id'], 'Mąka dla widoku RAW');
+        $this->rawMaterialService->submit(
+            $this->steward,
+            $this->location,
+            $materialId,
+            expectedVersion: $this->rawVersion($materialId),
+        );
+        $this->rawMaterialService->approve(
+            $this->steward,
+            $this->location,
+            $materialId,
+            'Zatwierdzenie kartoteki testowej',
+            expectedVersion: $this->rawVersion($materialId),
+        );
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->steward,
+            $this->location,
+            [
+                'supplier_code' => 'RAW_VIEW_01',
+                'display_name' => 'Dostawca BANASIK',
+                'tax_identifier' => '1234567890',
+            ],
+            'raw-supplier-name-visible-001',
+        );
+        $supplierId = $supplier['data']['id'];
+        app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::rawMaterialCommercial(),
+            $this->steward->id,
+            fn () => DB::table('raw_material_supplier_associations')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $this->steward->organization_id,
+                'raw_material_id' => $materialId,
+                'supplier_id' => $supplierId,
+                'created_by' => $this->steward->id,
+            ]),
+        );
+
+        $viewer = $this->user('raw-material-name-only@example.test');
+        app(MembershipService::class)->assign($viewer, $this->location);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $this->steward,
+            $this->location,
+            $viewer,
+            RawMaterialPermission::View,
+            'Odczyt surowców bez danych dostawców i cen',
+        );
+        $this->selectContext($viewer);
+
+        $this->getJson('/api/v1/raw-materials')
+            ->assertOk()
+            ->assertJsonPath('data.0.supplier_names.0', 'Dostawca BANASIK')
+            ->assertJsonMissing(['supplier_code' => 'RAW_VIEW_01'])
+            ->assertJsonMissing(['tax_identifier' => '1234567890'])
+            ->assertJsonMissingPath('data.0.reference_net_price')
+            ->assertJsonMissingPath('data.0.usable_unit_cost');
+        $this->getJson('/api/v1/raw-materials/'.$materialId)
+            ->assertOk()
+            ->assertJsonPath('data.supplier_names.0', 'Dostawca BANASIK')
+            ->assertJsonMissing(['tax_identifier' => '1234567890']);
+        $this->getJson('/api/v1/raw-materials/suppliers')->assertForbidden();
+    }
+
     public function test_nbp_as_of_overrides_half_even_restatements_and_idempotency(): void
     {
         $this->role($this->steward, BusinessRole::Administrator);

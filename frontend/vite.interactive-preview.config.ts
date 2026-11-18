@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         index: resolve(import.meta.dirname, 'visual-preview.html'),
         allergens: resolve(import.meta.dirname, 'allergen-preview.html'),
+        suppliers: resolve(import.meta.dirname, 'supplier-preview.html'),
       },
     },
   },

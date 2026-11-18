@@ -496,6 +496,7 @@ button:disabled, select:disabled, input:disabled {
 .catalog-table td { color: var(--text-secondary); vertical-align: middle; }
 .catalog-table .sku-cell { color: var(--accent-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .catalog-table .name-cell { color: var(--text); font-weight: 620; }
+.raw-supplier-name { display: block; margin-top: 0.15rem; color: var(--text-secondary); font-weight: 450; }
 .detail-link {
   padding: 0;
   color: inherit;
@@ -1114,6 +1115,24 @@ button:disabled, select:disabled, input:disabled {
 .admin-category-form textarea { min-height: 5rem; resize: vertical; }
 .admin-category-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) 0; }
 .admin-category-pagination span { color: var(--text-secondary); }
+.admin-supplier-page { overflow: hidden; }
+.admin-supplier-table { min-width: 0; }
+.admin-supplier-table .ui-data-table { min-width: 68rem; }
+.admin-supplier-details-panel, .admin-supplier-form-panel { margin-top: var(--space-3); }
+.admin-supplier-company-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); }
+.admin-supplier-company-details dd { overflow-wrap: anywhere; }
+.admin-supplier-contact-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.admin-supplier-contact-header p { color: var(--text-secondary); }
+.admin-supplier-contact-list { display: grid; gap: var(--space-2); }
+.admin-supplier-contact { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-3); padding: var(--space-3); background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.admin-supplier-contact > div:first-child { min-width: 0; }
+.admin-supplier-contact h4 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.admin-supplier-contact p { margin: 0.25rem 0 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.admin-supplier-primary { padding: 0.15rem 0.45rem; color: var(--text-secondary); background: var(--surface); border-radius: var(--radius-sm); font-size: var(--font-size-sm); font-weight: 500; }
+.admin-supplier-contact-form { display: grid; gap: var(--space-3); padding: var(--space-3) 0; }
+.admin-supplier-contact-form h4 { margin: 0; }
+.admin-supplier-primary-field { display: flex; align-items: center; gap: var(--space-2); }
+.admin-supplier-primary-field input { width: auto; }
 .admin-allergen-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 #admin-allergen-precautionary-panel { min-width: 0; }
 .admin-allergen-precautionary { display: grid; gap: var(--space-3); max-width: 48rem; }
@@ -1668,6 +1687,10 @@ button:disabled, select:disabled, input:disabled {
   .admin-category-details > div { min-width: 0; }
   .admin-category-children { padding-left: var(--space-2); }
   .admin-category-pagination { gap: var(--space-2); }
+  .admin-supplier-contact-header { align-items: stretch; flex-direction: column; }
+  .admin-supplier-contact { align-items: stretch; }
+  .admin-supplier-contact .admin-category-actions { width: 100%; }
+  .admin-supplier-contact .admin-category-actions .button { flex: 1; }
 
   .module-nav-item {
     min-height: 2.25rem;

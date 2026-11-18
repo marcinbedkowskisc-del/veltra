@@ -532,6 +532,22 @@ final class RawMaterialService
             ->orderBy('supplier_id')->pluck('supplier_id')->all();
     }
 
+    private function supplierNamesForMaterial(string $organizationId, string $materialId): array
+    {
+        return DB::table('raw_material_supplier_associations as associations')
+            ->join('organization_suppliers as suppliers', function ($join): void {
+                $join->on('suppliers.id', '=', 'associations.supplier_id')
+                    ->on('suppliers.organization_id', '=', 'associations.organization_id');
+            })
+            ->where('associations.organization_id', $organizationId)
+            ->where('associations.raw_material_id', $materialId)
+            ->whereRaw("coalesce(nullif(btrim(suppliers.display_name), ''), suppliers.legal_name) IS NOT NULL")
+            ->selectRaw('distinct coalesce(nullif(btrim(suppliers.display_name), \'\'), suppliers.legal_name) as display_name')
+            ->orderBy('display_name')
+            ->pluck('display_name')
+            ->all();
+    }
+
     private function syncSupplierAssociations(User $actor, Location $context, string $materialId, array $input): void
     {
         if (! array_key_exists('supplier_ids', $input)) {
@@ -906,7 +922,10 @@ final class RawMaterialService
 
     public function list(User $actor, Location $context, array $filters): array
     {
-        return $this->paginateCatalog($this->catalogQuery($actor, $context, $filters), $filters);
+        return $this->paginateCatalog(
+            $this->buildCatalogQuery($actor, $context, $filters, includeSupplierNames: true),
+            $filters,
+        );
     }
 
     public function workbench(User $actor, Location $context, array $filters): array
@@ -922,7 +941,10 @@ final class RawMaterialService
             ]);
         }
 
-        return $this->paginateCatalog($this->buildCatalogQuery($actor, $context, $filters, working: true), $filters);
+        return $this->paginateCatalog(
+            $this->buildCatalogQuery($actor, $context, $filters, working: true, includeSupplierNames: true),
+            $filters,
+        );
     }
 
     private function paginateCatalog(Builder $query, array $filters): array
@@ -944,6 +966,9 @@ final class RawMaterialService
                 'allergen_state' => $row->allergen_state,
                 'category' => $row->category_id === null ? null : ['id' => $row->category_id, 'name' => $row->category_name],
             ],
+            'supplier_names' => property_exists($row, 'supplier_names_json') && $row->supplier_names_json !== null
+                ? (json_decode($row->supplier_names_json, true, 512, JSON_THROW_ON_ERROR) ?: [])
+                : [],
         ])->all();
 
         return [
@@ -964,8 +989,14 @@ final class RawMaterialService
         return $this->buildCatalogQuery($actor, $context, $filters, $withOrdinal);
     }
 
-    private function buildCatalogQuery(User $actor, Location $context, array $filters, bool $withOrdinal = false, bool $working = false): Builder
-    {
+    private function buildCatalogQuery(
+        User $actor,
+        Location $context,
+        array $filters,
+        bool $withOrdinal = false,
+        bool $working = false,
+        bool $includeSupplierNames = false,
+    ): Builder {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $query = DB::table('raw_materials as materials')
             ->leftJoin('raw_material_revisions as revisions', function ($join) use ($working): void {
@@ -986,6 +1017,22 @@ final class RawMaterialService
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
+        if ($includeSupplierNames) {
+            $supplierNames = DB::table('raw_material_supplier_associations as associations')
+                ->join('organization_suppliers as suppliers', function ($join): void {
+                    $join->on('suppliers.id', '=', 'associations.supplier_id')
+                        ->on('suppliers.organization_id', '=', 'associations.organization_id');
+                })
+                ->select('associations.organization_id', 'associations.raw_material_id')
+                ->selectRaw("json_agg(DISTINCT coalesce(nullif(btrim(suppliers.display_name), ''), suppliers.legal_name)
+                    ORDER BY coalesce(nullif(btrim(suppliers.display_name), ''), suppliers.legal_name))::text AS supplier_names_json")
+                ->whereRaw("coalesce(nullif(btrim(suppliers.display_name), ''), suppliers.legal_name) IS NOT NULL")
+                ->groupBy('associations.organization_id', 'associations.raw_material_id');
+            $query->leftJoinSub($supplierNames, 'supplier_displays', function ($join): void {
+                $join->on('supplier_displays.organization_id', '=', 'materials.organization_id')
+                    ->on('supplier_displays.raw_material_id', '=', 'materials.id');
+            })->addSelect('supplier_displays.supplier_names_json');
+        }
         if ($working) {
             $query->whereNotNull('revisions.id')
                 ->addSelect('revisions.nominal_quantity', 'revisions.usable_quantity')
@@ -1089,6 +1136,7 @@ final class RawMaterialService
         $revision = $revisionId ? DB::table('raw_material_revisions')->where('id', $revisionId)->first() : null;
 
         $result = $this->presentMaterial($material, $revision);
+        $result['supplier_names'] = $this->supplierNamesForMaterial($actor->organization_id, $materialId);
         if (! $this->sharePolicy->isPrimaryContext($context) || ! $this->canInspectWorkingRevision($actor)
             || $revisionId !== ($material->working_revision_id ?? $material->pending_revision_id ?? $material->approved_revision_id)) {
             unset($result['version']);
@@ -1132,6 +1180,7 @@ final class RawMaterialService
             + app(RawMaterialHistoryService::class)->metadata($actor, $context, $material) + [
                 'pricing_input' => $this->pricingInputForEditor($actor, $revision),
                 'supplier_ids' => $this->supplierIdsForEditor($actor, $material->id),
+                'supplier_names' => $this->supplierNamesForMaterial($actor->organization_id, $material->id),
                 'allergen_declaration' => $declaration,
                 'storage_variants' => $this->storageVariantsForRevision($revision->id),
             ];

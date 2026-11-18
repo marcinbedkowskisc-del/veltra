@@ -59,6 +59,7 @@ const detail = (id = materialA, extra: Partial<RawMaterialDetail> = {}): RawMate
   sku: id === materialA ? 'RAW-000001' : 'RAW-000002',
   lifecycleState: 'ACTIVE',
   approvedRevisionId: `revision-${id}`,
+  supplierNames: [],
   revision: {
     id: `revision-${id}`,
     revisionNo: 3,
@@ -130,6 +131,7 @@ function row(id: string, ordinal: number, extra: Partial<CatalogPage['rows'][num
     ordinal,
     sku: `RAW-${String(ordinal).padStart(6, '0')}`,
     name: `Surowiec ${ordinal}`,
+    supplierNames: [],
     unit: 'g',
     nominalQuantity: '100.000000',
     usableQuantity: '80.000000',
@@ -209,7 +211,7 @@ beforeEach(() => {
     actions: { create: false, edit: false },
   }))
   reviseRawMaterialMock.mockRejectedValue(new Error('Brak domyślnej odpowiedzi PATCH.'))
-  fetchSuppliersMock.mockResolvedValue([{ id: 'supplier-1', code: 'SUP-01', name: 'Dostawca A' }])
+  fetchSuppliersMock.mockResolvedValue([{ id: 'supplier-1', name: 'Dostawca A' }])
   exportCatalogMock.mockResolvedValue({
     exportId: 'export-1',
     downloadUrl: '/api/v1/raw-materials/catalog-exports/selection/export-1/download',
@@ -901,7 +903,7 @@ describe('katalog surowców', () => {
       await vi.advanceTimersByTimeAsync(300)
       await Promise.resolve()
     })
-    const supplierOption = screen.getByRole('button', { name: 'Dostawca A (SUP-01)' })
+    const supplierOption = screen.getByRole('button', { name: 'Dostawca A' })
     fireEvent.click(supplierOption)
     await act(async () => { await Promise.resolve() })
     expect(fetchCatalogMock).toHaveBeenLastCalledWith(
@@ -970,7 +972,7 @@ describe('katalog surowców', () => {
     })
     const supplierInput = screen.getByRole('searchbox', { name: 'Dostawca' })
     fireEvent.change(supplierInput, { target: { value: 'Dostawca A' } })
-    fireEvent.click(await screen.findByRole('button', { name: 'Dostawca A (SUP-01)' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Dostawca A' }))
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtruj według statusu' }), {
       target: { value: 'DRAFT' },
     })
@@ -1306,7 +1308,7 @@ describe('katalog surowców', () => {
     expect(await screen.findByText('Moduł niedostępny')).toBeTruthy()
     expect(screen.queryByText('Sprawdzanie dostępu do filtra dostawcy…')).toBeNull()
     expect(screen.queryByRole('searchbox', { name: 'Dostawca' })).toBeNull()
-    expect(screen.queryByText('Dostawca poufny (SUP-SECRET)')).toBeNull()
+    expect(screen.queryByText('Dostawca poufny')).toBeNull()
     expect(screen.queryByText('123,46')).toBeNull()
     expect(screen.queryByText('Zaznaczono: 1')).toBeNull()
     expect((screen.getByRole('searchbox', {
@@ -1314,11 +1316,11 @@ describe('katalog surowców', () => {
     }) as HTMLInputElement).disabled).toBe(true)
 
     await act(async () => {
-      resolveSuppliers?.([{ id: 'secret-supplier', code: 'SUP-SECRET', name: 'Dostawca poufny' }])
+      resolveSuppliers?.([{ id: 'secret-supplier', name: 'Dostawca poufny' }])
       resolveRefresh?.(page([row(materialB, 2, { name: 'Stary wynik' })]))
       await Promise.resolve()
     })
-    expect(screen.queryByText('Dostawca poufny (SUP-SECRET)')).toBeNull()
+    expect(screen.queryByText('Dostawca poufny')).toBeNull()
     expect(screen.queryByText('Stary wynik')).toBeNull()
     expect(screen.queryByText('Sprawdzanie dostępu do filtra dostawcy…')).toBeNull()
   })

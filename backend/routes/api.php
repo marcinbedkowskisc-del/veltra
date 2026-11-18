@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\V1\AccountLinkController;
 use App\Http\Controllers\Api\V1\AdministrationAllergenController;
 use App\Http\Controllers\Api\V1\AdministrationCategoryController;
+use App\Http\Controllers\Api\V1\AdministrationSupplierController;
 use App\Http\Controllers\Api\V1\AdministrationUnitController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\LocationController;
@@ -50,6 +51,18 @@ Route::prefix('v1/administration')->middleware([
     Route::patch('/categories/{category}', [AdministrationCategoryController::class, 'update'])->whereUuid('category');
     Route::post('/categories/{category}/archive', [AdministrationCategoryController::class, 'archive'])->whereUuid('category');
     Route::post('/categories/{category}/restore', [AdministrationCategoryController::class, 'restore'])->whereUuid('category');
+    Route::get('/suppliers', [AdministrationSupplierController::class, 'index']);
+    Route::post('/suppliers', [AdministrationSupplierController::class, 'store']);
+    Route::get('/suppliers/similar-names', [AdministrationSupplierController::class, 'similarNames']);
+    Route::get('/suppliers/{supplier}', [AdministrationSupplierController::class, 'show'])->whereUuid('supplier');
+    Route::patch('/suppliers/{supplier}', [AdministrationSupplierController::class, 'update'])->whereUuid('supplier');
+    Route::post('/suppliers/{supplier}/archive', [AdministrationSupplierController::class, 'archive'])->whereUuid('supplier');
+    Route::post('/suppliers/{supplier}/restore', [AdministrationSupplierController::class, 'restore'])->whereUuid('supplier');
+    Route::post('/suppliers/{supplier}/contacts', [AdministrationSupplierController::class, 'storeContact'])->whereUuid('supplier');
+    Route::patch('/suppliers/{supplier}/contacts/{contact}', [AdministrationSupplierController::class, 'updateContact'])
+        ->whereUuid('supplier')->whereUuid('contact');
+    Route::delete('/suppliers/{supplier}/contacts/{contact}', [AdministrationSupplierController::class, 'removeContact'])
+        ->whereUuid('supplier')->whereUuid('contact');
     Route::get('/units', [AdministrationUnitController::class, 'index']);
     Route::post('/units', [AdministrationUnitController::class, 'store']);
     Route::patch('/units/{unit}', [AdministrationUnitController::class, 'update'])->whereUuid('unit');

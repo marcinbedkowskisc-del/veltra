@@ -49,6 +49,7 @@ export type CatalogRow = {
   ordinal: number
   sku: string
   name: string
+  supplierNames: string[]
   unit: string
   nominalQuantity: string | null
   usableQuantity: string | null
@@ -75,7 +76,7 @@ export type CatalogPage = {
 }
 
 export type CategoryOption = { id: string; name: string; code?: string; depth?: number; archivedAt?: string | null }
-export type SupplierOption = { id: string; code: string; name: string }
+export type SupplierOption = { id: string; name: string }
 
 const COST_BASES = new Set(['PLN/100g', 'PLN/100ml', 'PLN/pc'])
 const DECIMAL = /^-?\d{1,30}(?:\.\d{1,14})?$/
@@ -134,6 +135,10 @@ function parseRow(value: unknown): ParsedRow {
 
   const hasReferencePrice = Object.hasOwn(row, 'reference_net_price')
   const hasUsableCost = Object.hasOwn(row, 'usable_unit_cost') && Object.hasOwn(row, 'usable_cost_basis')
+  const supplierNames = row.supplier_names ?? []
+  if (!Array.isArray(supplierNames) || !supplierNames.every((name): name is string => typeof name === 'string')) {
+    throw new Error('Backend zwrócił nieprawidłową listę dostawców surowca.')
+  }
   if ((Object.hasOwn(row, 'usable_unit_cost') !== Object.hasOwn(row, 'usable_cost_basis'))
     || (hasReferencePrice && row.currency_code !== 'PLN')
     || (hasUsableCost && (typeof row.usable_cost_basis !== 'string' || !COST_BASES.has(row.usable_cost_basis)))) {
@@ -145,6 +150,7 @@ function parseRow(value: unknown): ParsedRow {
     ordinal: row.ordinal as number,
     sku: requiredString(row.sku, 'sku'),
     name: requiredString(revision.name, 'revision.name'),
+    supplierNames,
     unit: requiredString(revision.base_unit_code, 'revision.base_unit_code'),
     nominalQuantity: nullableDecimal(row.nominal_quantity, 'nominal_quantity'),
     usableQuantity: nullableDecimal(row.usable_quantity, 'usable_quantity'),
@@ -186,6 +192,7 @@ export function parseCatalogEnvelope(value: unknown): CatalogPage {
       ordinal: row.ordinal,
       sku: row.sku,
       name: row.name,
+      supplierNames: row.supplierNames,
       unit: row.unit,
       nominalQuantity: row.nominalQuantity,
       usableQuantity: row.usableQuantity,
@@ -234,14 +241,13 @@ export function parseSuppliers(value: unknown): SupplierOption[] {
     if (!isRecord(supplier)) throw new Error('Backend zwrócił nieprawidłową listę dostawców.')
     return {
       id: requiredString(supplier.id, 'supplier.id'),
-      code: requiredString(supplier.supplier_code, 'supplier.supplier_code'),
       name: requiredString(supplier.display_name, 'supplier.display_name'),
     }
   })
 }
 
 export function supplierLabel(supplier: SupplierOption): string {
-  return `${supplier.name} (${supplier.code})`
+  return supplier.name
 }
 
 export function catalogSearchParams(query: CatalogQuery): URLSearchParams {

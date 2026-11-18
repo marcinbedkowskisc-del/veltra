@@ -1,7 +1,7 @@
 # VELTRA 2.0 — raport implementacyjny PA-05
 
-Data: 2026-11-17
-Status techniczny: **implementacja lokalna; weryfikacja zmian PA-05 PASS**. Nie wdrażano.
+Data: 2026-11-18
+Status techniczny: **weryfikacja wizualna i regresyjna PA-05 PASS; gotowe do odbioru właściciela**. Nie wdrażano.
 
 ## 1. Podsumowanie
 
@@ -40,36 +40,73 @@ Trasy administracyjne są objęte istniejącymi middleware sesji, kontekstu oper
 
 W [RawMaterialService](backend/app/Domain/RawMaterials/RawMaterialService.php) nowy snapshot puli jest integrowany z istniejącym kontraktem RAW. Formularze deklaracji obsługują wiele alergenów oraz osobne rodzaje „ZAWIERA” i „MOŻE ZAWIERAĆ”; nowa deklaracja wybiera bieżący katalog, a edytowana historyczna deklaracja zachowuje swoją wersję. Wyszukiwarka pokazuje również źródła powiązania.
 
-## 4. Panel administracyjny
+## 4. Porównanie z zatwierdzonym UX PA
 
-[AllergenDictionaryManagementPage](frontend/src/administration/AllergenDictionaryManagementPage.tsx) jest podłączona do istniejącej nawigacji panelu administracyjnego. Widok udostępnia wybór słownika i wersji, filtrowanie i wyszukiwanie wpisów, podgląd historii, edycję i archiwizację mapowań oraz edycję i archiwizację definicji kanonicznych. Walidacja odpowiedzi API odrzuca błędne kształty danych; puste obiekty JSON są zachowywane jako obiekty.
+Wcześniejszy widok [AllergenDictionaryManagementPage](frontend/src/administration/AllergenDictionaryManagementPage.tsx) pokazywał jeden wybrany słownik naraz, co nie spełniało wymogu porównania źródeł z F27/F29 w [PA Functional UX Spec v1](https://drive.google.com/file/d/1uX7tTwoknjoPowCs5-TmbozcTKzPkSgo/view). Widok skorygowano bez zmiany pozostałych części aplikacji:
 
-## 5. Weryfikacja
+- 8 źródeł/jurysdykcji renderuje się równocześnie; Chiny mają dwie wybieralne wersje słownika, bieżącą i przyszłą.
+- Siatka ma 4 kolumny przy 1920 px, 3 przy 1440 px, 2 na pośredniej szerokości i 1 na mobile. Potwierdzono brak poziomego overflow przy 390 px.
+- Wpisy są pionowo ułożone w obrębie źródła. Każda kolumna pokazuje nazwę źródła i jurysdykcję, kod i status wersji, daty wejścia w życie/weryfikacji oraz własne wyszukiwanie, filtr statusu i akcję `+ Dodaj alergen`.
+- Karta rozdziela etykietami **Alergen kanoniczny** i **Wpis źródłowy** definicję wspólną od relacji specyficznej dla danego słownika.
+- Zachowano pojedynczą globalną nawigację VELTRA wraz z istniejącą nawigacją panelu administracyjnego.
 
-Backend działał przez izolowany wrapper `scripts/compose-test` i Docker context `veltra-test-isolated`; nie użyto Stage ani produkcji. Migrację testowano przez usługę `migrate-test`.
+Do przeglądu uruchomiono istniejący izolowany serwer Vite pod `http://localhost:5175/allergen-preview.html`. Pokazuje rzeczywiste komponenty React (`AdministrationPanel`, `AllergenDictionaryManagementPage`, `ApplicationShell`, `RawMaterialWorkflow`) z oznaczonymi, syntetycznymi odpowiedziami API opartymi na wybranych przykładach i strukturze MASTER v1.1. Nie używa Stage/produkcji ani prawdziwego backendu. Formularz dodawania pokazuje istniejący alergen kanoniczny „Sezam”; edycja zachowuje rozróżnienie między mapowaniem źródłowym a definicją kanoniczną. Widok RAW pokazuje `ZAWIERA` oraz `MOŻE ZAWIERAĆ`.
+
+Zrzuty z rzeczywistego podglądu (PNG, lokalnie):
+
+| Widok | Plik |
+|---|---|
+| Desktop 1920 × 1080 | [desktop-1920x1080.png](review/pa05-visual-acceptance/desktop-1920x1080.png) |
+| Desktop 1440 × 900 | [desktop-1440x900.png](review/pa05-visual-acceptance/desktop-1440x900.png) |
+| Mobile 390 × 844 — widok aplikacji/nawigacji | [mobile-390x844.png](review/pa05-visual-acceptance/mobile-390x844.png) |
+| Mobile 390 × 844 — pojedyncza kolumna źródłowa | [mobile-source-column-390x844.png](review/pa05-visual-acceptance/mobile-source-column-390x844.png) |
+| Dodawanie istniejącego alergenu kanonicznego | [add-existing-canonical-1440x900.png](review/pa05-visual-acceptance/add-existing-canonical-1440x900.png) |
+| Edycja wpisu źródłowego | [edit-source-entry-1440x900.png](review/pa05-visual-acceptance/edit-source-entry-1440x900.png) |
+| RAW — dwa rodzaje deklaracji | [raw-declaration-two-types-1440x900.png](review/pa05-visual-acceptance/raw-declaration-two-types-1440x900.png) |
+
+## 5. Analiza ośmiu wcześniejszych niepowodzeń backendu
+
+Pierwotny wynik `461 passed, 8 failed (4 498 assertions)` został rozłożony na przyczyny zamiast traktować go jako pojedynczą regresję:
+
+| Niepowodzenie | Klasyfikacja i dowód |
+|---|---|
+| `SystemPermissionManifestRegistryTest::registry limits the approved upgrade to its explicit scope` | Nieaktualne oczekiwanie testu: test zakładał brak wersji 2, ale `SystemPermissionManifestRegistry` jawnie udostępnia manifest `RECOVERY` v2. Istniejący `SystemPermissionProvisionerTest` potwierdza v2 i brak v3. Zaktualizowano test, by sprawdzał kontrakt odzyskiwania oraz odrzucenie v3; nie zmieniano manifestu. PA-05 ma osobną kontrolę administracyjną i nie wymaga wpisu PA w manifeście grantów RAW. |
+| 6 przypadków `RawMaterialCompatibilityAssessmentTest`: decyzje oparte na CLEAN, odrzucenie skanów pending/infected/error, zmiana rewizji dostawcy/surowca, workflow HTTP, historia po superseded revision oraz rollback audytu. Test autoryzacji, izolacji organizacji i readiness gate przeszedł już w pierwotnym uruchomieniu. | Błędy zależne od skanera, a nie od PA-05: przy niedostępnym ClamAV wyniki oczekiwane jako `CLEAN`/`INFECTED` wracały jako `ERROR`; ocena oparta na dokumencie CLEAN kończyła się następnie błędem nieprawidłowego dowodu/HTTP 409. Po uruchomieniu izolowanego ClamAV wszystkie sześć przypadków przeszło. |
+| `RawMaterialDocumentStorageTest::clamav scans synthetic clean and eicar samples` | Niedostępna zależność środowiskowa w pierwszym uruchomieniu; test wymagał ClamAV. Po uruchomieniu istniejącej izolowanej usługi skanowania test przechodzi i nadal sprawdza zarówno czysty, jak i EICAR-owy plik. Nie pomijano skanowania ani nie osłabiano blokad. |
+
+Nie potwierdzono regresji PA-05 w tych ośmiu przypadkach. Potwierdzono nieaktualną asercję testową dla manifestu i środowiskową niedostępność ClamAV, która powodowała pozostałe niepowodzenia oraz ich skutki kaskadowe.
+
+## 6. Weryfikacja końcowa
+
+Backend działał wyłącznie przez izolowany wrapper `scripts/compose-test` i Docker context `veltra-test-isolated`. Pełne uruchomienie `composer test` osiągnęło własny timeout procesu Composer (300 s), dlatego pełną suitę ponowiono bezpośrednio przez `php artisan test --no-coverage`; to uruchomienie zakończyło się poprawnie.
 
 | Zakres | Wynik |
 |---|---|
-| `scripts/compose-test run --build --rm migrate-test` | **PASS**; migracja i seeding w izolowanej bazie testowej. |
-| `php artisan test tests/Feature/AllergenDictionaryManagementTest.php tests/Feature/AdministrationAccessTest.php --no-coverage` w `backend-test` | **8 testów PASS, 146 asercji**; kompletność i idempotencja seeda, przyszły status źródła, puste obiekty JSON, autoryzacja, deduplikacja, audyt oraz nowe i historyczne snapshoty. |
-| Pełny backend suite w `backend-test` | **461 testów PASS, 8 FAIL (4 498 asercji)**. Alergeny przechodzą. Niepowodzenia dotyczą `SystemPermissionManifestRegistryTest` oraz `RawMaterialCompatibilityAssessmentTest`; log wykazuje niedostępność ClamAV i zależne błędy wyników skanowania/oceny. Nie ustalono baseline tych błędów, więc nie przypisuje się ich tej zmianie ani nie określa jako potwierdzonych błędów bazowych. |
-| `cd frontend && npm test` | **PASS: 18 plików, 210 testów**. |
-| `cd frontend && npm run build` | **PASS**: `tsc -b` i build Vite. |
-| `cd frontend && npm run lint` | Kod wyjścia 0; pozostało istniejące ostrzeżenie `react(only-export-components)` w `src/visualPreview.tsx:39`, poza zakresem PA-05. |
-| `scripts/compose-test run --rm backend-test vendor/bin/pint --test` dla 12 zmienionych plików PHP | **PASS**. |
+| `scripts/compose-test run --build --rm migrate-test` | **PASS**; migracja i seedowanie w izolowanej bazie testowej. |
+| Manifest, PA-05, administracyjny RBAC, RAW compatibility i document scanning | **28 testów PASS, 318 asercji**. |
+| Pełny backend suite: `php artisan test --no-coverage` w izolowanym środowisku backendowym | **469 testów PASS, 4 584 asercje, 0 failures**; w tym `SystemPermissionManifestRegistryTest`, RAW compatibility, ClamAV/EICAR, PA allergen dictionaries, administration access i authorization. |
+| PHP Pint dla zmienionego `SystemPermissionManifestRegistryTest.php` | **PASS** (`vendor/bin/pint --test`). |
+| `cd frontend && npm test` | **PASS: 19 plików, 213 testów**; dodano testy liczby kolumn, odizolowanego wyszukiwania, dodawania istniejącego alergenu i otwierania edycji. |
+| `cd frontend && npm run build` | **PASS**: TypeScript i build Vite. |
+| `cd frontend && npm run lint` | Kod wyjścia 0; jedyne ostrzeżenie pozostało w istniejącym `src/visualPreview.tsx:39` (`react(only-export-components)`). |
+| `npx vite build --config vite.interactive-preview.config.ts` | **PASS**; istniejący podgląd RAW i nowy podgląd PA-05 zbudowane w konfiguracji preview. |
+| Browser preview | **PASS**; rzeczywiste komponenty sprawdzone przy 1920 × 1080, 1440 × 900 i 390 × 844; 4/3/1 kolumn oraz brak overflow na mobile. |
 | `git diff --check` | **PASS**. |
 
-Podczas końcowej weryfikacji test wykrył brak destrukturyzacji `invalid` w wierszach deklaracji alergenów. Prop został poprawnie podłączony, a komplet frontendowych testów i build wykonano ponownie z wynikiem PASS.
+## 7. Ograniczenia i gotowość PA-05
 
-## 6. Ograniczenia i gotowość
+1. MASTER v1.1 nie stanowi certyfikacji prawnej. Nie wyprowadzono wyjątków z hierarchii i nie należy automatycznie komponować etykiet prawnych bez odrębnej weryfikacji.
+2. Podgląd przeglądarkowy używa wyłącznie syntetycznych odpowiedzi z realistycznymi przykładami MASTER v1.1; nie jest testem integracyjnym prawdziwego backendu.
+3. Nie użyto Stage ani produkcji, nie wykonano deployu ani pushu. Nie rozpoczęto PA-06.
+4. Pozostało istniejące ostrzeżenie lint w `src/visualPreview.tsx:39`, poza zakresem zmian.
 
-1. MASTER v1.1 nie stanowi certyfikacji prawnej; danych nie należy traktować jako podstawy do automatycznego komponowania etykiet prawnych bez wymaganej weryfikacji.
-2. Nie dodano domniemanych wyjątków wynikających z przynależności do grup. Wpisy ręczne mogą zawierać wyjątki wyłącznie wtedy, gdy administrator wprowadzi je jawnie.
-3. Pełny backend suite nie jest zielony z powodu 8 opisanych wyżej niepowodzeń; ich baseline pozostaje niezweryfikowany. Testy PA-05 i administracyjnej autoryzacji zakończyły się powodzeniem.
-4. Wykonano wyłącznie prace i testy lokalne w izolowanym środowisku testowym. Nie zmieniano Stage/produkcji i nie wykonano pushu.
+**Gotowość:** implementacja PA-05 i lokalna weryfikacja techniczna są gotowe do odbioru właściciela. Odbiór prawny danych MASTER i ostateczna akceptacja właściciela pozostają odrębnymi decyzjami.
 
-Implementacja jest gotowa do lokalnego przeglądu/odbioru z uwzględnieniem ograniczeń i wyników pełnego suite opisanych powyżej.
+## 8. Git
 
-## 7. Git
+Poprzednia implementacja PA-05 i jej commity pozostają nietknięte; właściciel wypchnął je wcześniej. Poniżej zapisano nowe lokalne commity z korektami i dowodami. Nie wykonano pushu.
 
-Lokalny commit implementacji: `7826df2fe3bdb7fccd7648592253601aa8d0be73` (`feat(admin): add international allergen dictionaries`). Raport jest zapisany oddzielnie. Nie wykonano pushu.
+| Zakres | Lokalny commit |
+|---|---|
+| Poprawka nieaktualnego oczekiwania testowego manifestu | `a890b12b22a2c41a1b3bae9d1ea3cbc24e066d48` |
+| Korekta UX, podgląd i testy PA-05 | `f7467f8b0c5d14d2eef72bd317de9125c98e97ba` |

@@ -9,6 +9,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(import.meta.dirname, 'visual-preview.html'),
+        allergens: resolve(import.meta.dirname, 'allergen-preview.html'),
       },
     },
   },

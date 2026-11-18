@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ApiError } from '../api'
 import {
   archiveAllergenEntry,
@@ -19,7 +19,10 @@ import {
   type CanonicalAllergen,
 } from './allergensApi'
 
+type StatusFilter = 'all' | 'active' | 'archived'
+type DictionaryColumn = { source: AllergenSource; version: AllergenDictionaryVersion }
 type EntryForm = {
+  versionId: string
   entry: AllergenSourceEntry | null
   canonicalMode: 'existing' | 'new'
   canonicalId: string
@@ -39,8 +42,12 @@ type EntryForm = {
   note: string
   metadata: string
 }
-
-type CanonicalForm = { allergen: CanonicalAllergen; canonicalPl: string; synonyms: string }
+type CanonicalForm = {
+  versionId: string
+  allergen: CanonicalAllergen
+  canonicalPl: string
+  synonyms: string
+}
 
 const STATUSES: Array<{ value: AllergenListingStatus; label: string }> = [
   { value: 'MANDATORY', label: 'Obowiązkowy' },
@@ -52,13 +59,27 @@ const STATUSES: Array<{ value: AllergenListingStatus; label: string }> = [
   { value: 'HISTORICAL', label: 'Historyczny' },
 ]
 
+const VERSION_STATUSES: Record<AllergenDictionaryVersion['status'], string> = {
+  ACTIVE: 'Aktywna',
+  ACTIVE_STANDARD: 'Aktywny standard',
+  FUTURE: 'Przyszła',
+  HISTORICAL: 'Historyczna',
+}
+
 function errorText(cause: unknown): string {
   if (cause instanceof ApiError) return Object.values(cause.errors).flat()[0] ?? cause.message
   return cause instanceof Error ? cause.message : 'Nie udało się wykonać operacji.'
 }
 
-function entryForm(entry: AllergenSourceEntry | null): EntryForm {
+function preferredVersion(source: AllergenSource): AllergenDictionaryVersion | undefined {
+  return source.versions.find((version) => version.status === 'ACTIVE')
+    ?? source.versions.find((version) => version.status === 'ACTIVE_STANDARD')
+    ?? source.versions[0]
+}
+
+function entryForm(entry: AllergenSourceEntry | null, versionId: string): EntryForm {
   return {
+    versionId,
     entry,
     canonicalMode: 'existing',
     canonicalId: entry?.allergenId ?? '',
@@ -104,22 +125,26 @@ function parseStringObject(value: string, label: string): Record<string, string>
   return result
 }
 
-function sourceVersionLabel(source: AllergenSource, version: AllergenDictionaryVersion): string {
-  return `${source.namePl} · ${version.code} · ${version.status}`
+function sourceVersionLabel(version: AllergenDictionaryVersion): string {
+  return `${version.code} · ${VERSION_STATUSES[version.status]}`
+}
+
+function dateLabel(value: string | null, emptyLabel: string): string {
+  return value ?? emptyLabel
 }
 
 export default function AllergenDictionaryManagementPage() {
   const [sources, setSources] = useState<AllergenSource[]>([])
   const [canonical, setCanonical] = useState<CanonicalAllergen[]>([])
-  const [entries, setEntries] = useState<AllergenSourceEntry[]>([])
-  const [history, setHistory] = useState<AllergenDictionaryHistoryEvent[]>([])
-  const [versionId, setVersionId] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived'>('active')
-  const [searchText, setSearchText] = useState('')
-  const [search, setSearch] = useState('')
+  const [selectedVersionIds, setSelectedVersionIds] = useState<Record<string, string>>({})
+  const [entriesByVersion, setEntriesByVersion] = useState<Record<string, AllergenSourceEntry[]>>({})
+  const [historyByVersion, setHistoryByVersion] = useState<Record<string, AllergenDictionaryHistoryEvent[]>>({})
+  const [searchBySource, setSearchBySource] = useState<Record<string, string>>({})
+  const [statusBySource, setStatusBySource] = useState<Record<string, StatusFilter>>({})
   const [form, setForm] = useState<EntryForm | null>(null)
   const [canonicalForm, setCanonicalForm] = useState<CanonicalForm | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [sourcesLoading, setSourcesLoading] = useState(true)
+  const [columnsLoading, setColumnsLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -131,53 +156,75 @@ export default function AllergenDictionaryManagementPage() {
     void Promise.all([fetchAllergenSources(controller.signal), fetchCanonicalAllergens(controller.signal)])
       .then(([sourceResult, canonicalResult]) => {
         if (controller.signal.aborted) return
+        setColumnsLoading(sourceResult.length > 0)
         setSources(sourceResult)
         setCanonical(canonicalResult)
-        setVersionId((current) => current || sourceResult.flatMap((source) => source.versions)
-          .find((version) => version.status === 'ACTIVE' || version.status === 'ACTIVE_STANDARD')?.id
-          || sourceResult[0]?.versions[0]?.id || '')
+        setSelectedVersionIds((current) => Object.fromEntries(sourceResult.flatMap((source) => {
+          const currentVersion = source.versions.find((version) => version.id === current[source.sourceCode])
+          const version = currentVersion ?? preferredVersion(source)
+          return version ? [[source.sourceCode, version.id]] : []
+        })))
+        setError(null)
       })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted) setError(errorText(cause))
+        if (!controller.signal.aborted) {
+          setColumnsLoading(false)
+          setError(errorText(cause))
+        }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
+        if (!controller.signal.aborted) setSourcesLoading(false)
       })
     return () => controller.abort()
   }, [reload])
 
+  const columns = useMemo<DictionaryColumn[]>(() => sources.flatMap((source) => {
+    const version = source.versions.find((item) => item.id === selectedVersionIds[source.sourceCode])
+      ?? preferredVersion(source)
+    return version ? [{ source, version }] : []
+  }), [sources, selectedVersionIds])
+
   useEffect(() => {
-    if (!versionId) return
+    if (columns.length === 0) {
+      return
+    }
     const controller = new AbortController()
-    void Promise.all([
-      fetchAllergenEntries(versionId, controller.signal),
-      fetchAllergenHistory(versionId, controller.signal),
-    ]).then(([entryResult, historyResult]) => {
+    void Promise.all(columns.map(async ({ version }) => {
+      const [entries, history] = await Promise.all([
+        fetchAllergenEntries(version.id, controller.signal),
+        fetchAllergenHistory(version.id, controller.signal),
+      ])
+      return { versionId: version.id, entries, history }
+    })).then((results) => {
       if (controller.signal.aborted) return
-      setEntries(entryResult)
-      setHistory(historyResult)
+      setEntriesByVersion((current) => ({
+        ...current,
+        ...Object.fromEntries(results.map(({ versionId, entries }) => [versionId, entries])),
+      }))
+      setHistoryByVersion((current) => ({
+        ...current,
+        ...Object.fromEntries(results.map(({ versionId, history }) => [versionId, history])),
+      }))
       setError(null)
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted) setError(errorText(cause))
     }).finally(() => {
-      if (!controller.signal.aborted) setLoading(false)
+      if (!controller.signal.aborted) setColumnsLoading(false)
     })
     return () => controller.abort()
-  }, [versionId, reload])
+  }, [columns, reload])
 
-  const selectedVersion = sources.flatMap((source) => source.versions.map((version) => ({ source, version })))
-    .find(({ version }) => version.id === versionId)
-  const visibleEntries = entries.filter((entry) => {
-    if (statusFilter === 'active' && entry.archivedAt !== null) return false
-    if (statusFilter === 'archived' && entry.archivedAt === null) return false
-    const normalized = search.trim().toLocaleLowerCase('pl-PL')
-    return !normalized || `${entry.canonicalPl} ${entry.sourceName} ${entry.allergenId}`
-      .toLocaleLowerCase('pl-PL').includes(normalized)
-  })
+  const loading = sourcesLoading || columnsLoading
+
+  function reloadDictionaries() {
+    setSourcesLoading(true)
+    setColumnsLoading(true)
+    setReload((value) => value + 1)
+  }
 
   async function submitEntry(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!form || !versionId) return
+    if (!form) return
     setBusy(true)
     setFormError(null)
     setSuccess(null)
@@ -205,15 +252,14 @@ export default function AllergenDictionaryManagementPage() {
           original_names: parseStringObject(form.originalNames, 'Nazwy oryginalne'),
         } : undefined
         if (newCanonical) {
-          await createAllergenEntry(versionId, { ...input, new_canonical: newCanonical })
+          await createAllergenEntry(form.versionId, { ...input, new_canonical: newCanonical })
         } else {
-          await createAllergenEntry(versionId, { ...input, canonical_allergen_id: form.canonicalId })
+          await createAllergenEntry(form.versionId, { ...input, canonical_allergen_id: form.canonicalId })
         }
       }
       setForm(null)
       setSuccess(form.entry ? 'Zapisano wpis słownika.' : 'Dodano wpis słownika.')
-      setLoading(true)
-      setReload((value) => value + 1)
+      reloadDictionaries()
     } catch (cause) {
       setFormError(errorText(cause))
     } finally {
@@ -223,18 +269,17 @@ export default function AllergenDictionaryManagementPage() {
 
   async function saveCanonical(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!canonicalForm || !versionId) return
+    if (!canonicalForm) return
     setBusy(true)
     setFormError(null)
     try {
-      await updateCanonicalAllergen(versionId, canonicalForm.allergen.id, {
+      await updateCanonicalAllergen(canonicalForm.versionId, canonicalForm.allergen.id, {
         canonical_pl: canonicalForm.canonicalPl.trim(),
         synonyms_pl: canonicalForm.synonyms.split(',').map((item) => item.trim()).filter(Boolean),
       })
       setCanonicalForm(null)
       setSuccess('Zapisano definicję kanoniczną.')
-      setLoading(true)
-      setReload((value) => value + 1)
+      reloadDictionaries()
     } catch (cause) {
       setFormError(errorText(cause))
     } finally {
@@ -249,8 +294,7 @@ export default function AllergenDictionaryManagementPage() {
     try {
       await archiveAllergenEntry(entry.id)
       setSuccess('Zarchiwizowano powiązanie ze słownikiem.')
-      setLoading(true)
-      setReload((value) => value + 1)
+      reloadDictionaries()
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -264,10 +308,9 @@ export default function AllergenDictionaryManagementPage() {
     setError(null)
     setSuccess(null)
     try {
-      await archiveCanonicalAllergen(versionId, entry.allergenId)
+      await archiveCanonicalAllergen(entry.dictionaryVersionId, entry.allergenId)
       setSuccess('Zarchiwizowano alergen kanoniczny.')
-      setLoading(true)
-      setReload((value) => value + 1)
+      reloadDictionaries()
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -279,86 +322,138 @@ export default function AllergenDictionaryManagementPage() {
     <header className="admin-category-header">
       <div>
         <h2 id="admin-allergen-title">Międzynarodowe słowniki alergenów</h2>
-        <p>Wersjonowane dane źródłowe, wspólna pula kanoniczna i historia zmian. Archiwizacja nie zmienia historycznych deklaracji RAW.</p>
+        <p>Porównuj wpisy źródłowe i ich wspólne definicje kanoniczne. Archiwizacja nie zmienia historycznych deklaracji RAW.</p>
       </div>
-      <button type="button" className="button button-primary" disabled={busy || loading || !versionId}
-        onClick={() => { setForm(entryForm(null)); setFormError(null) }}>Dodaj alergen do słownika</button>
     </header>
 
     {success && <p className="notice notice-success" role="status">{success}</p>}
     {error && <p className="inline-error" role="alert">{error}</p>}
 
-    <div className="admin-allergen-filters">
-      <label className="create-form-field">Słownik i wersja
-        <select value={versionId} onChange={(event) => {
-          setLoading(true)
-          setVersionId(event.target.value)
-          setForm(null)
-        }}>
-          {sources.flatMap((source) => source.versions.map((version) =>
-            <option key={version.id} value={version.id}>{sourceVersionLabel(source, version)}</option>))}
-        </select>
-      </label>
-      <form className="admin-allergen-search" onSubmit={(event) => {
-        event.preventDefault()
-        setSearch(searchText)
-      }}>
-        <label className="create-form-field">Szukaj alergenu
-          <input value={searchText} onChange={(event) => setSearchText(event.target.value)} />
-        </label>
-        <button type="submit" className="button button-secondary">Szukaj</button>
-      </form>
-      <label className="create-form-field">Status wpisu
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
-          <option value="active">Aktywne</option><option value="archived">Archiwalne</option><option value="all">Wszystkie</option>
-        </select>
-      </label>
-    </div>
+    {sourcesLoading ? <p role="status">Ładowanie słowników alergenów…</p> : columns.length === 0
+      ? <p className="admin-allergen-empty">Brak skonfigurowanych słowników źródłowych.</p>
+      : <div className="admin-allergen-source-grid" aria-label="Słowniki źródłowe alergenów">
+        {columns.map(({ source, version }) => {
+          const sourceEntries = entriesByVersion[version.id] ?? []
+          const filter = statusBySource[source.sourceCode] ?? 'active'
+          const normalizedSearch = (searchBySource[source.sourceCode] ?? '').trim().toLocaleLowerCase('pl-PL')
+          const visibleEntries = sourceEntries.filter((entry) => {
+            if (filter === 'active' && entry.archivedAt !== null) return false
+            if (filter === 'archived' && entry.archivedAt === null) return false
+            return !normalizedSearch || `${entry.canonicalPl} ${entry.sourceName} ${entry.allergenId}`
+              .toLocaleLowerCase('pl-PL').includes(normalizedSearch)
+          })
 
-    {selectedVersion && <dl className="admin-allergen-version-meta">
-      <div><dt>Wersja</dt><dd>{selectedVersion.version.code}</dd></div>
-      <div><dt>Organ</dt><dd>{selectedVersion.version.authority}</dd></div>
-      <div><dt>Jurysdykcja</dt><dd>{selectedVersion.source.jurisdiction}</dd></div>
-      <div><dt>Obowiązuje od</dt><dd>{selectedVersion.version.effectiveFrom ?? 'Nie określono'}</dd></div>
-      <div><dt>Obowiązuje do</dt><dd>{selectedVersion.version.effectiveUntil ?? 'Bez daty końcowej'}</dd></div>
-      <div><dt>Weryfikacja źródła</dt><dd>{selectedVersion.version.lastVerifiedOn ?? 'Nie określono'}</dd></div>
-      <div><dt>Ostatnia ręczna zmiana</dt><dd>{selectedVersion.version.lastManualEditAt ?? 'Brak'}</dd></div>
-      <div><dt>Aktywne wpisy</dt><dd>{selectedVersion.version.entryCount}</dd></div>
-      {selectedVersion.version.officialUrl && <div><dt>Źródło</dt><dd><a href={selectedVersion.version.officialUrl} target="_blank" rel="noreferrer">Oficjalny dokument</a></dd></div>}
-      {Object.keys(selectedVersion.version.metadata).length > 0 && <div><dt>Metadane wersji</dt><dd><details>
-        <summary>Pokaż metadane</summary><pre>{JSON.stringify(selectedVersion.version.metadata, null, 2)}</pre>
-      </details></dd></div>}
-    </dl>}
+          return <section className="admin-allergen-column" key={source.sourceCode} aria-labelledby={`allergen-source-${source.sourceCode}`}>
+            <header className="admin-allergen-column-header">
+              <div className="admin-allergen-source-title">
+                <h3 id={`allergen-source-${source.sourceCode}`}>{source.namePl}</h3>
+                <span className="admin-allergen-jurisdiction">{source.jurisdiction}</span>
+              </div>
+              {source.versions.length > 1
+                ? <label className="create-form-field">Wersja słownika
+                  <select value={version.id} disabled={loading} onChange={(event) => {
+                    setSelectedVersionIds((current) => ({ ...current, [source.sourceCode]: event.target.value }))
+                    setColumnsLoading(true)
+                  }}>
+                    {source.versions.map((item) => <option key={item.id} value={item.id}>{sourceVersionLabel(item)}</option>)}
+                  </select>
+                </label>
+                : <p className="admin-allergen-version-code">{version.code}</p>}
+              <div className="admin-allergen-version-state">
+                <span className={`admin-allergen-status status-${version.status.toLowerCase()}`}>
+                  {VERSION_STATUSES[version.status]}
+                </span>
+                <span>Obowiązuje od: {dateLabel(version.effectiveFrom, 'nie określono')}</span>
+                {version.effectiveUntil && <span>Do: {version.effectiveUntil}</span>}
+                <span>Zweryfikowano: {dateLabel(version.lastVerifiedOn, 'nie określono')}</span>
+                <span>Ręczna aktualizacja: {version.lastManualEditAt ?? 'brak'}</span>
+                {version.officialUrl && <a href={version.officialUrl} target="_blank" rel="noreferrer">Oficjalne źródło</a>}
+              </div>
+              <label className="admin-allergen-column-search">Szukaj w tym słowniku
+                <input type="search" value={searchBySource[source.sourceCode] ?? ''} onChange={(event) =>
+                  setSearchBySource((current) => ({ ...current, [source.sourceCode]: event.target.value }))} />
+              </label>
+              <label className="admin-allergen-column-filter">Status wpisu
+                <select value={filter} onChange={(event) => {
+                  const value = event.target.value
+                  if (value === 'all' || value === 'active' || value === 'archived') {
+                    setStatusBySource((current) => ({ ...current, [source.sourceCode]: value }))
+                  }
+                }}>
+                  <option value="active">Aktywne</option><option value="archived">Archiwalne</option><option value="all">Wszystkie</option>
+                </select>
+              </label>
+              <button type="button" className="button button-primary admin-allergen-add"
+                disabled={busy || loading}
+                onClick={() => { setForm(entryForm(null, version.id)); setFormError(null) }}>+ Dodaj alergen</button>
+            </header>
 
-    {loading ? <p role="status">Ładowanie słowników alergenów…</p> : visibleEntries.length === 0
-      ? <p className="admin-allergen-empty">Brak wpisów spełniających wybrane kryteria.</p>
-      : <div className="admin-allergen-grid">
-        {visibleEntries.map((entry) => {
-          const canonicalDefinition = canonical.find((item) => item.id === entry.allergenId)
-          return <article className="admin-allergen-card" key={entry.id}>
-          <header><div><h3>{entry.canonicalPl}</h3><p>{entry.sourceName} · {entry.allergenId}</p></div>
-            <span>{entry.archivedAt ? 'Archiwalny' : STATUSES.find((item) => item.value === entry.status)?.label}</span></header>
-          <dl>
-            <div><dt>Reguła</dt><dd>{entry.listingRule}</dd></div>
-            <div><dt>Zakres</dt><dd>{entry.sourceScope}</dd></div>
-            <div><dt>Data wejścia w życie</dt><dd>{entry.legalEffectiveFrom ?? 'Nie określono'}</dd></div>
-            <div><dt>Koniec okresu przejściowego</dt><dd>{entry.transitionEnd ?? 'Nie określono'}</dd></div>
-          </dl>
-          {entry.threshold && <p><strong>Próg:</strong> <code>{JSON.stringify(entry.threshold)}</code></p>}
-          {entry.exceptions.length > 0 && <div><strong>Wyjątki:</strong><ul>{entry.exceptions.map((item, index) => <li key={`${entry.id}-exception-${index}`}>{item}</li>)}</ul></div>}
-          {entry.note && <p>{entry.note}</p>}
-          {entry.metadata && Object.keys(entry.metadata).length > 0 && <details><summary>Metadane źródłowe</summary><pre>{JSON.stringify(entry.metadata, null, 2)}</pre></details>}
-          <div className="admin-category-actions">
-            {!entry.archivedAt && <button type="button" className="button button-secondary" disabled={busy}
-              onClick={() => { setForm(entryForm(entry)); setFormError(null) }}>Edytuj wpis</button>}
-            {!entry.archivedAt && entry.canonicalStatus === 'ACTIVE' && canonicalDefinition && <>
-              <button type="button" className="button button-secondary" disabled={busy}
-                onClick={() => setCanonicalForm({ allergen: canonicalDefinition, canonicalPl: entry.canonicalPl, synonyms: canonicalDefinition.synonymsPl.join(', ') })}>Edytuj nazwę kanoniczną</button>
-              <button type="button" className="button button-secondary" disabled={busy} onClick={() => void archiveCanonicalEntry(entry)}>Archiwizuj alergen globalnie</button>
-            </>}
-            {!entry.archivedAt && <button type="button" className="button button-secondary" disabled={busy} onClick={() => void archiveEntry(entry)}>Archiwizuj powiązanie</button>}
-          </div>
-        </article>
+            {loading && !entriesByVersion[version.id]
+              ? <p role="status">Ładowanie wpisów…</p>
+              : visibleEntries.length === 0
+                ? <p className="admin-allergen-empty">{sourceEntries.length === 0 ? 'Brak wpisów w tej wersji.' : 'Brak wyników dla filtra.'}</p>
+                : <div className="admin-allergen-entries">
+                  {visibleEntries.map((entry) => {
+                    const canonicalDefinition = canonical.find((item) => item.id === entry.allergenId)
+                    return <article className="admin-allergen-entry" key={entry.id}>
+                      <div className="admin-allergen-canonical">
+                        <span>Alergen kanoniczny</span>
+                        <strong>{entry.canonicalPl}</strong>
+                        <code>{entry.allergenId}</code>
+                      </div>
+                      <div className="admin-allergen-source-entry">
+                        <span>Wpis źródłowy</span>
+                        <strong>{entry.sourceName}</strong>
+                        <span className={`admin-allergen-status status-${entry.status.toLowerCase()}`}>
+                          {entry.archivedAt ? 'Archiwalny' : STATUSES.find((item) => item.value === entry.status)?.label}
+                        </span>
+                      </div>
+                      <dl>
+                        <div><dt>Reguła</dt><dd>{entry.listingRule}</dd></div>
+                        <div><dt>Zakres</dt><dd>{entry.sourceScope}</dd></div>
+                        {entry.legalEffectiveFrom && <div><dt>Data wejścia w życie</dt><dd>{entry.legalEffectiveFrom}</dd></div>}
+                        {entry.transitionEnd && <div><dt>Koniec okresu przejściowego</dt><dd>{entry.transitionEnd}</dd></div>}
+                      </dl>
+                      {entry.threshold && <p><strong>Próg:</strong> <code>{JSON.stringify(entry.threshold)}</code></p>}
+                      {entry.exceptions.length > 0 && <div><strong>Wyjątki:</strong><ul>{entry.exceptions.map((item, index) =>
+                        <li key={`${entry.id}-exception-${index}`}>{item}</li>)}</ul></div>}
+                      {entry.note && <p>{entry.note}</p>}
+                      {entry.metadata && Object.keys(entry.metadata).length > 0 && <details>
+                        <summary>Metadane źródłowe</summary><pre>{JSON.stringify(entry.metadata, null, 2)}</pre>
+                      </details>}
+                      <div className="admin-category-actions admin-allergen-entry-actions">
+                        {!entry.archivedAt && <button type="button" className="button button-secondary" disabled={busy}
+                          onClick={() => { setForm(entryForm(entry, version.id)); setFormError(null) }}>Edytuj wpis</button>}
+                        {!entry.archivedAt && entry.canonicalStatus === 'ACTIVE' && canonicalDefinition && <>
+                          <button type="button" className="button button-secondary" disabled={busy}
+                            onClick={() => setCanonicalForm({
+                              versionId: version.id,
+                              allergen: canonicalDefinition,
+                              canonicalPl: entry.canonicalPl,
+                              synonyms: canonicalDefinition.synonymsPl.join(', '),
+                            })}>Edytuj nazwę kanoniczną</button>
+                          <button type="button" className="button button-secondary" disabled={busy}
+                            onClick={() => void archiveCanonicalEntry(entry)}>Archiwizuj alergen globalnie</button>
+                        </>}
+                        {!entry.archivedAt && <button type="button" className="button button-secondary" disabled={busy}
+                          onClick={() => void archiveEntry(entry)}>Archiwizuj powiązanie</button>}
+                      </div>
+                    </article>
+                  })}
+                </div>}
+
+            <details className="admin-allergen-column-history">
+              <summary>Historia zmian ({(historyByVersion[version.id] ?? []).length})</summary>
+              {(historyByVersion[version.id] ?? []).length === 0
+                ? <p>Brak ręcznych zmian w tej wersji.</p>
+                : <ol>{(historyByVersion[version.id] ?? []).map((event) => <li key={event.id}>
+                  <strong>{event.event_code}</strong> · {new Date(event.occurred_at).toLocaleString('pl-PL')}
+                  <details><summary>Szczegóły zmiany</summary>
+                    <pre>{JSON.stringify({ before: event.before, after: event.after }, null, 2)}</pre>
+                  </details>
+                </li>)}</ol>}
+            </details>
+          </section>
         })}
       </div>}
 
@@ -373,32 +468,52 @@ export default function AllergenDictionaryManagementPage() {
         {form.canonicalMode === 'existing' ? <label className="create-form-field">Alergen kanoniczny
           <select required value={form.canonicalId} onChange={(event) => setForm({ ...form, canonicalId: event.target.value })}>
             <option value="">Wybierz alergen</option>
-            {canonical.filter((item) => item.recordStatus === 'ACTIVE').map((item) => <option key={item.id} value={item.id}>{item.canonicalPl} · {item.id}</option>)}
+            {canonical.filter((item) => item.recordStatus === 'ACTIVE').map((item) =>
+              <option key={item.id} value={item.id}>{item.canonicalPl} · {item.id}</option>)}
           </select>
         </label> : <>
-          <label className="create-form-field">Identyfikator kanoniczny<input required maxLength={40} pattern="[A-Z][A-Z0-9_]{0,39}" value={form.newCanonicalId} onChange={(event) => setForm({ ...form, newCanonicalId: event.target.value })} /></label>
-          <label className="create-form-field">Nazwa kanoniczna<input required maxLength={160} value={form.canonicalPl} onChange={(event) => setForm({ ...form, canonicalPl: event.target.value })} /></label>
+          <label className="create-form-field">Identyfikator kanoniczny<input required maxLength={40}
+            pattern="[A-Z][A-Z0-9_]{0,39}" value={form.newCanonicalId}
+            onChange={(event) => setForm({ ...form, newCanonicalId: event.target.value })} /></label>
+          <label className="create-form-field">Nazwa kanoniczna<input required maxLength={160} value={form.canonicalPl}
+            onChange={(event) => setForm({ ...form, canonicalPl: event.target.value })} /></label>
           <label className="create-form-field">Alergen nadrzędny
             <select value={form.parentId} onChange={(event) => setForm({ ...form, parentId: event.target.value })}>
-              <option value="">Brak</option>{canonical.filter((item) => item.recordStatus === 'ACTIVE').map((item) => <option key={item.id} value={item.id}>{item.canonicalPl}</option>)}
+              <option value="">Brak</option>{canonical.filter((item) => item.recordStatus === 'ACTIVE').map((item) =>
+                <option key={item.id} value={item.id}>{item.canonicalPl}</option>)}
             </select>
           </label>
-          <label className="create-form-field">Polskie synonimy, oddzielone przecinkami<input value={form.synonyms} onChange={(event) => setForm({ ...form, synonyms: event.target.value })} /></label>
-          <label className="create-form-field admin-allergen-wide">Nazwy oryginalne — obiekt JSON<textarea required value={form.originalNames} onChange={(event) => setForm({ ...form, originalNames: event.target.value })} /></label>
+          <label className="create-form-field">Polskie synonimy, oddzielone przecinkami<input value={form.synonyms}
+            onChange={(event) => setForm({ ...form, synonyms: event.target.value })} /></label>
+          <label className="create-form-field admin-allergen-wide">Nazwy oryginalne — obiekt JSON<textarea required
+            value={form.originalNames} onChange={(event) => setForm({ ...form, originalNames: event.target.value })} /></label>
         </>}
       </>}
-      <label className="create-form-field">Nazwa w źródle<input required maxLength={180} value={form.sourceName} onChange={(event) => setForm({ ...form, sourceName: event.target.value })} /></label>
-      <label className="create-form-field">Status źródłowy<select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as AllergenListingStatus })}>
+      <p className="admin-allergen-form-context admin-allergen-wide">
+        Słownik docelowy: {columns.find(({ version }) => version.id === form.versionId)?.version.code ?? form.versionId}
+      </p>
+      <label className="create-form-field">Nazwa w źródle<input required maxLength={180} value={form.sourceName}
+        onChange={(event) => setForm({ ...form, sourceName: event.target.value })} /></label>
+      <label className="create-form-field">Status źródłowy<select value={form.status}
+        onChange={(event) => setForm({ ...form, status: event.target.value as AllergenListingStatus })}>
         {STATUSES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
       </select></label>
-      <label className="create-form-field">Reguła źródłowa<input required maxLength={64} value={form.listingRule} onChange={(event) => setForm({ ...form, listingRule: event.target.value })} /></label>
-      <label className="create-form-field">Zakres źródła<input required maxLength={40} value={form.sourceScope} onChange={(event) => setForm({ ...form, sourceScope: event.target.value })} /></label>
-      <label className="create-form-field">Data wejścia w życie<input type="date" value={form.effectiveFrom} onChange={(event) => setForm({ ...form, effectiveFrom: event.target.value })} /></label>
-      <label className="create-form-field">Koniec okresu przejściowego<input type="date" value={form.transitionEnd} onChange={(event) => setForm({ ...form, transitionEnd: event.target.value })} /></label>
-      <label className="create-form-field">Próg — obiekt JSON<textarea value={form.threshold} onChange={(event) => setForm({ ...form, threshold: event.target.value })} /></label>
-      <label className="create-form-field">Wyjątki — jeden wpis w wierszu<textarea value={form.exceptions} onChange={(event) => setForm({ ...form, exceptions: event.target.value })} /></label>
-      <label className="create-form-field">Notatka<textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
-      <label className="create-form-field admin-allergen-wide">Metadane — obiekt JSON<textarea required value={form.metadata} onChange={(event) => setForm({ ...form, metadata: event.target.value })} /></label>
+      <label className="create-form-field">Reguła źródłowa<input required maxLength={64} value={form.listingRule}
+        onChange={(event) => setForm({ ...form, listingRule: event.target.value })} /></label>
+      <label className="create-form-field">Zakres źródła<input required maxLength={40} value={form.sourceScope}
+        onChange={(event) => setForm({ ...form, sourceScope: event.target.value })} /></label>
+      <label className="create-form-field">Data wejścia w życie<input type="date" value={form.effectiveFrom}
+        onChange={(event) => setForm({ ...form, effectiveFrom: event.target.value })} /></label>
+      <label className="create-form-field">Koniec okresu przejściowego<input type="date" value={form.transitionEnd}
+        onChange={(event) => setForm({ ...form, transitionEnd: event.target.value })} /></label>
+      <label className="create-form-field">Próg — obiekt JSON<textarea value={form.threshold}
+        onChange={(event) => setForm({ ...form, threshold: event.target.value })} /></label>
+      <label className="create-form-field">Wyjątki — jeden wpis w wierszu<textarea value={form.exceptions}
+        onChange={(event) => setForm({ ...form, exceptions: event.target.value })} /></label>
+      <label className="create-form-field">Notatka<textarea value={form.note}
+        onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
+      <label className="create-form-field admin-allergen-wide">Metadane — obiekt JSON<textarea required value={form.metadata}
+        onChange={(event) => setForm({ ...form, metadata: event.target.value })} /></label>
       {formError && <p className="inline-error admin-allergen-wide" role="alert">{formError}</p>}
       <div className="admin-category-actions admin-allergen-wide">
         <button type="submit" className="button button-primary" disabled={busy}>Zapisz wpis</button>
@@ -408,21 +523,15 @@ export default function AllergenDictionaryManagementPage() {
 
     {canonicalForm && <form className="admin-allergen-form admin-category-form" onSubmit={(event) => void saveCanonical(event)}>
       <h3>Edytuj nazwę kanoniczną</h3>
-      <label className="create-form-field">Nazwa polska<input required maxLength={160} value={canonicalForm.canonicalPl} onChange={(event) => setCanonicalForm({ ...canonicalForm, canonicalPl: event.target.value })} /></label>
-      <label className="create-form-field">Synonimy, oddzielone przecinkami<input value={canonicalForm.synonyms} onChange={(event) => setCanonicalForm({ ...canonicalForm, synonyms: event.target.value })} /></label>
-      {formError && <p className="inline-error" role="alert">{formError}</p>}
-      <div className="admin-category-actions"><button type="submit" className="button button-primary" disabled={busy}>Zapisz nazwę</button>
-        <button type="button" className="button button-secondary" disabled={busy} onClick={() => setCanonicalForm(null)}>Anuluj</button></div>
+      <label className="create-form-field">Nazwa polska<input required maxLength={160} value={canonicalForm.canonicalPl}
+        onChange={(event) => setCanonicalForm({ ...canonicalForm, canonicalPl: event.target.value })} /></label>
+      <label className="create-form-field">Synonimy, oddzielone przecinkami<input value={canonicalForm.synonyms}
+        onChange={(event) => setCanonicalForm({ ...canonicalForm, synonyms: event.target.value })} /></label>
+      {formError && <p className="inline-error admin-allergen-wide" role="alert">{formError}</p>}
+      <div className="admin-category-actions admin-allergen-wide">
+        <button type="submit" className="button button-primary" disabled={busy}>Zapisz nazwę</button>
+        <button type="button" className="button button-secondary" disabled={busy} onClick={() => setCanonicalForm(null)}>Anuluj</button>
+      </div>
     </form>}
-
-    <section className="admin-allergen-history" aria-labelledby="allergen-history-title">
-      <h3 id="allergen-history-title">Historia zmian — ostatnie 200 wpisów</h3>
-      {history.length === 0 ? <p>Brak ręcznych zmian w tej wersji słownika.</p> : <ol>
-        {history.map((event) => <li key={event.id}>
-          <strong>{event.event_code}</strong> · {new Date(event.occurred_at).toLocaleString('pl-PL')} · użytkownik {event.actor_user_id ?? 'nieznany'}
-          <details><summary>Szczegóły zmiany</summary><pre>{JSON.stringify({ before: event.before, after: event.after }, null, 2)}</pre></details>
-        </li>)}
-      </ol>}
-    </section>
   </section>
 }

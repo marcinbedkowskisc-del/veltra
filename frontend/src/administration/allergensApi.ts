@@ -101,7 +101,7 @@ function parseVersion(value: unknown): AllergenDictionaryVersion {
     || !isStringOrNull(value.last_manual_edit_at)
     || !isObjectRecord(value.metadata)
     || !Number.isInteger(value.entry_count) || Number(value.entry_count) < 0) {
-    throw new Error('Backend zwrócił nieprawidłową wersję słownika alergenów.')
+    throw new Error('Nie udało się odczytać informacji o wersji listy alergenów.')
   }
   return {
     id: value.id,
@@ -122,7 +122,7 @@ function parseSource(value: unknown): AllergenSource {
   if (!isRecord(value) || typeof value.source_code !== 'string'
     || typeof value.jurisdiction !== 'string' || typeof value.name_pl !== 'string'
     || !Array.isArray(value.versions)) {
-    throw new Error('Backend zwrócił nieprawidłowy słownik źródłowy alergenów.')
+    throw new Error('Nie udało się odczytać listy alergenów.')
   }
   return {
     sourceCode: value.source_code,
@@ -141,11 +141,11 @@ function parseCanonical(value: unknown): CanonicalAllergen {
     || !isStringOrNull(value.archived_at)
     || !Array.isArray(value.source_codes) || !value.source_codes.every((item) => typeof item === 'string')
     || !Number.isInteger(value.relationship_count) || Number(value.relationship_count) < 0) {
-    throw new Error('Backend zwrócił nieprawidłowy alergen kanoniczny.')
+    throw new Error('Nie udało się odczytać nazwy alergenu.')
   }
   const originalNames: Record<string, string> = {}
   for (const [language, name] of Object.entries(value.original_names)) {
-    if (typeof name !== 'string') throw new Error('Backend zwrócił nieprawidłowe nazwy źródłowe alergenu.')
+    if (typeof name !== 'string') throw new Error('Nie udało się odczytać nazwy alergenu w innym języku.')
     originalNames[language] = name
   }
   return {
@@ -172,7 +172,7 @@ function parseEntry(value: unknown): AllergenSourceEntry {
     || !(value.threshold === null || isObjectRecord(value.threshold))
     || !Array.isArray(value.exceptions) || !value.exceptions.every((item) => typeof item === 'string')
     || !isStringOrNull(value.note) || !isObjectRecord(value.metadata) || !isStringOrNull(value.archived_at)) {
-    throw new Error('Backend zwrócił nieprawidłowy wpis słownika alergenów.')
+    throw new Error('Nie udało się odczytać pozycji z listy alergenów.')
   }
   return {
     id: value.id,
@@ -201,17 +201,17 @@ function parseArray<T>(value: unknown, parser: (item: unknown) => T, message: st
 
 export async function fetchAllergenSources(signal?: AbortSignal): Promise<AllergenSource[]> {
   const response = await requestEnvelope('/api/v1/administration/allergens/dictionaries', 'GET', undefined, { signal })
-  return parseArray(response.data, parseSource, 'Backend zwrócił nieprawidłowe słowniki źródłowe.')
+  return parseArray(response.data, parseSource, 'Nie udało się odczytać list alergenów.')
 }
 
 export async function fetchCanonicalAllergens(signal?: AbortSignal): Promise<CanonicalAllergen[]> {
   const response = await requestEnvelope(`${API}/canonical`, 'GET', undefined, { signal })
-  return parseArray(response.data, parseCanonical, 'Backend zwrócił nieprawidłową pulę alergenów.')
+  return parseArray(response.data, parseCanonical, 'Nie udało się odczytać listy alergenów.')
 }
 
 export async function fetchAllergenEntries(versionId: string, signal?: AbortSignal): Promise<AllergenSourceEntry[]> {
   const response = await requestEnvelope(`${API}/dictionaries/${encodeURIComponent(versionId)}/entries`, 'GET', undefined, { signal })
-  return parseArray(response.data, parseEntry, 'Backend zwrócił nieprawidłowe wpisy słownika.')
+  return parseArray(response.data, parseEntry, 'Nie udało się odczytać pozycji na liście alergenów.')
 }
 
 export async function fetchAllergenHistory(versionId: string, signal?: AbortSignal): Promise<AllergenDictionaryHistoryEvent[]> {
@@ -222,7 +222,7 @@ export async function fetchAllergenHistory(versionId: string, signal?: AbortSign
       || typeof value.event_code !== 'string' || typeof value.occurred_at !== 'string'
       || !(value.before === null || isRecord(value.before) || Array.isArray(value.before))
       || !(value.after === null || isRecord(value.after) || Array.isArray(value.after))) {
-      throw new Error('Backend zwrócił nieprawidłową historię zmian słownika.')
+      throw new Error('Nie udało się odczytać historii zmian.')
     }
     return {
       id: value.id,
@@ -233,7 +233,7 @@ export async function fetchAllergenHistory(versionId: string, signal?: AbortSign
       before: value.before,
       after: value.after,
     }
-  }, 'Backend zwrócił nieprawidłową historię zmian słownika.')
+  }, 'Nie udało się odczytać historii zmian.')
 }
 
 export async function createAllergenEntry(versionId: string, input: AllergenSourceEntryInput & ({
@@ -260,7 +260,7 @@ export async function updateCanonicalAllergen(versionId: string, id: string, inp
 }): Promise<CanonicalAllergen> {
   const value = await request(`${API}/dictionaries/${encodeURIComponent(versionId)}/canonical/${encodeURIComponent(id)}`, 'PATCH', input)
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.canonical_pl !== 'string') {
-    throw new Error('Backend zwrócił nieprawidłowy alergen kanoniczny.')
+    throw new Error('Nie udało się odczytać nazwy alergenu.')
   }
   return {
     id: value.id,

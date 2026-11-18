@@ -207,7 +207,7 @@ final class InternationalAllergenDictionaryService
                         ->where('id', $canonicalId)->where('record_status', 'ACTIVE')->first();
                     if (! $canonical) {
                         throw ValidationException::withMessages([
-                            'canonical_allergen_id' => ['Wybierz aktywny alergen z puli kanonicznej.'],
+                            'canonical_allergen_id' => ['Wybierz alergen z dostępnej listy.'],
                         ]);
                     }
                     $canonical = $this->canonicalState($canonical);
@@ -216,7 +216,7 @@ final class InternationalAllergenDictionaryService
                 if (DB::table('international_allergen_source_entries')
                     ->where('dictionary_version_id', $versionId)
                     ->where('allergen_id', $canonicalId)->exists()) {
-                    throw new HttpException(409, 'Ten alergen jest już powiązany z wybranym słownikiem.');
+                    throw new HttpException(409, 'Ten alergen jest już na liście wybranego słownika.');
                 }
 
                 $entryId = Str::uuid()->toString();
@@ -257,7 +257,7 @@ final class InternationalAllergenDictionaryService
                 $this->assertAdministrator($actor, $context);
                 $entry = $this->requireEntry($entryId, true);
                 if ($entry->archived_at !== null) {
-                    throw new HttpException(409, 'Przywrócenie zarchiwizowanego powiązania nie jest obsługiwane.');
+                    throw new HttpException(409, 'Ta pozycja została usunięta z listy i nie można jej edytować.');
                 }
                 $before = $this->entryState($entryId);
                 $data = $this->entryInput($input, $entry->canonical_pl);
@@ -292,7 +292,7 @@ final class InternationalAllergenDictionaryService
                 $this->assertAdministrator($actor, $context);
                 $entry = $this->requireEntry($entryId, true);
                 if ($entry->archived_at !== null) {
-                    throw new HttpException(409, 'Powiązanie ze słownikiem jest już zarchiwizowane.');
+                    throw new HttpException(409, 'Ta pozycja została już usunięta z listy.');
                 }
                 $before = $this->entryState($entryId);
                 DB::table('international_allergen_source_entries')->where('id', $entryId)->update([
@@ -329,12 +329,12 @@ final class InternationalAllergenDictionaryService
                 $entry = DB::table('international_allergen_source_entries')
                     ->where('dictionary_version_id', $versionId)->where('allergen_id', $allergenId)->first();
                 if (! $entry) {
-                    throw new HttpException(404, 'Nie znaleziono powiązania alergenu z wybranym słownikiem.');
+                    throw new HttpException(404, 'Nie znaleziono alergenu na wybranej liście.');
                 }
                 $allergen = DB::table('international_allergen_canonical_definitions')
                     ->where('id', $allergenId)->lockForUpdate()->first();
                 if (! $allergen || $allergen->record_status !== 'ACTIVE') {
-                    throw new HttpException(404, 'Nie znaleziono aktywnej definicji kanonicznej.');
+                    throw new HttpException(404, 'Nie znaleziono aktywnego alergenu.');
                 }
                 $before = $this->canonicalState($allergen);
                 $after = [
@@ -380,15 +380,15 @@ final class InternationalAllergenDictionaryService
                 $entry = DB::table('international_allergen_source_entries')
                     ->where('dictionary_version_id', $versionId)->where('allergen_id', $allergenId)->first();
                 if (! $entry) {
-                    throw new HttpException(404, 'Nie znaleziono powiązania alergenu z wybranym słownikiem.');
+                    throw new HttpException(404, 'Nie znaleziono alergenu na wybranej liście.');
                 }
                 $allergen = DB::table('international_allergen_canonical_definitions')
                     ->where('id', $allergenId)->lockForUpdate()->first();
                 if (! $allergen) {
-                    throw new HttpException(404, 'Nie znaleziono definicji kanonicznej.');
+                    throw new HttpException(404, 'Nie znaleziono alergenu.');
                 }
                 if ($allergen->record_status === 'ARCHIVED') {
-                    throw new HttpException(409, 'Definicja kanoniczna jest już zarchiwizowana.');
+                    throw new HttpException(409, 'Ten alergen został już wycofany.');
                 }
                 $before = $this->canonicalState($allergen);
                 $after = [
@@ -419,7 +419,7 @@ final class InternationalAllergenDictionaryService
         $id = trim($input['id'] ?? '') ?: $this->generatedCanonicalId($name);
         if (DB::table('international_allergen_canonical_definitions')->where('id', $id)->exists()) {
             throw ValidationException::withMessages([
-                'new_canonical.id' => ['Nie udało się utworzyć unikalnego identyfikatora. Sprawdź, czy alergen o tej nazwie nie istnieje już w puli.'],
+                'new_canonical.id' => ['Nie można dodać alergenu o tej nazwie. Sprawdź, czy nie ma go już na liście.'],
             ]);
         }
         $this->assertUniqueCanonicalName($name);
@@ -470,7 +470,7 @@ final class InternationalAllergenDictionaryService
         $candidate = 'ALG_'.substr($slug, 0, 27).$suffix;
         if (DB::table('international_allergen_canonical_definitions')->where('id', $candidate)->exists()) {
             throw ValidationException::withMessages([
-                'new_canonical.canonical_pl' => ['Nie udało się utworzyć unikalnego identyfikatora. Zmień nazwę lub sprawdź pulę alergenów.'],
+                'new_canonical.canonical_pl' => ['Nie można dodać alergenu o tej nazwie. Sprawdź, czy nie ma go już na liście.'],
             ]);
         }
 
@@ -486,7 +486,7 @@ final class InternationalAllergenDictionaryService
         }
         if ($query->exists()) {
             throw ValidationException::withMessages([
-                'canonical_pl' => ['Alergen o tej nazwie już istnieje w puli kanonicznej.'],
+                'canonical_pl' => ['Alergen o tej nazwie już istnieje na liście.'],
             ]);
         }
     }
@@ -609,7 +609,7 @@ final class InternationalAllergenDictionaryService
         }
         $version = $query->first();
         if (! $version) {
-            throw new HttpException(404, 'Nie znaleziono wersji słownika alergenów.');
+            throw new HttpException(404, 'Nie znaleziono wybranej wersji listy alergenów.');
         }
 
         return $version;
@@ -631,7 +631,7 @@ final class InternationalAllergenDictionaryService
             'allergens.canonical_pl',
         ]);
         if (! $entry) {
-            throw new HttpException(404, 'Nie znaleziono wpisu słownika alergenów.');
+            throw new HttpException(404, 'Nie znaleziono alergenu na tej liście.');
         }
 
         return $entry;

@@ -138,3 +138,38 @@ Poprzednia implementacja PA-05 i jej commity pozostają nietknięte; właścicie
 | Korekta UX, podgląd i testy PA-05 (commit właściciela, pozostawiony bez zmian) | `f7467f8b0c5d14d2eef72bd317de9125c98e97ba` |
 | Uproszczony UX, widoczne metadane wersji, kompletne preview i zrzuty | `37d8d35` |
 | Stabilne ID kanoniczne i testy kompletności API/seed | `6ad4219` |
+
+## 10. Final polish — nazwy alergenów i język interfejsu
+
+Nazwy widoczne na listach PA są prezentowane po polsku i wielkimi literami. Dodano mapowanie wyłącznie w warstwie prezentacji, według istniejącego ID alergenu:
+
+| ID | Nazwa wyświetlana |
+|---|---|
+| `ALG_KHORASAN` | PSZENICA KHORASAN (KAMUT) |
+| `ALG_TREE_NUTS` | ORZECHY DRZEWNE |
+| `ALG_WALNUT` | ORZECHY WŁOSKIE |
+| `ALG_CLAMS` | MAŁŻE |
+| `ALG_ABALONE` | UCHO MORSKIE |
+| `ALG_YAM` | POCHRZYN |
+
+Pozostałe 48 nazw przechodzi przez formatowanie `toLocaleUpperCase('pl-PL')`. Sprawdzono indywidualnie wszystkie 54 pozycje MASTER v1.1. Jedyna niewybrana forma z ukośnikiem to `KAŁAMARNICA / KALMAR`: oba człony są polskimi nazwami, więc pozostawiono je do decyzji właściciela zamiast arbitralnie wybierać jeden. Żadne nazwy MASTER, synonimy, nazwy oryginalne, identyfikatory ani relacje nie zostały zmienione; test potwierdza zachowanie 54 tożsamości i 178 relacji.
+
+Tekst formularza edycji zastąpiono zatwierdzonym, prostszym wyjaśnieniem: „Ta nazwa jest wspólna dla wszystkich słowników. Zmiany wprowadzone poniżej dotyczą tylko wybranego słownika.” Uproszczono również teksty formularzy, walidacji, błędów API i powiadomień. Zachowano ostrzeżenie, że usunięcie dotyczy tylko wybranego słownika, a historia i wcześniejsze deklaracje surowca pozostają bez zmian. Potwierdzenia edycji i archiwizacji pozostają objęte testami.
+
+Zmiany nie obejmują formularzy, typów deklaracji, snapshotów, historii ani workflow RAW; brak wpływu na zachowanie RAW. Zmiany PHP dotyczą wyłącznie komunikatów — obsługa słownika, autoryzacja, audyt i klasyfikacja prawna pozostały bez zmian.
+
+Weryfikacja tej poprawki:
+
+| Zakres | Wynik |
+|---|---|
+| Testy PA-05 i parserów API | **12 testów PASS**. |
+| Pełna suita frontendowa: `cd frontend && npm test` | **19 plików, 221 testów PASS**. |
+| TypeScript i build: `cd frontend && npm run build` | **PASS** (`tsc -b` i Vite). |
+| Lint: `cd frontend && npm run lint` | Kod wyjścia 0; pozostało istniejące ostrzeżenie `src/visualPreview.tsx:39`. |
+| Backend `AllergenDictionaryManagementTest` przez `scripts/compose-test` | **2 testy, 38 asercji PASS**. |
+| PHP Pint dla zmienionego serwisu i testu | **2 pliki PASS**. |
+| `git diff --check` | **PASS**. |
+
+Pełnego backend suite nie uruchamiano ponownie w ramach tej poprawki tekstowej; wynik pełnej suity z wcześniejszej weryfikacji pozostaje udokumentowany w sekcji 7. Preview, Stage i produkcja nie były używane. Nie wykonano pushu ani deployu; PA-06 nie rozpoczęto.
+
+Commit poprawki: do uzupełnienia po lokalnym commicie. PA-05 nadal oczekuje na końcową akceptację właściciela.

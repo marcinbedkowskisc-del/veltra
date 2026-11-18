@@ -149,6 +149,7 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
             $this->fail('A duplicate source-to-canonical link was accepted.');
         } catch (HttpException $exception) {
             $this->assertSame(409, $exception->getStatusCode());
+            $this->assertSame('Ten alergen jest już na liście wybranego słownika.', $exception->getMessage());
         }
 
         $canonicalId = 'TEST_'.Str::upper(Str::random(10));

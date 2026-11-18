@@ -84,7 +84,7 @@ function installSyntheticApi() {
       if (path.endsWith('/entries')) {
         const canonicalId = body.canonical_allergen_id
         const canonical = previewCanonicalAllergens.find((item) => item.id === canonicalId)
-        if (!canonical) throw new Error('Podgląd oczekiwał istniejącego alergenu kanonicznego.')
+        if (!canonical) throw new Error('Nie znaleziono wybranego alergenu w podglądzie.')
         return json({ data: {
           ...entriesForVersion[0],
           id: '00000000-0000-4000-8000-000000000599',

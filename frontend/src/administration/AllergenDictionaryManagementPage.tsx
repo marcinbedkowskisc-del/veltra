@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../api'
+import { allergenDisplayName } from './allergenDisplayNames'
 import {
   archiveAllergenEntry,
   createAllergenEntry,
@@ -220,7 +221,8 @@ export default function AllergenDictionaryManagementPage() {
     : new Set<string>()
   const canonicalOptions = canonical.filter((item) => item.recordStatus === 'ACTIVE'
     && !existingRelationships.has(item.id)
-    && `${item.canonicalPl} ${item.synonymsPl.join(' ')}`.toLocaleLowerCase('pl-PL')
+    && `${allergenDisplayName(item.id, item.canonicalPl)} ${item.canonicalPl} ${item.synonymsPl.join(' ')}`
+      .toLocaleLowerCase('pl-PL')
       .includes(canonicalSearch.trim().toLocaleLowerCase('pl-PL')))
 
   function reloadDictionaries() {
@@ -281,7 +283,7 @@ export default function AllergenDictionaryManagementPage() {
         const canonicalName = form.canonicalName.trim()
         if (!canonicalName) throw new Error('Wpisz nazwę nowego alergenu.')
         if (!form.status || !form.listingRule || !form.sourceScope) {
-          throw new Error('Uzupełnij klasyfikację po sprawdzeniu właściwego źródła.')
+          throw new Error('Uzupełnij brakujące informacje na podstawie oficjalnego źródła.')
         }
         const language = formSource ? SOURCE_LANGUAGES[formSource.jurisdiction] : undefined
         const originalName = form.sourceName.trim()
@@ -295,9 +297,9 @@ export default function AllergenDictionaryManagementPage() {
           },
         })
       } else {
-        if (!form.canonicalId) throw new Error('Wybierz alergen z puli kanonicznej.')
+        if (!form.canonicalId) throw new Error('Wybierz alergen z listy.')
         if (!form.status || !form.listingRule || !form.sourceScope) {
-          throw new Error('Uzupełnij klasyfikację po sprawdzeniu właściwego źródła.')
+          throw new Error('Uzupełnij brakujące informacje na podstawie oficjalnego źródła.')
         }
         await createAllergenEntry(form.versionId, {
           ...input,
@@ -305,7 +307,7 @@ export default function AllergenDictionaryManagementPage() {
         })
       }
       setForm(null)
-      setSuccess(existing ? 'Zapisano wpis słownika.' : 'Dodano alergen do słownika.')
+      setSuccess(existing ? 'Zapisano zmiany.' : 'Dodano alergen do słownika.')
       reloadDictionaries()
     } catch (cause) {
       setFormError(errorText(cause))
@@ -316,13 +318,14 @@ export default function AllergenDictionaryManagementPage() {
 
   async function archiveEntry(entry: AllergenSourceEntry, source: AllergenSource) {
     setOpenMenuEntryId(null)
-    if (!window.confirm(`Usunąć „${entry.canonicalPl}” ze słownika ${source.namePl}? Zarchiwizowane zostanie tylko to powiązanie. Historia i wcześniejsze deklaracje RAW pozostaną zachowane.`)) return
+    const displayName = allergenDisplayName(entry.allergenId, entry.canonicalPl)
+    if (!window.confirm(`Usunąć „${displayName}” ze słownika ${source.namePl}? Usunięta zostanie tylko ta pozycja w wybranym słowniku. Historia i wcześniejsze deklaracje alergenów surowca pozostaną bez zmian.`)) return
     setBusy(true)
     setError(null)
     setSuccess(null)
     try {
       await archiveAllergenEntry(entry.id)
-      setSuccess(`Usunięto „${entry.canonicalPl}” ze słownika ${source.namePl}.`)
+      setSuccess(`Usunięto „${displayName}” ze słownika ${source.namePl}.`)
       reloadDictionaries()
     } catch (cause) {
       setError(errorText(cause))
@@ -335,7 +338,7 @@ export default function AllergenDictionaryManagementPage() {
     <header className="admin-category-header">
       <div>
         <h2 id="admin-allergen-title">Słowniki alergenów</h2>
-        <p>Wybierz źródło, aby sprawdzić przypisane do niego alergeny.</p>
+        <p>Wybierz kraj lub organizację, aby zobaczyć listę alergenów.</p>
       </div>
     </header>
 
@@ -343,7 +346,7 @@ export default function AllergenDictionaryManagementPage() {
     {error && <p className="inline-error" role="alert">{error}</p>}
 
     {sourcesLoading ? <p role="status">Ładowanie słowników alergenów…</p> : columns.length === 0
-      ? <p className="admin-allergen-empty">Brak skonfigurowanych słowników źródłowych.</p>
+      ? <p className="admin-allergen-empty">Brak dostępnych list alergenów.</p>
       : <div className="admin-allergen-source-grid" aria-label="Słowniki alergenów">
         {columns.map(({ source, version }) => {
           const sourceEntries = entriesByVersion[version.id] ?? []
@@ -352,7 +355,8 @@ export default function AllergenDictionaryManagementPage() {
           const visibleEntries = sourceEntries.filter((entry) => {
             if (filter === 'active' && entry.archivedAt !== null) return false
             if (filter === 'archived' && entry.archivedAt === null) return false
-            return !normalizedSearch || `${entry.canonicalPl} ${entry.sourceName}`
+            return !normalizedSearch
+              || `${allergenDisplayName(entry.allergenId, entry.canonicalPl)} ${entry.canonicalPl} ${entry.sourceName}`
               .toLocaleLowerCase('pl-PL').includes(normalizedSearch)
           })
 
@@ -410,20 +414,20 @@ export default function AllergenDictionaryManagementPage() {
             {loading && !entriesByVersion[version.id]
               ? <p role="status">Ładowanie wpisów…</p>
               : visibleEntries.length === 0
-                ? <p className="admin-allergen-empty">{sourceEntries.length === 0 ? 'Brak wpisów w tej wersji.' : 'Brak alergenów dla tego filtra.'}</p>
+                ? <p className="admin-allergen-empty">{sourceEntries.length === 0 ? 'Ta lista nie zawiera jeszcze alergenów.' : 'Brak alergenów dla tego filtra.'}</p>
                 : <ul className="admin-allergen-entries" aria-label={`Alergeny — ${source.namePl}`}>
                   {visibleEntries.map((entry) => <li className="admin-allergen-row" key={entry.id} data-allergen-menu>
-                    <span className="admin-allergen-row-name">{entry.canonicalPl}</span>
+                    <span className="admin-allergen-row-name">{allergenDisplayName(entry.allergenId, entry.canonicalPl)}</span>
                     <button type="button" className="admin-allergen-menu-button" aria-haspopup="menu"
                       aria-expanded={openMenuEntryId === entry.id}
-                      aria-label={`Opcje dla: ${entry.canonicalPl}`}
+                      aria-label={`Opcje dla: ${allergenDisplayName(entry.allergenId, entry.canonicalPl)}`}
                       disabled={busy || entry.archivedAt !== null}
                       ref={(node) => { menuButtonRefs.current[entry.id] = node }}
                       onClick={() => setOpenMenuEntryId((current) => current === entry.id ? null : entry.id)}>
                       <span aria-hidden="true">⋯</span>
                     </button>
                     {openMenuEntryId === entry.id && <div className="admin-allergen-context-menu" role="menu"
-                      aria-label={`Opcje dla: ${entry.canonicalPl}`}
+                      aria-label={`Opcje dla: ${allergenDisplayName(entry.allergenId, entry.canonicalPl)}`}
                       ref={(node) => { menuRefs.current[entry.id] = node }}>
                       <button type="button" role="menuitem" onClick={() => openEditForm(entry, version.id)}>Edytuj</button>
                       <button type="button" role="menuitem" onClick={() => void archiveEntry(entry, source)}>Usuń ze słownika</button>
@@ -450,10 +454,10 @@ export default function AllergenDictionaryManagementPage() {
       {form.entry
         ? <div className="create-form-field admin-allergen-wide">
           <label>Nazwa alergenu
-            <input value={form.canonicalName} readOnly aria-describedby="admin-allergen-canonical-help" />
+            <input value={allergenDisplayName(form.entry.allergenId, form.canonicalName)} readOnly aria-describedby="admin-allergen-canonical-help" />
           </label>
           <span id="admin-allergen-canonical-help" className="admin-allergen-field-help">
-            To wspólna nazwa kanoniczna. Edycja wpisu źródłowego jej nie zmienia w innych słownikach.
+            Ta nazwa jest wspólna dla wszystkich słowników. Zmiany wprowadzone poniżej dotyczą tylko wybranego słownika.
           </span>
         </div>
         : <label className="create-form-field admin-allergen-wide">Sposób dodania
@@ -462,19 +466,19 @@ export default function AllergenDictionaryManagementPage() {
             canonicalMode: event.target.value === 'new' ? 'new' : 'existing',
             canonicalId: '',
           })}>
-            <option value="existing">Wybierz z puli alergenów</option>
-            <option value="new">Dodaj nowy alergen do puli</option>
+            <option value="existing">Wybierz istniejący alergen</option>
+            <option value="new">Dodaj nowy alergen</option>
           </select>
         </label>}
 
       {!form.entry && form.canonicalMode === 'existing' && <>
-        <label className="create-form-field">Szukaj w puli alergenów
+        <label className="create-form-field">Szukaj alergenu
           <input type="search" value={canonicalSearch} onChange={(event) => setCanonicalSearch(event.target.value)} />
         </label>
         <label className="create-form-field">Nazwa alergenu
           <select required value={form.canonicalId} onChange={(event) => setForm({ ...form, canonicalId: event.target.value })}>
             <option value="">Wybierz alergen</option>
-            {canonicalOptions.map((item) => <option key={item.id} value={item.id}>{item.canonicalPl}</option>)}
+            {canonicalOptions.map((item) => <option key={item.id} value={item.id}>{allergenDisplayName(item.id, item.canonicalPl)}</option>)}
           </select>
         </label>
       </>}
@@ -484,10 +488,9 @@ export default function AllergenDictionaryManagementPage() {
           <input required maxLength={160} value={form.canonicalName}
             onChange={(event) => setForm({ ...form, canonicalName: event.target.value })} />
         </label>
-        <span className="admin-allergen-field-help">Identyfikator zostanie utworzony automatycznie.</span>
       </div>}
 
-      <label className="create-form-field">Nazwa w języku źródłowym
+      <label className="create-form-field">Nazwa używana w tym słowniku
         <input maxLength={180} value={form.sourceName}
           onChange={(event) => setForm({ ...form, sourceName: event.target.value })} />
       </label>
@@ -497,9 +500,9 @@ export default function AllergenDictionaryManagementPage() {
       </label>
 
       {!form.entry && <fieldset className="admin-allergen-legal-metadata admin-allergen-wide">
-        <legend>Klasyfikacja dla tego słownika</legend>
-        <p>Wybierz wartości wyłącznie po sprawdzeniu właściwego źródła. Nie są one automatycznie wywnioskowane.</p>
-        <label className="create-form-field">Status w źródle
+        <legend>Informacje wymagane dla tego słownika</legend>
+        <p>Uzupełnij je na podstawie oficjalnego źródła. Nie wpisujemy ich automatycznie.</p>
+        <label className="create-form-field">Status na liście
           <select required value={form.status} onChange={(event) => setForm({
             ...form,
             status: event.target.value as AllergenListingStatus | '',
@@ -508,16 +511,16 @@ export default function AllergenDictionaryManagementPage() {
             {STATUSES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </label>
-        <label className="create-form-field">Sposób ujęcia w źródle
+        <label className="create-form-field">Jak alergen widnieje w źródle
           <select required value={form.listingRule} onChange={(event) => setForm({ ...form, listingRule: event.target.value })}>
             <option value="">Wybierz sposób ujęcia</option>
             {LISTING_RULES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
-        <label className="create-form-field admin-allergen-wide">Zakres wpisu
+        <label className="create-form-field admin-allergen-wide">Gdzie obowiązuje
           <select required value={form.sourceScope} onChange={(event) => setForm({ ...form, sourceScope: event.target.value })}>
-            <option value="">Potwierdź zakres na podstawie źródła</option>
-            <option value="LEGAL_LIST">Wykaz wskazany w źródle</option>
+            <option value="">Wybierz na podstawie oficjalnego źródła</option>
+            <option value="LEGAL_LIST">Na wykazie alergenów</option>
           </select>
         </label>
       </fieldset>}

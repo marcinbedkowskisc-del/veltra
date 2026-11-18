@@ -7,6 +7,7 @@ import {
   previewAllergenSources,
   previewCanonicalAllergens,
 } from './allergenVisualPreviewData'
+import { allergenDisplayName } from './allergenDisplayNames'
 
 const expectedEntryCounts: Record<string, number> = {
   EU_1169_2011_ANNEX_II: 28,
@@ -89,9 +90,9 @@ function openFirstMenu(region: HTMLElement) {
 }
 
 function completeLegalMetadata() {
-  fireEvent.change(screen.getByLabelText('Status w źródle'), { target: { value: 'MANDATORY' } })
-  fireEvent.change(screen.getByLabelText('Sposób ujęcia w źródle'), { target: { value: 'DIRECT' } })
-  fireEvent.change(screen.getByLabelText('Zakres wpisu'), { target: { value: 'LEGAL_LIST' } })
+  fireEvent.change(screen.getByLabelText('Status na liście'), { target: { value: 'MANDATORY' } })
+  fireEvent.change(screen.getByLabelText('Jak alergen widnieje w źródle'), { target: { value: 'DIRECT' } })
+  fireEvent.change(screen.getByLabelText('Gdzie obowiązuje'), { target: { value: 'LEGAL_LIST' } })
 }
 
 afterEach(() => {
@@ -134,7 +135,59 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
     expect(Object.values(previewAllergenEntries).flat()).toHaveLength(178)
     expect(screen.queryByText(/ALG_/)).toBeNull()
     expect(screen.queryByText(/DIRECT|LEGAL_LIST/)).toBeNull()
+    expect(screen.queryByText(/kanoniczn|powiązan|identyfikator|JSON/i)).toBeNull()
     expect(screen.getAllByRole('button', { name: '+ Dodaj alergen' })).toHaveLength(8)
+  })
+
+  it('displays preferred Polish names for all 54 allergens without changing identities or relationships', () => {
+    const canonicalSnapshot = previewCanonicalAllergens.map(({ id, canonical_pl, synonyms_pl }) => ({
+      id,
+      canonical_pl,
+      synonyms_pl,
+    }))
+    const relationshipSnapshot = Object.values(previewAllergenEntries).flat()
+      .map(({ id, dictionary_version_id, allergen_id }) => ({ id, dictionary_version_id, allergen_id }))
+    const displayNames = previewCanonicalAllergens.map((item) => allergenDisplayName(item.id, item.canonical_pl))
+
+    expect(previewCanonicalAllergens).toHaveLength(54)
+    expect(displayNames).toHaveLength(54)
+    expect(displayNames.every((name) => name === name.toLocaleUpperCase('pl-PL'))).toBe(true)
+    expect(displayNames).toEqual(expect.arrayContaining([
+      'PSZENICA KHORASAN (KAMUT)',
+      'ORZECHY DRZEWNE',
+      'ORZECHY WŁOSKIE',
+      'MAŁŻE',
+      'UCHO MORSKIE',
+      'POCHRZYN',
+    ]))
+    expect(allergenDisplayName('ALG_SQUID', 'KAŁAMARNICA / KALMAR')).toBe('KAŁAMARNICA / KALMAR')
+    expect(previewCanonicalAllergens.map(({ id, canonical_pl, synonyms_pl }) => ({
+      id,
+      canonical_pl,
+      synonyms_pl,
+    }))).toEqual(canonicalSnapshot)
+    expect(Object.values(previewAllergenEntries).flat()
+      .map(({ id, dictionary_version_id, allergen_id }) => ({ id, dictionary_version_id, allergen_id })))
+      .toEqual(relationshipSnapshot)
+    expect(previewAllergenRelationshipCount).toBe(178)
+  })
+
+  it('shows the preferred Polish name in a source list while retaining its canonical identity', async () => {
+    previewApi()
+    render(<AllergenDictionaryManagementPage />)
+
+    const eu = await screen.findByRole('region', { name: 'Unia Europejska' })
+    await waitFor(() => expect(rowCount(eu)).toBe(28))
+    const euVersion = previewAllergenSources[0].versions[0]
+    const walnut = previewAllergenEntries[euVersion.id as keyof typeof previewAllergenEntries]
+      .find((entry) => entry.allergen_id === 'ALG_WALNUT')!
+
+    expect(within(eu).getByText('ORZECHY WŁOSKIE')).toBeTruthy()
+    expect(within(eu).queryByText('ORZECHY WŁOSKIE / WALNUT')).toBeNull()
+    expect(walnut).toMatchObject({
+      allergen_id: 'ALG_WALNUT',
+      dictionary_version_id: euVersion.id,
+    })
   })
 
   it('shows each dictionary version status and dates without opening source details', async () => {
@@ -204,7 +257,8 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
     openFirstMenu(eu)
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Edytuj' }))
 
-    fireEvent.change(screen.getByLabelText('Nazwa w języku źródłowym'), { target: { value: 'Updated source name' } })
+    expect(screen.getByText('Ta nazwa jest wspólna dla wszystkich słowników. Zmiany wprowadzone poniżej dotyczą tylko wybranego słownika.')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Nazwa używana w tym słowniku'), { target: { value: 'Updated source name' } })
     fireEvent.change(screen.getByLabelText('Uwagi'), { target: { value: 'Updated note' } })
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
 
@@ -239,7 +293,8 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Usuń ze słownika' }))
 
     await waitFor(() => expect(requests.some((request) => request.method === 'POST' && request.path.endsWith('/archive'))).toBe(true))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Historia i wcześniejsze deklaracje RAW pozostaną zachowane.'))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Historia i wcześniejsze deklaracje alergenów surowca pozostaną bez zmian.'))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Usunięta zostanie tylko ta pozycja w wybranym słowniku.'))
     expect(requests.some((request) => request.path.includes('/canonical/'))).toBe(false)
   })
 
@@ -253,9 +308,9 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
     const existingIds = new Set(previewAllergenEntries[previewAllergenSources[0].versions[0].id as keyof typeof previewAllergenEntries]
       .map((entry) => entry.allergen_id))
     const unlinked = previewCanonicalAllergens.find((item) => !existingIds.has(item.id))!
-    fireEvent.change(screen.getByLabelText('Szukaj w puli alergenów'), { target: { value: unlinked.canonical_pl } })
+    fireEvent.change(screen.getByLabelText('Szukaj alergenu'), { target: { value: unlinked.canonical_pl } })
     fireEvent.change(screen.getByLabelText('Nazwa alergenu'), { target: { value: unlinked.id } })
-    fireEvent.change(screen.getByLabelText('Nazwa w języku źródłowym'), { target: { value: 'Verified source name' } })
+    fireEvent.change(screen.getByLabelText('Nazwa używana w tym słowniku'), { target: { value: 'Verified source name' } })
     completeLegalMetadata()
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
 
@@ -275,7 +330,8 @@ describe('zarządzanie międzynarodowymi słownikami alergenów', () => {
     fireEvent.change(screen.getByLabelText('Sposób dodania'), { target: { value: 'new' } })
     await waitFor(() => expect((screen.getByLabelText('Sposób dodania') as HTMLSelectElement).value).toBe('new'))
     fireEvent.change(screen.getByLabelText('Nazwa alergenu'), { target: { value: 'Nowy alergen' } })
-    fireEvent.change(screen.getByLabelText('Nazwa w języku źródłowym'), { target: { value: 'New allergen name' } })
+    expect(screen.queryByText('Identyfikator zostanie utworzony automatycznie.')).toBeNull()
+    fireEvent.change(screen.getByLabelText('Nazwa używana w tym słowniku'), { target: { value: 'New allergen name' } })
     completeLegalMetadata()
     fireEvent.click(screen.getByRole('button', { name: 'Zapisz' }))
 

@@ -172,4 +172,4 @@ Weryfikacja tej poprawki:
 
 Pełnego backend suite nie uruchamiano ponownie w ramach tej poprawki tekstowej; wynik pełnej suity z wcześniejszej weryfikacji pozostaje udokumentowany w sekcji 7. Preview, Stage i produkcja nie były używane. Nie wykonano pushu ani deployu; PA-06 nie rozpoczęto.
 
-Commit poprawki: do uzupełnienia po lokalnym commicie. PA-05 nadal oczekuje na końcową akceptację właściciela.
+Commit poprawki: `2c1151669f18ae9d4fb6811a9287ffae8c078e0f`. Raport zapisano w następnym lokalnym commicie dokumentacyjnym. PA-05 nadal oczekuje na końcową akceptację właściciela.

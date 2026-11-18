@@ -1,4 +1,5 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
+import AnimatedPanel from './AnimatedPanel'
 
 export type AccordionItem = {
   id: string
@@ -22,28 +23,6 @@ function AccordionSection({ item, expanded, onToggle }: { item: AccordionItem; e
   const instanceId = useId()
   const buttonId = `${instanceId}-button`
   const panelId = `${instanceId}-panel`
-  const panelRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-
-  useLayoutEffect(() => {
-    const panel = panelRef.current
-    const content = contentRef.current
-    if (!panel || !content) return
-
-    function updateHeight() {
-      if (panel && content) panel.style.height = expanded ? `${content.getBoundingClientRect().height}px` : '0px'
-    }
-
-    updateHeight()
-    if (!expanded) return
-    if (typeof ResizeObserver === 'undefined') {
-      panel.style.height = 'auto'
-      return
-    }
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(content)
-    return () => observer.disconnect()
-  }, [expanded])
 
   return (
     <section className="ui-accordion-item">
@@ -67,18 +46,16 @@ function AccordionSection({ item, expanded, onToggle }: { item: AccordionItem; e
         </button>
         {item.active && <span id={`${instanceId}-active`} className="ui-accordion-sr-only">Zawiera bieżącą stronę</span>}
       </h2>
-      <div
+      <AnimatedPanel
         id={panelId}
-        ref={panelRef}
+        open={expanded}
         role="region"
-        aria-labelledby={buttonId}
-        aria-hidden={!expanded}
-        inert={!expanded}
+        ariaLabelledBy={buttonId}
         className="ui-accordion-panel"
-        data-expanded={expanded}
+        contentClassName="ui-accordion-content"
       >
-        <div ref={contentRef} className="ui-accordion-content">{item.content}</div>
-      </div>
+        {item.content}
+      </AnimatedPanel>
     </section>
   )
 }

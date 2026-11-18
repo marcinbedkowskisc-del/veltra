@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../api'
+import AnimatedPanel from '../design-system/AnimatedPanel'
+import VeltraDisclosure from '../design-system/VeltraDisclosure'
 import { allergenDisplayName } from './allergenDisplayNames'
 import GlobalPrecautionaryAllergenSection from './GlobalPrecautionaryAllergenSection'
 import {
@@ -118,6 +120,7 @@ export default function AllergenDictionaryManagementPage() {
   const [form, setForm] = useState<EntryForm | null>(null)
   const [canonicalSearch, setCanonicalSearch] = useState('')
   const [openMenuEntryId, setOpenMenuEntryId] = useState<string | null>(null)
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom')
   const [sourcesLoading, setSourcesLoading] = useState(true)
   const [columnsLoading, setColumnsLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -127,6 +130,16 @@ export default function AllergenDictionaryManagementPage() {
   const [reload, setReload] = useState(0)
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const menuRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  useLayoutEffect(() => {
+    if (!openMenuEntryId) return
+    const trigger = menuButtonRefs.current[openMenuEntryId]?.getBoundingClientRect()
+    const menuHeight = menuRefs.current[openMenuEntryId]?.getBoundingClientRect().height
+    if (!trigger || menuHeight === undefined) return
+    const spaceAbove = trigger.top
+    const spaceBelow = window.innerHeight - trigger.bottom
+    setMenuPlacement(spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? 'bottom' : 'top')
+  }, [openMenuEntryId])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -401,8 +414,7 @@ export default function AllergenDictionaryManagementPage() {
                 <span>Obowiązuje od: {dateLabel(version.effectiveFrom, 'nie określono')}</span>
                 <span>Zweryfikowano: {dateLabel(version.lastVerifiedOn, 'nie określono')}</span>
               </p>
-              <details className="admin-allergen-source-info">
-                <summary>Informacje o źródle</summary>
+              <VeltraDisclosure className="admin-allergen-source-info" title="Informacje o źródle">
                 <dl>
                   <div><dt>Wersja</dt><dd>{sourceVersionLabel(version)}</dd></div>
                   <div><dt>Organ</dt><dd>{version.authority}</dd></div>
@@ -412,7 +424,7 @@ export default function AllergenDictionaryManagementPage() {
                   <div><dt>Zweryfikowano</dt><dd>{dateLabel(version.lastVerifiedOn, 'nie określono')}</dd></div>
                   {version.officialUrl && <div><dt>Źródło</dt><dd><a href={version.officialUrl} target="_blank" rel="noreferrer">Otwórz oficjalne źródło</a></dd></div>}
                 </dl>
-              </details>
+              </VeltraDisclosure>
               <label className="admin-allergen-column-search">
                 <span className="visually-hidden">Szukaj w słowniku {source.namePl}</span>
                 <input type="search" aria-label={`Szukaj w słowniku ${source.namePl}`}
@@ -448,12 +460,19 @@ export default function AllergenDictionaryManagementPage() {
                       onClick={() => setOpenMenuEntryId((current) => current === entry.id ? null : entry.id)}>
                       <span aria-hidden="true">⋯</span>
                     </button>
-                    {openMenuEntryId === entry.id && <div className="admin-allergen-context-menu" role="menu"
+                    <div className="admin-allergen-context-menu" role="menu"
                       aria-label={`Opcje dla: ${allergenDisplayName(entry.allergenId, entry.canonicalPl)}`}
+                      aria-hidden={openMenuEntryId !== entry.id}
+                      inert={openMenuEntryId !== entry.id}
+                      data-open={openMenuEntryId === entry.id}
+                      data-placement={menuPlacement}
                       ref={(node) => { menuRefs.current[entry.id] = node }}>
-                      <button type="button" role="menuitem" onClick={() => openEditForm(entry, version.id)}>Edytuj</button>
+                      <button type="button" role="menuitem"
+                        aria-expanded={form?.entry?.id === entry.id}
+                        aria-controls="admin-allergen-form-panel"
+                        onClick={() => openEditForm(entry, version.id)}>Edytuj</button>
                       <button type="button" role="menuitem" onClick={() => void archiveEntry(entry, source)}>Usuń ze słownika</button>
-                    </div>}
+                    </div>
                   </li>)}
                 </ul>}
 
@@ -462,14 +481,20 @@ export default function AllergenDictionaryManagementPage() {
               {visibleEntries.length} {visibleEntries.length === 1 ? 'alergen' : 'alergenów'}
             </p>}
             <button type="button" className="button button-secondary admin-allergen-add"
+              id={`admin-allergen-add-${version.id}`}
+              aria-expanded={form?.versionId === version.id && !form.entry}
+              aria-controls="admin-allergen-form-panel"
               disabled={busy || loading}
               onClick={() => openAddForm(version.id)}>+ Dodaj alergen</button>
           </section>
         })}
           </div>}
 
+        <AnimatedPanel id="admin-allergen-form-panel" open={form !== null} role="region"
+          ariaLabelledBy="admin-allergen-form-title"
+          className="admin-allergen-form-panel">
         {form && <form className="admin-allergen-form admin-category-form" onSubmit={(event) => void submitEntry(event)}>
-      <h3>{form.entry ? 'Edytuj alergen' : 'Dodaj alergen do słownika'}</h3>
+      <h3 id="admin-allergen-form-title">{form.entry ? 'Edytuj alergen' : 'Dodaj alergen do słownika'}</h3>
       <p className="admin-allergen-form-context admin-allergen-wide">
         Słownik: <strong>{formSource?.namePl}</strong>{formVersion?.status === 'FUTURE' ? ' — przyszła wersja' : ''}
       </p>
@@ -556,6 +581,7 @@ export default function AllergenDictionaryManagementPage() {
           onClick={() => { setForm(null); setFormError(null) }}>Anuluj</button>
       </div>
         </form>}
+        </AnimatedPanel>
       </div>}
   </section>
 }

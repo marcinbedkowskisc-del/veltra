@@ -1142,7 +1142,7 @@ button:disabled, select:disabled, input:disabled {
 .admin-allergen-version-picker select, .admin-allergen-column-search input, .admin-allergen-column-filter select { width: 100%; min-width: 0; }
 .admin-allergen-version-summary { display: grid; gap: 0.12rem; margin: 0; color: var(--text-muted); font-size: 0.68rem; line-height: 1.35; }
 .admin-allergen-source-info { color: var(--text-secondary); font-size: var(--font-size-sm); }
-.admin-allergen-source-info summary { cursor: pointer; }
+.admin-allergen-source-info .ui-disclosure-trigger { cursor: pointer; }
 .admin-allergen-source-info dl { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; }
 .admin-allergen-source-info dt { color: var(--text-muted); }
 .admin-allergen-source-info dd { margin: 0; overflow-wrap: anywhere; }
@@ -1152,7 +1152,12 @@ button:disabled, select:disabled, input:disabled {
 .admin-allergen-menu-button { display: inline-grid; flex: 0 0 2rem; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font-size: 1.35rem; line-height: 1; cursor: pointer; }
 .admin-allergen-menu-button:hover, .admin-allergen-menu-button[aria-expanded="true"] { background: var(--surface); color: var(--text); }
 .admin-allergen-menu-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.admin-allergen-context-menu { position: absolute; z-index: 5; top: calc(100% - 0.15rem); right: 0; display: grid; min-width: 12rem; padding: 0.25rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-popover); }
+.admin-allergen-context-menu { position: absolute; z-index: 5; top: calc(100% - 0.15rem); right: 0; display: grid; min-width: min(12rem, calc(100vw - 1rem)); max-height: calc(100dvh - 1rem); overflow-y: auto; overscroll-behavior: contain; padding: 0.25rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: var(--shadow-popover); opacity: 0; transform: translateY(-0.2rem) scale(0.98); visibility: hidden; pointer-events: none; transition: opacity var(--motion-popover), transform var(--motion-popover), visibility 0s linear 150ms; }
+.admin-allergen-context-menu[data-placement="top"] { top: auto; bottom: calc(100% - 0.15rem); transform: translateY(0.2rem) scale(0.98); }
+.admin-allergen-context-menu[data-open="true"] { opacity: 1; transform: translateY(0) scale(1); visibility: visible; pointer-events: auto; transition: opacity var(--motion-popover), transform var(--motion-popover), visibility 0s; }
+@media (prefers-reduced-motion: reduce) {
+  .admin-allergen-context-menu { transition: none; }
+}
 .admin-allergen-context-menu button { padding: 0.55rem 0.65rem; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .admin-allergen-context-menu button:hover, .admin-allergen-context-menu button:focus-visible { background: var(--surface); }
 .admin-allergen-count { margin: 0; color: var(--text-muted); font-size: var(--font-size-sm); }

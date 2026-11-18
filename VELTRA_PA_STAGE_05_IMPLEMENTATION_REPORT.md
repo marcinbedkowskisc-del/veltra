@@ -206,3 +206,52 @@ Weryfikacja tej poprawki:
 Pełnego backend suite nie uruchamiano ponownie w ramach tej poprawki tekstowej; wynik pełnej suity z wcześniejszej weryfikacji pozostaje udokumentowany w sekcji 7. Preview, Stage i produkcja nie były używane. Nie wykonano pushu ani deployu; PA-06 nie rozpoczęto.
 
 Commit poprawki: `2c1151669f18ae9d4fb6811a9287ffae8c078e0f`. Raport zapisano w następnym lokalnym commicie dokumentacyjnym. PA-05 nadal oczekuje na końcową akceptację właściciela.
+
+## 12. PA-05G — audyt wspólnego ruchu UI
+
+### Standard i inwentaryzacja interakcji
+
+Przeczytano zatwierdzone wymagania UI-001A ze standardu [`VELTRA_UI_COMPONENT_STANDARDS_v0.2`](https://docs.google.com/document/d/1cKek1pqEmqN8EWe1ucbMiYy_okFfzADzJ8d9ndyGFCE/edit): około 250 ms `ease-in-out`, animacja rzeczywistej wysokości i fade treści, brak twardych limitów wysokości, obsługa `prefers-reduced-motion`, brak ruchu dla zwykłego filtrowania/zapisu/zaznaczania, dostępność oraz testy szybkich kliknięć i rzeczywista kontrola przeglądarkowa.
+
+| Interakcja / komponent | Lokalizacja | Zachowanie przed PA-05G i zgodność | Wynik / priorytet |
+|---|---|---|---|
+| Wspólny akordeon `VeltraAccordion` | [VeltraAccordion.tsx](frontend/src/design-system/VeltraAccordion.tsx), [design-system.css](frontend/src/design-system/design-system.css); używany przez nawigację PA i zarządzanie kategoriami | Mierzona wysokość i fade 250 ms `ease-in-out`, obrót chevrona, `ResizeObserver`, `aria-expanded`, `aria-controls`, `inert` oraz reduced motion. Wymagany wzorzec już spełniał w większości. | Zachowany i oparty teraz na współdzielonym `AnimatedPanel`; użycie w PA pozostaje zgodne. |
+| „Informacje o źródle” | [AllergenDictionaryManagementPage.tsx](frontend/src/administration/AllergenDictionaryManagementPage.tsx) | Natywne `<details>/<summary>`, bez animacji. | Zastąpione dostępnym `VeltraDisclosure` z animowanym panelem; klawiatura i atrybuty ARIA zachowane. |
+| Dodawanie/edycja wpisu słownika | [AllergenDictionaryManagementPage.tsx](frontend/src/administration/AllergenDictionaryManagementPage.tsx) | Formularz inline montowany warunkowo, bez animacji; pojawiał się skokowo i przesuwał niższe elementy. | Opakowany w `AnimatedPanel`; panel zachowuje treść przez fazę zamykania, mierzy dynamiczną wysokość i blokuje fokus po zamknięciu. Przyciski „+ Dodaj alergen” otrzymały powiązane `aria-expanded`/`aria-controls`. |
+| Dodawanie do globalnej listy „MOŻE ZAWIERAĆ” | [GlobalPrecautionaryAllergenSection.tsx](frontend/src/administration/GlobalPrecautionaryAllergenSection.tsx) | Formularz inline montowany warunkowo, bez animacji. | Ten sam współdzielony `AnimatedPanel`; zachowany przepływ dodawania/anulowania i dostępność. |
+| Menu kontekstowe „⋯” w obu listach alergenów | `AllergenDictionaryManagementPage.tsx`, `GlobalPrecautionaryAllergenSection.tsx`, [App.css](frontend/src/App.css) | Menu absolutne i nieprzesuwające układu, ale bez przejścia; nie wybierało strony przy krawędzi viewportu. | Subtelne 150 ms opacity/transform, redukowane przez `prefers-reduced-motion`; automatyczne otwieranie nad/pod wierszem, przewijanie przy ograniczonej wysokości, `aria-hidden` i `inert` dla zamkniętych menu. |
+| Drawer szczegółów surowca | [Drawer.tsx](frontend/src/design-system/Drawer.tsx), [RawMaterialDetailDrawer.tsx](frontend/src/rawMaterials/RawMaterialDetailDrawer.tsx) | Fade/slide około 250 ms i obsługa reduced motion; krzywa `cubic-bezier(0.22, 1, 0.36, 1)` jest bardziej ease-out niż zatwierdzone ease-in-out. | Poza zakresem PA-05G; zalecany późniejszy przegląd wspólnego standardu. |
+| Formularz potwierdzenia i edytor alergenów w RAW | [RawMaterialWorkflow.tsx](frontend/src/rawMaterials/RawMaterialWorkflow.tsx) | Warunkowa zamiana akcji na formularz, bez animacji. | Poza zakresem; wysoki priorytet do osobnego, ograniczonego zadania motion dla RAW. |
+| Sugestie dostawców RAW | [CatalogFilters.tsx](frontend/src/rawMaterials/CatalogFilters.tsx), `App.css` | Statyczna, absolutna lista; filtrowanie i wybór bez animowania. | Poza zakresem; niska pilność, ponieważ lista nie przesuwa układu, a filtrowania nie należy animować. |
+| Panel konta i panel diagnostyczny | [AuthPanel.tsx](frontend/src/AuthPanel.tsx), [App.tsx](frontend/src/App.tsx) | Natywne `<details>/<summary>`, bez autorskiego ruchu. | Poza zakresem; do przyszłego ujednolicenia, jeśli właściciel obejmie je tym standardem. |
+| Formularze kategorii/jednostek w administracji | [CategoryManagementPage.tsx](frontend/src/administration/CategoryManagementPage.tsx), [UnitManagementPage.tsx](frontend/src/administration/UnitManagementPage.tsx) | Sekcje warunkowe bez animacji; niektóre korzystają już z `VeltraAccordion`. | Poza zakresem; dalsze formularze do stopniowego przejścia na wspólny panel. |
+| Zmiana zakładek, wyszukiwanie, filtry, zapis i stan ładowania | PA/RAW oraz podglądy | Zmiana danych lub widoku; bez rozkładania/zamykania panelu. | Pozostawione bez animacji zgodnie ze specyfikacją. |
+
+### Wspólne rozwiązanie i zmienione komponenty
+
+Dodano [AnimatedPanel.tsx](frontend/src/design-system/AnimatedPanel.tsx), jeden silnik dla `VeltraAccordion`, nowego `VeltraDisclosure` i obu formularzy alergenów. Panel mierzy aktualną zawartość, reaguje na jej zmianę przez `ResizeObserver`, przechowuje treść do końca zamykania oraz ustawia `aria-hidden` i `inert`. Tokeny ruchu są współdzielone; panel rozwijany używa 250 ms `ease-in-out`, a menu niezależnego, krótkiego przejścia bez wpływu na wysokość wiersza. Obsługa reduced motion ogranicza transition i skraca utrzymywanie treści zamykanego panelu. Nie zmieniano danych, nazw, relacji, API, RBAC ani przepływów RAW.
+
+### Weryfikacja rzeczywista w przeglądarce
+
+Podgląd `http://localhost:5175/allergen-preview.html` renderuje rzeczywiste komponenty React z oznaczonymi danymi syntetycznymi. Sprawdzono szeroki widok 1440 × 900 oraz mobile 390 × 844 i 390 × 720.
+
+- Krótki i długi panel źródła mierzył odpowiednio **284 px** i **332 px**; po zmianie wysokości jego rzeczywistej treści panel płynnie zmienił się **332 → 412 → 332 px**.
+- Formularz globalny na desktopie urósł do **148 px**; przy 390 px szerokości osiągnął **230 px**. W próbkach animacji otwierania zarejestrowano po 70 ms **78 px / opacity 0,53**, po 160 ms **148 px / opacity 1**; podczas zamykania po 70 ms **108 px / opacity 0,73**, a po zakończeniu **0 px**.
+- Trzy szybkie przełączenia zakończyły się spójnym stanem zamkniętym (`aria-expanded=false`, wysokość 0); Enter i Space otwierały/zamykały disclosure, a fokus pozostał na przycisku.
+- Menu przy dolnej krawędzi mobile poprawnie otworzyło się nad wierszem, mieściło się w viewportcie, nie zmieniło wysokości listy (**133 px przed i po**) i po Escape zwróciło fokus do przycisku.
+- Przy `prefers-reduced-motion: reduce` computed transition panelu i menu skrócił się do **0,00001 s**.
+
+Zintegrowane narzędzia nie udostępniły eksportu nagrania wideo. Zamiast deklarować płynność na podstawie testów jednostkowych, wykonano rzeczywiste interakcje i zebrano próbki klatek/wysokości w czasie; podgląd oraz zrzuty stanów pośrednich zostały pokazane w bieżącej sesji.
+
+### Testy i ograniczenia
+
+| Kontrola | Wynik |
+|---|---|
+| Fokusowe testy disclosure, formularzy i menu PA | **17 testów PASS**; aria, widoczność, szybkie przełączenia, reduced motion i workflows. |
+| Pełna suita frontendowa: `cd frontend && npm test` | **21 plików, 228 testów PASS**. |
+| TypeScript i build: `cd frontend && npm run build` | **PASS** (`tsc -b` i Vite). |
+| Build podglądu: `npx vite build --config vite.interactive-preview.config.ts` | **PASS**. |
+| Lint: `cd frontend && npm run lint` | Kod wyjścia 0; jedyne ostrzeżenie istnieje w `src/visualPreview.tsx:39` (`react(only-export-components)`). |
+| `git diff --check` | **PASS**. |
+
+Pozostałe statyczne ujawnienia poza PA, w szczególności potwierdzenia/edytor RAW, account/health details i formularze kategorii/jednostek, są zinwentaryzowane powyżej do późniejszej pracy. Nie rozpoczęto ich zmian, nie użyto Stage ani produkcji, nie wykonano pushu/deployu i nie rozpoczęto PA-06.

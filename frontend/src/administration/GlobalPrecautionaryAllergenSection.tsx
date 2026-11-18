@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../api'
+import AnimatedPanel from '../design-system/AnimatedPanel'
 import { allergenDisplayName } from './allergenDisplayNames'
 import {
   addGlobalPrecautionaryAllergen,
@@ -27,10 +28,20 @@ export default function GlobalPrecautionaryAllergenSection({
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const menuButtonRef = useRef<HTMLButtonElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    if (!openMenuId || !menuButtonRef.current || !menuRef.current) return
+    const trigger = menuButtonRef.current.getBoundingClientRect()
+    const menuHeight = menuRef.current.getBoundingClientRect().height
+    const spaceAbove = trigger.top
+    const spaceBelow = window.innerHeight - trigger.bottom
+    setMenuPlacement(spaceBelow >= menuHeight || spaceBelow >= spaceAbove ? 'bottom' : 'top')
+  }, [openMenuId])
 
   useEffect(() => {
     let active = true
@@ -128,7 +139,9 @@ export default function GlobalPrecautionaryAllergenSection({
         <h3 id="admin-allergen-precautionary-title">MOŻE ZAWIERAĆ</h3>
         <p>Wspólna lista dla całej instalacji VELTRA.</p>
       </div>
-      <button type="button" className="button button-primary" disabled={busy || loading || canonical.length === 0}
+      <button type="button" id="admin-allergen-precautionary-form-trigger"
+        className="button button-primary" disabled={busy || loading || canonical.length === 0}
+        aria-expanded={formOpen} aria-controls="admin-allergen-precautionary-form-panel"
         onClick={() => { setFormOpen(true); setError(null); setSuccess(null) }}>
         + Dodaj alergen
       </button>
@@ -137,29 +150,33 @@ export default function GlobalPrecautionaryAllergenSection({
     {success && <p className="notice notice-success" role="status">{success}</p>}
     {error && <p className="inline-error" role="alert">{error}</p>}
 
-    {formOpen && <form className="admin-allergen-form admin-allergen-precautionary-form" onSubmit={(event) => void addAllergen(event)}>
-      <label className="create-form-field">Szukaj alergenu
-        <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
-      </label>
-      <label className="create-form-field">Nazwa alergenu
-        <select required value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
-          <option value="">Wybierz alergen</option>
-          {options.map((item) => <option key={item.id} value={item.id}>
-            {allergenDisplayName(item.id, item.canonicalPl)}
-          </option>)}
-        </select>
-      </label>
-      {options.length === 0 && <p className="admin-allergen-empty admin-allergen-wide">
-        {canonical.length === 0 ? 'Nie udało się wczytać alergenów.' : 'Brak pasujących alergenów do dodania.'}
-      </p>}
-      <div className="admin-category-actions admin-allergen-wide">
-        <button type="submit" className="button button-primary" disabled={busy || !selectedId}>
-          {busy ? 'Dodawanie…' : 'Dodaj do listy'}
-        </button>
-        <button type="button" className="button button-secondary" disabled={busy}
-          onClick={() => { setFormOpen(false); setSearch(''); setSelectedId('') }}>Anuluj</button>
-      </div>
-    </form>}
+    <AnimatedPanel id="admin-allergen-precautionary-form-panel" open={formOpen}
+      role="region" ariaLabelledBy="admin-allergen-precautionary-form-trigger"
+      className="admin-allergen-form-panel">
+      {formOpen && <form className="admin-allergen-form admin-allergen-precautionary-form" onSubmit={(event) => void addAllergen(event)}>
+        <label className="create-form-field">Szukaj alergenu
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </label>
+        <label className="create-form-field">Nazwa alergenu
+          <select required value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+            <option value="">Wybierz alergen</option>
+            {options.map((item) => <option key={item.id} value={item.id}>
+              {allergenDisplayName(item.id, item.canonicalPl)}
+            </option>)}
+          </select>
+        </label>
+        {options.length === 0 && <p className="admin-allergen-empty admin-allergen-wide">
+          {canonical.length === 0 ? 'Nie udało się wczytać alergenów.' : 'Brak pasujących alergenów do dodania.'}
+        </p>}
+        <div className="admin-category-actions admin-allergen-wide">
+          <button type="submit" className="button button-primary" disabled={busy || !selectedId}>
+            {busy ? 'Dodawanie…' : 'Dodaj do listy'}
+          </button>
+          <button type="button" className="button button-secondary" disabled={busy}
+            onClick={() => { setFormOpen(false); setSearch(''); setSelectedId('') }}>Anuluj</button>
+        </div>
+      </form>}
+    </AnimatedPanel>
 
     {loading ? <p role="status">Ładowanie listy…</p> : !loaded ? null : allergens.length === 0
       ? <p className="admin-allergen-empty">Lista MOŻE ZAWIERAĆ jest pusta.</p>
@@ -177,11 +194,15 @@ export default function GlobalPrecautionaryAllergenSection({
             }}>
             <span aria-hidden="true">⋯</span>
           </button>
-          {openMenuId === allergen.allergenId && <div className="admin-allergen-context-menu" role="menu"
+          <div className="admin-allergen-context-menu" role="menu"
             aria-label={`Opcje dla: ${allergenDisplayName(allergen.allergenId, allergen.canonicalPl)}`}
-            ref={menuRef}>
+            aria-hidden={openMenuId !== allergen.allergenId}
+            inert={openMenuId !== allergen.allergenId}
+            data-open={openMenuId === allergen.allergenId}
+            data-placement={menuPlacement}
+            ref={(node) => { if (openMenuId === allergen.allergenId) menuRef.current = node }}>
             <button type="button" role="menuitem" onClick={() => void removeAllergen(allergen)}>Usuń z listy</button>
-          </div>}
+          </div>
         </li>)}
       </ul>}
     {loaded && <p className="admin-allergen-count" aria-live="polite">

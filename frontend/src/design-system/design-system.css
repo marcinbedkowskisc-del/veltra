@@ -1,3 +1,8 @@
+:root {
+  --motion-expand: 250ms ease-in-out;
+  --motion-popover: 150ms ease-in-out;
+}
+
 .ui-accordion { min-width: 0; }
 .ui-accordion-heading { margin: 0; font: inherit; }
 .ui-accordion-trigger {
@@ -19,6 +24,25 @@
 .ui-accordion-trigger:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
 .ui-accordion-trigger:disabled { opacity: 0.5; }
 .ui-accordion-title { flex: 1; min-width: 0; }
+.ui-disclosure { min-width: 0; }
+.ui-disclosure-heading { margin: 0; font: inherit; }
+.ui-disclosure-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ui-disclosure-trigger:hover { color: var(--text); }
+.ui-disclosure-trigger:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .ui-accordion-sr-only {
   position: absolute;
   width: 1px;
@@ -36,17 +60,29 @@
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.7;
-  transition: transform 250ms ease-in-out;
+  transition: transform var(--motion-expand);
 }
 .ui-accordion-trigger[aria-expanded="true"] .ui-accordion-chevron { transform: rotate(90deg); }
-.ui-accordion-panel {
+.ui-disclosure-chevron {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  transition: transform var(--motion-expand);
+}
+.ui-disclosure-trigger[aria-expanded="true"] .ui-disclosure-chevron { transform: rotate(90deg); }
+.ui-animated-panel {
   height: 0;
   overflow: hidden;
   opacity: 0;
-  transition: height 250ms ease-in-out, opacity 250ms ease-in-out;
+  transition: height var(--motion-expand), opacity var(--motion-expand);
 }
-.ui-accordion-panel[data-expanded="true"] { opacity: 1; }
-.ui-accordion-content { display: flow-root; }
+.ui-animated-panel[data-open="true"] { opacity: 1; }
+.ui-animated-panel-content, .ui-accordion-content { display: flow-root; }
 
 .ui-search-field {
   position: relative;
@@ -216,7 +252,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ui-accordion-panel, .ui-accordion-chevron { transition: none; }
+  .ui-animated-panel, .ui-accordion-chevron, .ui-disclosure-chevron { transition: none; }
   .ui-drawer-backdrop, .ui-drawer-panel, .ui-data-table-scroll, .ui-data-table tr[data-row-id] {
     transition-duration: 0.01ms !important;
   }

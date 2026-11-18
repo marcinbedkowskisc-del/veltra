@@ -189,6 +189,8 @@ Zmiany nie modyfikują seedów MASTER v1.1, formularzy i przepływów RAW, typó
 
 **Ograniczenia:** lista i obliczenie efektywne są gotowe do ponownego użycia przez przyszłe moduły, ale nie uruchamiają drukowania ani generowania etykiet. Nie rozstrzygają też prawnej równoważności kategorii. PA-05F pozostaje częścią PA-05 i wymaga końcowego odbioru właściciela; PA-06 nie rozpoczęto.
 
+**Lokalny commit implementacji PA-05F:** `9252a1e` (`feat(allergens): add installation-wide precautionary list`). Nie wykonano pushu ani deployu.
+
 Weryfikacja tej poprawki:
 
 | Zakres | Wynik |

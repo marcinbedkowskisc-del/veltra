@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AdministrationAllergenController;
 use App\Http\Controllers\Api\V1\AdministrationCategoryController;
 use App\Http\Controllers\Api\V1\AdministrationSupplierController;
 use App\Http\Controllers\Api\V1\AdministrationUnitController;
+use App\Http\Controllers\Api\V1\AdministrationUserController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
@@ -46,6 +47,10 @@ Route::prefix('v1/administration')->middleware([
     RequireAdministrator::class,
 ])->group(function (): void {
     Route::get('/access', fn () => response()->json(['data' => ['allowed' => true]]));
+    Route::get('/locations', [AdministrationUserController::class, 'locations']);
+    Route::get('/users', [AdministrationUserController::class, 'index']);
+    Route::get('/users/{user}', [AdministrationUserController::class, 'show'])->whereUuid('user');
+    Route::patch('/users/{user}/profile', [AdministrationUserController::class, 'updateProfile'])->whereUuid('user');
     Route::get('/categories', [AdministrationCategoryController::class, 'index']);
     Route::post('/categories', [AdministrationCategoryController::class, 'store']);
     Route::patch('/categories/{category}', [AdministrationCategoryController::class, 'update'])->whereUuid('category');

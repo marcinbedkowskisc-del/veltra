@@ -3,8 +3,10 @@ import AllergenDictionaryManagementPage from './administration/AllergenDictionar
 import CategoryManagementPage from './administration/CategoryManagementPage'
 import UnitManagementPage from './administration/UnitManagementPage'
 import SupplierManagementPage from './administration/SupplierManagementPage'
+import AdministrationUsersPage from './administration/AdministrationUsersPage'
+import AdministrationPermissionsPage from './administration/AdministrationPermissionsPage'
 
-export default function AdministrationPanel({ path }: { path: string }) {
+export default function AdministrationPanel({ path, onSessionExpired }: { path: string; onSessionExpired?: () => void }) {
   const selected = administrationGroups.flatMap((group) => group.items).find((item) => item.path === path)
   const overview = path === '/administration'
 
@@ -30,6 +32,10 @@ export default function AdministrationPanel({ path }: { path: string }) {
             <AllergenDictionaryManagementPage />
           ) : selected.path === '/administration/suppliers' ? (
             <SupplierManagementPage />
+          ) : selected.path === '/administration/users' ? (
+            <AdministrationUsersPage onSessionExpired={onSessionExpired} />
+          ) : selected.path === '/administration/permissions' ? (
+            <AdministrationPermissionsPage />
           ) : (
             <>
               <h2>{selected.label}</h2>

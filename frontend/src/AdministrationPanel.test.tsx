@@ -92,6 +92,16 @@ describe('Panel Administracyjny', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/administration/access', expect.anything())
   })
 
+  it('pokazuje obecne role Stage 1D bez zmiany zasad dla BOSS', async () => {
+    vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
+    window.history.replaceState(null, '', '/administration/permissions')
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: 'Role i uprawnienia' })).toBeTruthy()
+    expect(screen.getByText('Zakres roli BOSS pozostaje bez zmian.')).toBeTruthy()
+    expect(screen.getByText(/Nie otrzymuje dostępu do cen zakupu ani kosztów receptur/)).toBeTruthy()
+  })
+
   it('zamyka dostęp po błędzie sesji i nie traktuje błędu sieci jako odmowy', async () => {
     vi.stubGlobal('fetch', mockApi(() => json({ message: 'Expired' }, 401)))
     window.history.replaceState(null, '', '/administration')

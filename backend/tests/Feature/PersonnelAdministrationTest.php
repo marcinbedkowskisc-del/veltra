@@ -3,10 +3,13 @@
 namespace Tests\Feature;
 
 use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\Permission;
+use App\Domain\Authorization\PermissionAdministration;
 use App\Domain\Authorization\PersonnelAdministration;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\MembershipRequest;
+use App\Models\PermissionGrant;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -65,5 +68,30 @@ class PersonnelAdministrationTest extends AuthorizationTestCase
         $this->role($target, BusinessRole::RestaurantManager, $other);
         $this->expectException(AuthorizationException::class);
         $service->removeMembership($manager, $first, $target->memberships()->where('location_id', $first->id)->where('is_active', true)->firstOrFail());
+    }
+
+    public function test_administrator_removing_membership_revokes_attached_permissions_with_the_signed_actor(): void
+    {
+        $restaurant = $this->activeRestaurant();
+        $admin = $this->user('admin@example.test');
+        $admin = $this->updateFixture($admin, ['email_verified_at' => now()]);
+        app(MembershipService::class)->assign($admin, $restaurant);
+        $this->role($admin, BusinessRole::Administrator);
+        $target = $this->user('target@example.test');
+        $membership = app(MembershipService::class)->assign($target, $restaurant);
+        $grant = app(PermissionAdministration::class)->grant(
+            $admin,
+            $restaurant,
+            $target,
+            $restaurant,
+            Permission::FoodcostView,
+        );
+
+        app(PersonnelAdministration::class)->removeMembership($admin, $restaurant, $membership);
+
+        $revokedGrant = PermissionGrant::findOrFail($grant->id);
+        $this->assertNotNull($revokedGrant->revoked_at);
+        $this->assertSame($admin->id, $revokedGrant->revoked_by);
+        $this->assertFalse($membership->fresh()->is_active);
     }
 }

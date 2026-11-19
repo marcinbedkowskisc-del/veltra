@@ -11,6 +11,8 @@ const TRANSITION_MS = 250
 
 type Props = {
   labelledBy: string
+  descriptionId?: string
+  dialogRole?: 'dialog' | 'alertdialog'
   children: ReactNode | ((requestClose: () => void) => ReactNode)
   overlay?: ReactNode
   onClose: () => void
@@ -24,6 +26,8 @@ type Props = {
 
 export default function Drawer({
   labelledBy,
+  descriptionId,
+  dialogRole = 'dialog',
   children,
   onClose,
   onCloseStart,
@@ -145,9 +149,10 @@ export default function Drawer({
         ref={panelRef}
         className={`ui-drawer-panel ${className}`.trim()}
         style={{ '--ui-drawer-width': width } as CSSProperties}
-        role="dialog"
+        role={dialogRole}
         aria-modal="true"
         aria-labelledby={labelledBy}
+        aria-describedby={descriptionId}
         tabIndex={-1}
       >
         {drawerChildren}

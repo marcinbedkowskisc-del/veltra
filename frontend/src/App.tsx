@@ -215,7 +215,7 @@ function App() {
         ) : !authContext.location ? (
           <section className="state-panel"><h1>Panel Administracyjny</h1><p>Wybierz lokalizację operacyjną, aby sprawdzić dostęp.</p></section>
         ) : administrationStatus === 'allowed' ? (
-          <AdministrationPanel path={window.location.pathname} />
+          <AdministrationPanel path={window.location.pathname} onSessionExpired={handleSessionExpired} />
         ) : administrationStatus === 'denied' ? (
           <section className="state-panel" role="alert"><h1>Brak dostępu</h1><p>Panel Administracyjny jest dostępny wyłącznie dla administratorów.</p></section>
         ) : administrationStatus === 'error' ? (

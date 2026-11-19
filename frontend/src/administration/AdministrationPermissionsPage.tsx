@@ -11,8 +11,8 @@ const roles = [
   },
   {
     name: 'BOSS',
-    scope: 'Restauracje organizacji',
-    access: 'Przegląda lokalizacje i raporty oraz może pobierać zestawienia. Nie otrzymuje dostępu do cen zakupu ani kosztów receptur.',
+    scope: 'Kuchnie centralne i restauracje organizacji',
+    access: 'Ma dostęp do listy dostępnych lokalizacji. Nie otrzymuje dostępu do cen zakupu ani kosztów receptur.',
   },
   {
     name: 'Manager restauracji',
@@ -43,8 +43,8 @@ export default function AdministrationPermissionsPage() {
       </header>
 
       <div className="admin-permissions-notice" role="note">
-        <strong>Zakres roli BOSS pozostaje bez zmian.</strong>
-        <span>BOSS ma dostęp do podglądu lokalizacji i raportów oraz eksportu zestawień. Nie ma dostępu do cen zakupu, kosztów receptur ani katalogu surowców.</span>
+        <strong>Zakres roli BOSS można ograniczyć według lokalizacji.</strong>
+        <span>Ograniczenia ustawia administrator w szczegółach konta. Nie zmieniają one niezależnych uprawnień wynikających z innych ról.</span>
       </div>
 
       <div className="admin-permissions-table-wrap">

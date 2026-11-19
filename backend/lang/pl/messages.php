@@ -5,6 +5,7 @@ return [
     'account_link_completed' => 'Operacja bezpieczeństwa konta została zakończona. Zaloguj się nowym hasłem.',
     'account_link_invalid' => 'Nie można użyć tego linku. Poproś uprawnionego przełożonego o nową wiadomość.',
     'account_profile_updated' => 'Dane użytkownika zostały zapisane.',
+    'boss_restrictions_conflict' => 'Ograniczenia zostały zmienione. Wczytaj bieżący stan przed zapisaniem zmian.',
     'active_membership_already_exists' => 'Użytkownik ma już aktywne przypisanie do tej lokalizacji.',
     'active_target_account_required' => 'Konto użytkownika musi być aktywne.',
     'active_target_membership_required' => 'Użytkownik musi mieć aktywne przypisanie do lokalizacji.',

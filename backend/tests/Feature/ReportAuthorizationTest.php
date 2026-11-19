@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\BossLocationRestrictions;
+use App\Domain\Authorization\BossVisibilityCategory;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\Permission;
@@ -41,6 +43,25 @@ class ReportAuthorizationTest extends AuthorizationTestCase
         $this->assertTrue($service->canViewShared($boss, $restaurant, $report));
         $this->assertFalse($service->canViewShared($boss, $restaurant, Str::uuid()->toString()));
         $this->assertFalse(app(BusinessAuthorization::class)->allows($boss, $restaurant, $kitchen, Permission::LocationView));
+
+        $admin = $this->user('admin@example.test');
+        $this->role($admin, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($admin, $restaurant);
+        $restrictions = app(BossLocationRestrictions::class);
+        $restrictions->replace(
+            $admin, $restaurant, $boss->id, 0, [], [BossVisibilityCategory::ReportsAnalytics->value], [],
+        );
+        $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
+        $restrictions->replace($admin, $restaurant, $boss->id, 1, [], [], [[
+            'category' => BossVisibilityCategory::ReportsAnalytics->value,
+            'location_id' => $kitchen->id,
+        ]]);
+        $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
+        $restrictions->replace($admin, $restaurant, $boss->id, 2, [$kitchen->id], [], []);
+        $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
+        $restrictions->replace($admin, $restaurant, $boss->id, 3, [], [], []);
+        $this->assertTrue($service->canViewShared($boss, $restaurant, $report));
+
         $service->revoke($chef, $kitchen, $share);
         $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($share)->fresh()->delete());

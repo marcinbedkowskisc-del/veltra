@@ -50,6 +50,16 @@ class ReportAuthorization
 
         return $kitchen && $this->authorization->eligible($boss, $context, $kitchen)
             && $this->authorization->hasRole($boss, BusinessRole::Boss)
+            && app(BusinessVisibility::class)->decide($boss, $context, new BusinessVisibilitySurface(
+                'boss.report.shared',
+                BusinessVisibilitySource::Boss,
+                'detail',
+                Permission::ReportsView,
+                [BossVisibilityCategory::ReportsAnalytics],
+                BusinessDataProvenance::location($kitchen->id),
+                $kitchen,
+                Permission::ReportsView->module(),
+            ))->allowed
             && ReportShare::where('user_id', $boss->id)->where('report_id', $reportId)->where('location_id', $kitchen->id)->whereNull('revoked_at')->exists();
     }
 

@@ -92,13 +92,13 @@ describe('Panel Administracyjny', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/administration/access', expect.anything())
   })
 
-  it('pokazuje obecne role Stage 1D bez zmiany zasad dla BOSS', async () => {
+  it('pokazuje zakres ograniczeń BOSS i brak dostępu do danych finansowych', async () => {
     vi.stubGlobal('fetch', mockApi(() => json({ data: { allowed: true } })))
     window.history.replaceState(null, '', '/administration/permissions')
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Role i uprawnienia' })).toBeTruthy()
-    expect(screen.getByText('Zakres roli BOSS pozostaje bez zmian.')).toBeTruthy()
+    expect(screen.getByText('Zakres roli BOSS można ograniczyć według lokalizacji.')).toBeTruthy()
     expect(screen.getByText(/Nie otrzymuje dostępu do cen zakupu ani kosztów receptur/)).toBeTruthy()
   })
 

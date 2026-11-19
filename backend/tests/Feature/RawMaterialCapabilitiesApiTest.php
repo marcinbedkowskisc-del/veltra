@@ -108,6 +108,43 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.actions.edit', false);
     }
 
+    public function test_boss_restrictions_do_not_suppress_an_independent_raw_grant(): void
+    {
+        $this->prepareReadyModule();
+        $this->role($this->steward, BusinessRole::Boss);
+
+        $this->selectContext($this->administrator, $this->location);
+        $this->putJson("/api/v1/administration/users/{$this->steward->id}/boss-location-restrictions", [
+            'version' => 0,
+            'excluded_location_ids' => [$this->location->id],
+            'policy_schema_version' => 2,
+            'excluded_categories' => [],
+            'excluded_category_locations' => [],
+        ])->assertOk();
+
+        $this->selectContext($this->steward, $this->location);
+        $this->getJson('/api/v1/raw-materials')->assertOk();
+    }
+
+    public function test_boss_restrictions_do_not_grant_access_to_raw_routes_without_an_independent_grant(): void
+    {
+        $this->prepareReadyModule();
+        $boss = $this->newRecipient('capabilities-boss-without-raw-grant@example.test');
+        $this->role($boss, BusinessRole::Boss);
+
+        $this->selectContext($this->administrator, $this->location);
+        $this->putJson("/api/v1/administration/users/{$boss->id}/boss-location-restrictions", [
+            'version' => 0,
+            'excluded_location_ids' => [$this->location->id],
+            'policy_schema_version' => 2,
+            'excluded_categories' => [],
+            'excluded_category_locations' => [],
+        ])->assertOk();
+
+        $this->selectContext($boss, $this->location);
+        $this->getJson('/api/v1/raw-materials')->assertForbidden();
+    }
+
     public function test_category_management_capability_requires_grant_availability_and_primary_context(): void
     {
         $this->selectContext($this->steward, $this->location);

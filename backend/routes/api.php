@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\AdministrationSupplierController;
 use App\Http\Controllers\Api\V1\AdministrationUnitController;
 use App\Http\Controllers\Api\V1\AdministrationUserController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
+use App\Http\Controllers\Api\V1\BossLocationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
@@ -51,6 +52,8 @@ Route::prefix('v1/administration')->middleware([
     Route::get('/users', [AdministrationUserController::class, 'index']);
     Route::get('/users/{user}', [AdministrationUserController::class, 'show'])->whereUuid('user');
     Route::patch('/users/{user}/profile', [AdministrationUserController::class, 'updateProfile'])->whereUuid('user');
+    Route::get('/users/{user}/boss-location-restrictions', [BossLocationController::class, 'showRestrictions'])->whereUuid('user');
+    Route::put('/users/{user}/boss-location-restrictions', [BossLocationController::class, 'updateRestrictions'])->whereUuid('user');
     Route::get('/categories', [AdministrationCategoryController::class, 'index']);
     Route::post('/categories', [AdministrationCategoryController::class, 'store']);
     Route::patch('/categories/{category}', [AdministrationCategoryController::class, 'update'])->whereUuid('category');
@@ -97,6 +100,7 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');
     Route::put('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');
     Route::get('/access', [SecurityController::class, 'access']);
+    Route::get('/boss/locations', [BossLocationController::class, 'index']);
     Route::get('/modules/catalog', [ModuleConfigurationController::class, 'catalog']);
     Route::get('/locations/{location}/modules', [ModuleConfigurationController::class, 'states'])->whereUuid('location');
     Route::post('/modules/configuration', [ModuleConfigurationController::class, 'configure']);

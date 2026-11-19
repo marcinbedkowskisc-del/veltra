@@ -249,6 +249,7 @@ final readonly class AuthorizationMutationScope
             'membership.remove' => self::personnelMembershipRemove(...),
             'report.share' => self::reportShare(...),
             'report.share_revoke' => self::reportShareRevoke(...),
+            'boss.location_restrictions' => static fn (): self => new self('boss.location_restrictions'),
             'account.deactivate' => self::accountDeactivate(...),
             'account.reactivate' => self::accountReactivate(...),
             'account.email_change' => self::accountEmailChange(...),

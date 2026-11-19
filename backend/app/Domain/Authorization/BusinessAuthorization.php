@@ -60,6 +60,36 @@ class BusinessAuthorization
         if ($permission->module() !== null && ! app(ModuleAvailability::class)->enabled($target, $permission->module())) {
             return false;
         }
+        if ($this->hasRole($actor, BusinessRole::Boss)
+            && in_array($permission, [Permission::LocationView, Permission::ReportsView, Permission::ReportsExport], true)) {
+            $categories = in_array($permission, [Permission::ReportsView, Permission::ReportsExport], true)
+                ? [BossVisibilityCategory::ReportsAnalytics] : [];
+            $decision = app(BusinessVisibility::class)->decide($actor, $context, new BusinessVisibilitySurface(
+                'boss.location_or_report',
+                BusinessVisibilitySource::Boss,
+                'detail',
+                $permission,
+                $categories,
+                BusinessDataProvenance::location($target->id),
+                $target,
+                $permission->module(),
+            ));
+            if ($decision->allowed) {
+                return true;
+            }
+        }
+
+        return $this->allowsIndependent($actor, $context, $target, $permission);
+    }
+
+    public function allowsIndependent(User $actor, Location $context, Location $target, Permission $permission): bool
+    {
+        if (! $this->eligible($actor, $context, $target)) {
+            return false;
+        }
+        if ($permission->module() !== null && ! app(ModuleAvailability::class)->enabled($target, $permission->module())) {
+            return false;
+        }
         if ($this->hasRole($actor, BusinessRole::Administrator)) {
             return true;
         }
@@ -68,10 +98,6 @@ class BusinessAuthorization
         }
         if ($target->type !== LocationType::Restaurant) {
             return false;
-        }
-        if ($this->hasRole($actor, BusinessRole::Boss)
-            && in_array($permission, [Permission::LocationView, Permission::ReportsView, Permission::ReportsExport], true)) {
-            return true;
         }
         if (! $context->is($target)) {
             return false;

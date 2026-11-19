@@ -5,6 +5,7 @@ import DataTable, { type DataTableColumn } from '../design-system/DataTable'
 import Drawer from '../design-system/Drawer'
 import Pagination from '../design-system/Pagination'
 import VeltraDisclosure from '../design-system/VeltraDisclosure'
+import BossLocationRestrictions from './BossLocationRestrictions'
 import {
   assignUserLocation,
   changeUserEmail,
@@ -138,6 +139,7 @@ function historyLabel(action: string): string {
     'account.reactivate': 'Włączono konto',
     'account.email_change': 'Zmieniono adres e-mail',
     'account.profile_update': 'Zmieniono dane użytkownika',
+    'boss.location_restrictions': 'Zmieniono ograniczenia lokalizacji roli BOSS',
     'membership.assign': 'Przypisano lokalizację',
     'membership.remove': 'Cofnięto przypisanie do lokalizacji',
     'membership.request': 'Złożono prośbę o dostęp do lokalizacji',
@@ -655,6 +657,14 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
                   <label>Nowy adres e-mail<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
                   <button type="submit" className="button button-primary" disabled={busy}>Zapisz i wyślij link</button>
                 </form>}
+
+                {details.roles.some((assignment) => assignment.role === 'BOSS') && (
+                  <VeltraDisclosure title="Ograniczenia dostępu">
+                    <BossLocationRestrictions key={details.id} userId={details.id} locations={locations}
+                      onSaved={() => setDetailsReload((current) => current + 1)}
+                      canManage={details.isActive && details.roles.some((assignment) => assignment.role === 'BOSS' && assignment.revokedAt === null)} />
+                  </VeltraDisclosure>
+                )}
 
                 <VeltraDisclosure title="Role i lokalizacje">
                   <div className="admin-user-section-actions">

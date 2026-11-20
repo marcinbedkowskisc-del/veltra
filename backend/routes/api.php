@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\V1\BossLocationController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
+use App\Http\Controllers\Api\V1\OrganizationCapabilityController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\RawMaterialCapabilitiesController;
 use App\Http\Controllers\Api\V1\RawMaterialCatalogCsvImportController;
@@ -95,6 +96,9 @@ Route::prefix('v1/administration')->middleware([
 
 Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctum', ValidateIdentityContext::class, AuditSecurityRejection::class, RequireOperatingContext::class, 'throttle:security'])->group(function (): void {
     Route::get('/raw-materials/capabilities', RawMaterialCapabilitiesController::class);
+    Route::get('/organization-capabilities/BOSS_RAW_CATALOG_READ', [OrganizationCapabilityController::class, 'show']);
+    Route::put('/organization-capabilities/BOSS_RAW_CATALOG_READ', [OrganizationCapabilityController::class, 'configure']);
+    Route::get('/organization-capabilities/BOSS_RAW_CATALOG_READ/history', [OrganizationCapabilityController::class, 'history']);
     Route::post('/locations', [SecurityStructureController::class, 'store']);
     Route::patch('/locations/{location}', [SecurityStructureController::class, 'update'])->whereUuid('location');
     Route::post('/locations/{location}/managing-kitchen', [SecurityStructureController::class, 'managingKitchen'])->whereUuid('location');

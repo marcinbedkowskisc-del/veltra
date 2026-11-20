@@ -1,6 +1,8 @@
 <?php
 
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\Modules\OrganizationCapabilityAuditException;
+use App\Domain\Modules\OrganizationCapabilityException;
 use App\Domain\RawMaterials\Documents\DocumentStorageException;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
 use App\Domain\RawMaterials\RawMaterialException;
@@ -43,10 +45,30 @@ return Application::configure(basePath: dirname(__DIR__))
 
             return $response;
         });
+        $exceptions->render(function (OrganizationCapabilityException $exception, Request $request) {
+            if ($request->is('api/v1/security/organization-capabilities/*')) {
+                return response()->json([
+                    'error' => [
+                        'code' => $exception->errorCode,
+                        'message' => $exception->getMessage(),
+                    ],
+                ], $exception->getStatusCode(), $exception->getHeaders());
+            }
+        });
+        $exceptions->render(function (OrganizationCapabilityAuditException $exception, Request $request) {
+            if ($request->is('api/v1/security/organization-capabilities/*')) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'CAPABILITY_AUDIT_PERSISTENCE_FAILED',
+                        'message' => __('messages.organization_capability_audit_failed'),
+                    ],
+                ], 500);
+            }
+        });
         $exceptions->dontFlash(['token', 'current_password', 'password', 'password_confirmation']);
         $exceptions->dontReport([BusinessRuleViolation::class]);
         $exceptions->report(function (QueryException $exception) {
-            if (preg_match('/\b(users|location_memberships|activation_tokens|password_reset_tokens|role_assignments|permission_grants|security_events|account_email_deliveries|membership_requests|report_shares)\b/i', $exception->getSql())) {
+            if (preg_match('/\b(users|location_memberships|activation_tokens|password_reset_tokens|role_assignments|permission_grants|security_events|account_email_deliveries|membership_requests|report_shares|organization_capability_states|organization_capability_events)\b/i', $exception->getSql())) {
                 // QueryException messages include SQL bindings, which can contain password hashes.
                 Log::error('Identity database operation failed.', ['sqlstate' => $exception->errorInfo[0] ?? null]);
 

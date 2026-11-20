@@ -6,8 +6,10 @@ use App\Domain\Authorization\ConfiguredModuleAvailability;
 use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Authorization\ReportCatalog;
 use App\Domain\Authorization\UnavailableReports;
+use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
 use App\Domain\Modules\LocalRawMaterialCatalog;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\Modules\OrganizationCapabilityCatalog;
 use App\Domain\RawMaterials\Documents\ClamAvDocumentScanner;
 use App\Domain\RawMaterials\Documents\DocumentScanner;
 use App\Domain\RawMaterials\Documents\PrivateDocumentStorage;
@@ -27,6 +29,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(ModuleCatalog::class, LocalRawMaterialCatalog::class);
+        $this->app->singleton(OrganizationCapabilityCatalog::class, CodeOrganizationCapabilityCatalog::class);
         $this->app->bind(ModuleAvailability::class, ConfiguredModuleAvailability::class);
         $this->app->bind(ReportCatalog::class, UnavailableReports::class);
         $this->app->bind(PrivateDocumentStorage::class, PrivateLocalDocumentStorage::class);

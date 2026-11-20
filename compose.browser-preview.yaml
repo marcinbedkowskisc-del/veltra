@@ -1,0 +1,190 @@
+name: veltra-pa07b2-browser-preview
+
+x-preview-common-environment: &preview-common-environment
+  APP_NAME: VELTRA 2.0
+  APP_ENV: browser-preview
+  APP_DEBUG: "false"
+  APP_LOCALE: pl
+  APP_FALLBACK_LOCALE: pl
+  APP_KEY: ${PA07B2_PREVIEW_APP_KEY:?Generate a preview-only APP_KEY}
+  APP_DB_MUTATION_SIGNING_KEY: ${PA07B2_PREVIEW_MUTATION_KEY:?Generate a preview-only mutation key}
+  VELTRA_BROWSER_PREVIEW: "1"
+  DEV_MANAGEMENT_ENABLED: "false"
+  DEV_MANAGEMENT_TOKEN: ""
+  APP_URL: http://127.0.0.1:5197
+  FRONTEND_URL: http://127.0.0.1:5197
+  SANCTUM_STATEFUL_DOMAINS: 127.0.0.1:5197,localhost:5197
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: warning
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_DATABASE: veltra_pa07b2_browser_preview
+  APP_DB_USERNAME: veltra_app
+  APP_DB_MIGRATION_USERNAME: veltra_migrator
+  CACHE_STORE: redis
+  CACHE_PREFIX: veltra-pa07b2-browser-preview
+  SESSION_DRIVER: redis
+  SESSION_SECURE_COOKIE: "false"
+  SESSION_LIFETIME: "120"
+  QUEUE_CONNECTION: sync
+  MAIL_MAILER: array
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_CACHE_DB: "1"
+  CLAMAV_HOST: clamav
+  CLAMAV_PORT: "3310"
+
+x-preview-image: &preview-image
+  image: veltra-pa07b2-backend-preview:local
+  pull_policy: never
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.browser-preview
+    pull: false
+  networks: [preview]
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    pull_policy: never
+    environment:
+      POSTGRES_DB: veltra_pa07b2_browser_preview
+      POSTGRES_USER: veltra_preview_admin
+      POSTGRES_PASSWORD: ${PA07B2_PREVIEW_PG_ADMIN_PASSWORD:?Generate a preview-only PostgreSQL admin password}
+      APP_DB_USERNAME: veltra_app
+      APP_DB_PASSWORD: ${PA07B2_PREVIEW_APP_DB_PASSWORD:?Generate a preview-only app password}
+      APP_DB_MIGRATION_USERNAME: veltra_migrator
+      APP_DB_MIGRATION_PASSWORD: ${PA07B2_PREVIEW_MIGRATOR_PASSWORD:?Generate a preview-only migration password}
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=1g
+    volumes:
+      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
+    networks: [preview]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${APP_DB_MIGRATION_USERNAME}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    pull_policy: never
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--dir", "/data"]
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=64m
+    networks: [preview]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  clamav:
+    image: clamav/clamav:1.4
+    pull_policy: never
+    networks: [preview]
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    <<: *preview-image
+    environment:
+      <<: *preview-common-environment
+      DB_USERNAME: veltra_app
+      DB_PASSWORD: ${PA07B2_PREVIEW_APP_DB_PASSWORD:?Generate a preview-only app password}
+      APP_DB_PASSWORD: ${PA07B2_PREVIEW_APP_DB_PASSWORD:?Generate a preview-only app password}
+    command: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000", "--no-reload"]
+    networks: [preview, browser-api]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clamav:
+        condition: service_started
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8000/up') === false ? 1 : 0);"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    image: veltra-frontend:stage1f-polish-localization
+    pull_policy: never
+    working_dir: /app
+    command:
+      ["npm", "run", "dev", "--", "--config", "vite.browser-preview.config.ts", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ./frontend/index.html:/app/index.html:ro
+      - ./frontend/src:/app/src:ro
+      - ./frontend/vite.browser-preview.config.ts:/app/vite.browser-preview.config.ts:ro
+    ports:
+      - "127.0.0.1:5197:5173"
+    networks: [browser-ingress, browser-api]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    <<: *preview-image
+    environment:
+      <<: *preview-common-environment
+      DB_USERNAME: veltra_migrator
+      DB_PASSWORD: ${PA07B2_PREVIEW_MIGRATOR_PASSWORD:?Generate a preview-only migration password}
+      APP_DB_MIGRATION_PASSWORD: ${PA07B2_PREVIEW_MIGRATOR_PASSWORD:?Generate a preview-only migration password}
+    command: ["php", "artisan", "migrate", "--force"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    <<: *preview-image
+    environment:
+      <<: *preview-common-environment
+      DB_USERNAME: veltra_app
+      DB_PASSWORD: ${PA07B2_PREVIEW_APP_DB_PASSWORD:?Generate a preview-only app password}
+      APP_DB_PASSWORD: ${PA07B2_PREVIEW_APP_DB_PASSWORD:?Generate a preview-only app password}
+      PA07B2_PREVIEW_ADMIN_PASSWORD: ${PA07B2_PREVIEW_ADMIN_PASSWORD:?Generate a synthetic administrator password}
+      PA07B2_PREVIEW_BOSS_PASSWORD: ${PA07B2_PREVIEW_BOSS_PASSWORD:?Generate a synthetic BOSS password}
+      PA07B2_PREVIEW_BOSS_RAW_PASSWORD: ${PA07B2_PREVIEW_BOSS_RAW_PASSWORD:?Generate a synthetic BOSS/RAW password}
+      PA07B2_PREVIEW_MIGRATOR_PASSWORD: ${PA07B2_PREVIEW_MIGRATOR_PASSWORD:?Generate a preview-only migration password}
+    command: ["php", "artisan", "db:seed", "--class=BrowserPreviewSeeder", "--force"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+networks:
+  preview:
+    internal: true
+  browser-api:
+    internal: true
+  browser-ingress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"

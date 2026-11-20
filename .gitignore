@@ -5,6 +5,7 @@
 **/node_modules/
 **/dist/
 /tests/compose/test.env
+/tests/compose/pa07b2-browser-preview.env
 frontend/interactive-preview-dist/
 *.log
 .DS_Store

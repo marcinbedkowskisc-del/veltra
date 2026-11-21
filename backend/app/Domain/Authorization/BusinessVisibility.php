@@ -3,6 +3,8 @@
 namespace App\Domain\Authorization;
 
 use App\Domain\Installation\LocationType;
+use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
+use App\Domain\Modules\OrganizationCapabilityAccess;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
@@ -15,6 +17,7 @@ final class BusinessVisibility
         private BossLocationRestrictions $restrictions,
         private RawMaterialAuthorization $rawAuthorization,
         private ModuleAvailability $modules,
+        private OrganizationCapabilityAccess $organizationCapabilities,
     ) {}
 
     public function decide(User $actor, Location $context, BusinessVisibilitySurface $surface): BusinessVisibilityDecision
@@ -28,6 +31,10 @@ final class BusinessVisibility
 
     private function decideBoss(User $actor, Location $context, BusinessVisibilitySurface $surface): BusinessVisibilityDecision
     {
+        if ($surface->intent !== null) {
+            return $this->decideBossRawCatalog($actor, $context, $surface);
+        }
+
         if (! $surface->permission instanceof Permission
             || ! in_array($surface->permission, [Permission::LocationView, Permission::ReportsView, Permission::ReportsExport], true)
             || ! $this->authorization->eligible($actor, $context, $surface->target)
@@ -69,6 +76,38 @@ final class BusinessVisibility
             }
         }
         if ($this->restrictions->denies($actor, $surface->provenance, $surface->categories)) {
+            return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'BOSS_RESTRICTION_APPLIES');
+        }
+
+        return BusinessVisibilityDecision::allow(BusinessVisibilitySource::Boss);
+    }
+
+    private function decideBossRawCatalog(
+        User $actor,
+        Location $context,
+        BusinessVisibilitySurface $surface,
+    ): BusinessVisibilityDecision {
+        $operation = $surface->intent?->value;
+        if ($operation === null
+            || ! $this->authorization->eligible($actor, $context)
+            || ! $this->authorization->hasOrganizationRole($actor, BusinessRole::Boss)) {
+            return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'BOSS_ACCESS_NOT_AUTHORIZED');
+        }
+
+        if (! $this->organizationCapabilities->isEnabled(
+            $actor->organization_id,
+            CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+            $operation,
+            $context->type,
+        )) {
+            return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'BOSS_CAPABILITY_UNAVAILABLE');
+        }
+
+        if ($this->restrictions->denies(
+            $actor,
+            $surface->provenance,
+            $surface->categories,
+        )) {
             return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'BOSS_RESTRICTION_APPLIES');
         }
 

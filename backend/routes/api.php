@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\V1\AdministrationUnitController;
 use App\Http\Controllers\Api\V1\AdministrationUserController;
 use App\Http\Controllers\Api\V1\AuthenticationController;
 use App\Http\Controllers\Api\V1\BossLocationController;
+use App\Http\Controllers\Api\V1\BossRawMaterialCatalogController;
 use App\Http\Controllers\Api\V1\LocationController;
 use App\Http\Controllers\Api\V1\ManagementController;
 use App\Http\Controllers\Api\V1\ModuleConfigurationController;
@@ -24,6 +25,7 @@ use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuditSecurityRejection;
+use App\Http\Middleware\BossRawCatalogNoStore;
 use App\Http\Middleware\LocalManagementAccess;
 use App\Http\Middleware\RequireAdministrator;
 use App\Http\Middleware\RequireOperatingContext;
@@ -124,6 +126,19 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/users/{user}/locations/{location}/permissions', [SecurityController::class, 'grantPermission'])->whereUuid('user')->whereUuid('location');
     Route::delete('/users/{user}/locations/{location}/permissions', [SecurityController::class, 'revokePermission'])->whereUuid('user')->whereUuid('location');
     Route::post('/users/{identifier}/links', [SecurityController::class, 'link'])->whereUuid('identifier');
+});
+
+Route::prefix('v1/boss/raw-materials')->middleware([
+    RequireSpaSession::class,
+    'auth:sanctum',
+    ValidateIdentityContext::class,
+    AuditSecurityRejection::class,
+    RequireOperatingContext::class,
+    'throttle:security',
+    BossRawCatalogNoStore::class,
+])->group(function (): void {
+    Route::get('/', [BossRawMaterialCatalogController::class, 'index']);
+    Route::get('/{material}', [BossRawMaterialCatalogController::class, 'show'])->whereUuid('material');
 });
 
 Route::prefix('v1/raw-materials')->middleware([

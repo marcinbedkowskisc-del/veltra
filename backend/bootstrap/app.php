@@ -42,6 +42,30 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/*')) {
                 $response->headers->set('Content-Language', 'pl');
             }
+            if (($request->is('api/v1/boss/raw-materials')
+                    || $request->is('api/v1/boss/raw-materials/*'))
+                && $response->getStatusCode() >= 400) {
+                [$code, $message] = match ($response->getStatusCode()) {
+                    401 => ['UNAUTHENTICATED', __('messages.unauthenticated')],
+                    403 => ['BOSS_RAW_CATALOG_FORBIDDEN', __('messages.unauthorized')],
+                    404 => ['BOSS_RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found')],
+                    405 => ['METHOD_NOT_ALLOWED', __('messages.boss_raw_catalog_method_not_allowed')],
+                    419 => ['SESSION_EXPIRED', __('messages.session_expired')],
+                    422 => ['VALIDATION_FAILED', __('messages.validation_failed')],
+                    429 => ['TOO_MANY_REQUESTS', __('messages.too_many_requests')],
+                    503 => ['BOSS_RAW_CATALOG_UNAVAILABLE', __('messages.boss_raw_catalog_unavailable')],
+                    default => ['BOSS_RAW_CATALOG_ERROR', __('messages.boss_raw_catalog_request_failed')],
+                };
+                $response->setContent(json_encode([
+                    'error' => [
+                        'code' => $code,
+                        'message' => $message,
+                    ],
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+                $response->headers->set('Content-Type', 'application/json');
+                $response->headers->set('Cache-Control', 'private, no-store');
+                $response->headers->remove('Content-Length');
+            }
 
             return $response;
         });

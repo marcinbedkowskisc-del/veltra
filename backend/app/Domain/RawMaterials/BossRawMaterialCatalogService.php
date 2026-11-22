@@ -241,6 +241,11 @@ final class BossRawMaterialCatalogService
                 $join->on('categories.id', '=', 'revisions.category_id')
                     ->on('categories.organization_id', '=', 'materials.organization_id');
             })
+            ->leftJoin('raw_material_approved_supplier_snapshots as supplier_snapshots', function ($join): void {
+                $join->on('supplier_snapshots.organization_id', '=', 'materials.organization_id')
+                    ->on('supplier_snapshots.raw_material_id', '=', 'materials.id')
+                    ->on('supplier_snapshots.revision_id', '=', 'revisions.id');
+            })
             ->where('materials.organization_id', $organizationId)
             ->where('materials.lifecycle_state', 'ACTIVE')
             ->whereNull('materials.deleted_at')
@@ -267,6 +272,30 @@ final class BossRawMaterialCatalogService
             'categories.id as category_id',
             'categories.name as category_name',
             'revisions.base_unit_code as base_unit_code',
+            'supplier_snapshots.state as supplier_snapshot_state',
+            DB::raw(<<<'SQL'
+                CASE
+                    WHEN supplier_snapshots.state = 'APPROVED_EMPTY' THEN '[]'::text
+                    WHEN supplier_snapshots.state = 'APPROVED_NONEMPTY' THEN
+                        COALESCE((
+                            SELECT json_agg(DISTINCT coalesce(
+                                nullif(btrim(snapshot_suppliers.display_name), ''),
+                                snapshot_suppliers.legal_name
+                            ) ORDER BY coalesce(
+                                nullif(btrim(snapshot_suppliers.display_name), ''),
+                                snapshot_suppliers.legal_name
+                            ))::text
+                            FROM raw_material_approved_supplier_snapshot_items snapshot_items
+                            JOIN organization_suppliers snapshot_suppliers
+                              ON snapshot_suppliers.id = snapshot_items.supplier_id
+                             AND snapshot_suppliers.organization_id = snapshot_items.organization_id
+                            WHERE snapshot_items.snapshot_id = supplier_snapshots.id
+                              AND snapshot_items.organization_id = supplier_snapshots.organization_id
+                              AND snapshot_items.revision_id = supplier_snapshots.revision_id
+                        ), '[]')
+                    ELSE NULL
+                END as supplier_names_json
+                SQL),
         ];
     }
 

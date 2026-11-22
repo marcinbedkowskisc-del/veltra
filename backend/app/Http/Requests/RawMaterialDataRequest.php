@@ -21,6 +21,7 @@ class RawMaterialDataRequest extends InstallationRequest
             'pricing.unit_code' => ['required_if:pricing.basis,NOMINAL_UNIT', 'prohibited_if:pricing.basis,PACKAGE', 'string', 'max:24', 'regex:/^[a-z][a-z0-9_]{0,23}$/D'],
             'supplier_ids' => ['sometimes', 'array', 'max:100'],
             'supplier_ids.*' => ['required', 'uuid', 'distinct'],
+            'supplier_association_empty_confirmed' => ['sometimes', 'boolean'],
             'sku_reservation_id' => [$this->isMethod('POST') ? 'sometimes' : 'prohibited', 'uuid'],
             'aliases' => ['sometimes', 'array', 'max:50'],
             'aliases.*' => ['required', 'string', 'max:200', 'distinct'],

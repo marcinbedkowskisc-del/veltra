@@ -102,9 +102,9 @@ class BossRawMaterialCatalogApiTest extends AuthorizationTestCase
         );
         $this->assertSame([
             'data' => [
-                ['id', 'code', 'name', 'category', 'base_unit_code'],
-                ['id', 'code', 'name', 'category', 'base_unit_code'],
-                ['id', 'code', 'name', 'category', 'base_unit_code'],
+                ['id', 'code', 'name', 'category', 'base_unit_code', 'supplier_names'],
+                ['id', 'code', 'name', 'category', 'base_unit_code', 'supplier_names'],
+                ['id', 'code', 'name', 'category', 'base_unit_code', 'supplier_names'],
             ],
             'meta' => ['current_page', 'per_page', 'total', 'last_page'],
         ], [

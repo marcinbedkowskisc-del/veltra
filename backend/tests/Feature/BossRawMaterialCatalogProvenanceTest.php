@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\AuthorizationMutationContext;
+use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
@@ -9,6 +11,7 @@ use App\Domain\Modules\ModuleCatalog;
 use App\Domain\Modules\OrganizationCapabilityCatalog;
 use App\Domain\Modules\OrganizationCapabilityService;
 use App\Domain\RawMaterials\BossRawMaterialCatalogService;
+use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Domain\Sku\SkuPrefix;
@@ -18,8 +21,10 @@ use App\Models\LocationModuleState;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Database\Connection;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
@@ -117,7 +122,7 @@ class BossRawMaterialCatalogProvenanceTest extends AuthorizationTestCase
         $this->assertSame($materialId, $response['data'][0]['id']);
         $this->assertNotSame($draft['id'], $response['data'][0]['id']);
         $this->assertSame(
-            ['id', 'code', 'name', 'category', 'base_unit_code'],
+            ['id', 'code', 'name', 'category', 'base_unit_code', 'supplier_names'],
             array_keys($response['data'][0]),
         );
         $this->assertSame(['id', 'name'], array_keys($response['data'][0]['category']));
@@ -253,6 +258,606 @@ class BossRawMaterialCatalogProvenanceTest extends AuthorizationTestCase
                 $this->assertSame(404, $exception->getStatusCode());
             }
         }, truncateAfterOperation: true);
+    }
+
+    private function assertConstraintViolation(callable $operation): void
+    {
+        try {
+            $this->withSetupTransaction(function (Connection $connection) use ($operation): void {
+                $operation($connection);
+                $this->fail('Snapshot supplier data accepted an update or delete.');
+            });
+        } catch (QueryException $exception) {
+            $sqlState = (string) ($exception->errorInfo[0] ?? '');
+            $this->assertContains($sqlState, ['23514', '23503', '23505']);
+        }
+    }
+
+    public function test_returned_proposal_survives_new_revision_without_supplier_input(): void
+    {
+        $materialId = $this->createApprovedMaterial('Approved A supplier baseline');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'RETURN_PROPOSAL_B',
+                'display_name' => 'Dostawca B',
+                'tax_identifier' => '1234567893',
+            ],
+            'returned-proposal-b',
+        );
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Proposal B before return',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplier['data']['id']],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->returnForChanges(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            'Zwrot proposal B',
+            $this->rawVersion($materialId),
+        );
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Proposal B after return',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->approve(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            'Approval proposal B',
+            $this->rawVersion($materialId),
+        );
+
+        $this->assertSame(['Dostawca B'], $this->detail($materialId)['supplier_names']);
+    }
+
+    public function test_explicit_empty_and_explicit_supplier_replace_inherited_proposal(): void
+    {
+        $materialId = $this->createApprovedMaterial('Inherited proposal material');
+        $supplierA = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'INHERIT_A',
+                'display_name' => 'Supplier A',
+                'tax_identifier' => '1234567895',
+            ],
+            'inherit-supplier-a',
+        );
+        $supplierC = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'INHERIT_C',
+                'display_name' => 'Supplier C',
+                'tax_identifier' => '1234567896',
+            ],
+            'inherit-supplier-c',
+        );
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Explicit replace revision',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplierA['data']['id']],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit($this->rawSteward, $this->context, $materialId, $this->rawVersion($materialId));
+        $this->rawMaterials->returnForChanges($this->rawSteward, $this->context, $materialId, 'Return inherited proposal', $this->rawVersion($materialId));
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Explicit replace revision C',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplierC['data']['id']],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit($this->rawSteward, $this->context, $materialId, $this->rawVersion($materialId));
+        $this->rawMaterials->approve($this->rawSteward, $this->context, $materialId, 'Approval replacement C', $this->rawVersion($materialId));
+
+        $this->assertSame(['Supplier C'], $this->detail($materialId)['supplier_names']);
+    }
+
+    public function test_signed_proposal_mutation_after_submit_is_rejected(): void
+    {
+        $materialId = $this->createApprovedMaterial('Pending proposal mutation guard');
+        $revision = $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Pending proposal mutation revision',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            $this->rawVersion($materialId),
+        );
+
+        $pendingRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('pending_revision_id');
+        $proposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $pendingRevisionId)
+            ->first();
+        $this->assertNotNull($proposal);
+
+        try {
+            app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::rawMaterialMutate(),
+                $this->rawSteward->id,
+                fn () => DB::table('raw_material_revision_supplier_proposals')
+                    ->where('id', $proposal->id)
+                    ->update(['state' => 'PROPOSED_EMPTY', 'updated_at' => now()]),
+            );
+            $this->fail('Signed proposal mutation was accepted after submit.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', (string) ($exception->errorInfo[0] ?? ''));
+        }
+    }
+
+    public function test_proposal_mutation_after_submit_is_rejected_by_database_guard(): void
+    {
+        $materialId = $this->createApprovedMaterial('Pending proposal guard material');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'PENDING_GUARD_3C',
+                'display_name' => 'Proposal guard',
+                'tax_identifier' => '1234567894',
+            ],
+            'pending-proposal-guard-supplier',
+        );
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Pending proposal guard revision',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplier['data']['id']],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            $this->rawVersion($materialId),
+        );
+
+        $revisionId = DB::table('raw_materials')->where('id', $materialId)->value('pending_revision_id');
+        $this->assertConstraintViolation(
+            fn (Connection $connection): int => $connection->table('raw_material_revision_supplier_proposals')
+                ->where('organization_id', $this->rawSteward->organization_id)
+                ->where('revision_id', $revisionId)
+                ->update(['state' => 'PROPOSED_EMPTY', 'updated_at' => now()]),
+        );
+    }
+
+    public function test_signed_proposal_mutation_after_approval_is_rejected(): void
+    {
+        $materialId = $this->createApprovedMaterial('Approved proposal mutation guard');
+        $approvedRevisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+
+        try {
+            app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::rawMaterialMutate(),
+                $this->rawSteward->id,
+                fn () => DB::table('raw_material_revision_supplier_proposals')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $this->rawSteward->organization_id,
+                    'raw_material_id' => $materialId,
+                    'revision_id' => $approvedRevisionId,
+                    'state' => 'PROPOSED_EMPTY',
+                    'created_by' => $this->rawSteward->id,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]),
+            );
+            $this->fail('Signed proposal mutation was accepted after approval.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23514', (string) ($exception->errorInfo[0] ?? ''));
+        }
+    }
+
+    public function test_signed_cross_revision_and_identity_updates_are_rejected(): void
+    {
+        $materialId = $this->createApprovedMaterial('Immutable proposal identity guard');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'CROSS_REVISION_GUARD',
+                'display_name' => 'Cross revision supplier',
+                'tax_identifier' => '1234567895',
+            ],
+            'cross-revision-proposal-supplier',
+        );
+        $supplierId = (string) $supplier['data']['id'];
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Approved proposal source',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplierId],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $this->rawMaterials->submit(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            $this->rawVersion($materialId),
+        );
+        $sourceRevisionId = (string) DB::table('raw_materials')
+            ->where('id', $materialId)
+            ->value('pending_revision_id');
+        $this->rawMaterials->approve(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            'Approve immutable proposal source',
+            $this->rawVersion($materialId),
+        );
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Working proposal destination',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+            ],
+            $this->rawVersion($materialId),
+        );
+        $destinationRevisionId = (string) DB::table('raw_materials')
+            ->where('id', $materialId)
+            ->value('working_revision_id');
+
+        $sourceProposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $sourceRevisionId)
+            ->first();
+        $sourceItem = DB::table('raw_material_revision_supplier_proposal_items')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $sourceRevisionId)
+            ->first();
+        $this->assertNotNull($sourceProposal);
+        $this->assertNotNull($sourceItem);
+
+        $proposalCount = DB::table('raw_material_revision_supplier_proposals')->count();
+        $itemCount = DB::table('raw_material_revision_supplier_proposal_items')->count();
+
+        foreach ([
+            ['revision_id' => $destinationRevisionId],
+            ['organization_id' => (string) Str::uuid()],
+            ['raw_material_id' => (string) Str::uuid()],
+            ['created_by' => (string) Str::uuid()],
+        ] as $identityChange) {
+            try {
+                app(AuthorizationMutationContext::class)->run(
+                    AuthorizationMutationScope::rawMaterialMutate(),
+                    $this->rawSteward->id,
+                    fn () => DB::table('raw_material_revision_supplier_proposals')
+                        ->where('id', $sourceProposal->id)
+                        ->update($identityChange),
+                );
+                $this->fail('Cross-revision or ownership proposal UPDATE was accepted.');
+            } catch (QueryException $exception) {
+                $sqlState = (string) ($exception->errorInfo[0] ?? '');
+                $this->assertContains($sqlState, ['23514', '23503', '23505']);
+            }
+        }
+
+        foreach ([
+            ['revision_id' => $destinationRevisionId],
+            ['organization_id' => (string) Str::uuid()],
+            ['supplier_id' => (string) Str::uuid()],
+        ] as $identityChange) {
+            try {
+                app(AuthorizationMutationContext::class)->run(
+                    AuthorizationMutationScope::rawMaterialMutate(),
+                    $this->rawSteward->id,
+                    fn () => DB::table('raw_material_revision_supplier_proposal_items')
+                        ->where('id', $sourceItem->id)
+                        ->update($identityChange),
+                );
+                $this->fail('Cross-revision, ownership or supplier item UPDATE was accepted.');
+            } catch (QueryException $exception) {
+                $sqlState = (string) ($exception->errorInfo[0] ?? '');
+                $this->assertContains($sqlState, ['23514', '23503', '23505']);
+            }
+        }
+
+        $this->assertSame(
+            $proposalCount,
+            DB::table('raw_material_revision_supplier_proposals')->count(),
+        );
+        $this->assertSame(
+            $itemCount,
+            DB::table('raw_material_revision_supplier_proposal_items')->count(),
+        );
+    }
+
+    public function test_editable_state_update_and_delete_insert_item_replacement_succeed(): void
+    {
+        $materialId = $this->createApprovedMaterial('Editable proposal guard');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'EDITABLE_PROPOSAL_GUARD',
+                'display_name' => 'Editable proposal supplier',
+                'tax_identifier' => '1234567896',
+            ],
+            'editable-proposal-supplier',
+        );
+        $supplierId = (string) $supplier['data']['id'];
+
+        $this->rawMaterials->revise(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            [
+                'category_id' => $this->categoryId,
+                'name' => 'Editable proposal revision',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '1000',
+                'supplier_ids' => [$supplierId],
+            ],
+            $this->rawVersion($materialId),
+        );
+        $revisionId = (string) DB::table('raw_materials')
+            ->where('id', $materialId)
+            ->value('working_revision_id');
+        $proposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $revisionId)
+            ->first();
+        $this->assertNotNull($proposal);
+
+        app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::rawMaterialMutate(),
+            $this->rawSteward->id,
+            function () use ($proposal): void {
+                DB::table('raw_material_revision_supplier_proposals')
+                    ->where('id', $proposal->id)
+                    ->update(['state' => 'PROPOSED_NONEMPTY', 'updated_at' => now()]);
+            },
+        );
+
+        $item = DB::table('raw_material_revision_supplier_proposal_items')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $revisionId)
+            ->first();
+        $this->assertNotNull($item);
+
+        app(AuthorizationMutationContext::class)->run(
+            AuthorizationMutationScope::rawMaterialMutate(),
+            $this->rawSteward->id,
+            function () use ($item, $proposal, $revisionId): void {
+                DB::table('raw_material_revision_supplier_proposal_items')
+                    ->where('id', $item->id)
+                    ->delete();
+                DB::table('raw_material_revision_supplier_proposal_items')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $proposal->organization_id,
+                    'revision_id' => $revisionId,
+                    'supplier_id' => $item->supplier_id,
+                ]);
+            },
+        );
+
+        $this->assertSame(
+            1,
+            DB::table('raw_material_revision_supplier_proposal_items')
+                ->where('organization_id', $this->rawSteward->organization_id)
+                ->where('revision_id', $revisionId)
+                ->count(),
+        );
+    }
+
+    public function test_legacy_supplier_association_is_not_projected_to_boss(): void
+    {
+        $materialId = $this->createApprovedMaterial('Legacy supplier material');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'LEGACY_BOSS_3C',
+                'display_name' => 'Legacy dostawca',
+                'tax_identifier' => '1234567891',
+            ],
+            'legacy-boss-3c-supplier',
+        );
+        $this->withSetupTransaction(function (Connection $connection) use ($supplier, $materialId): void {
+            $connection->table('raw_material_supplier_associations')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $this->rawSteward->organization_id,
+                'raw_material_id' => $materialId,
+                'supplier_id' => $supplier['data']['id'],
+                'created_by' => $this->rawSteward->id,
+                'created_at' => now(),
+            ]);
+        });
+
+        $this->assertNull($this->listedItem($materialId)['supplier_names']);
+        $this->assertNull($this->detail($materialId)['supplier_names']);
+    }
+
+    public function test_approved_supplier_snapshot_is_revision_bound_and_uses_live_name(): void
+    {
+        $materialId = $this->createApprovedMaterial('Snapshot supplier material');
+        $supplier = app(RawMaterialCommercialService::class)->createSupplier(
+            $this->rawSteward,
+            $this->context,
+            [
+                'supplier_code' => 'APPROVED_BOSS_3C',
+                'display_name' => 'Dostawca przed rename',
+                'tax_identifier' => '1234567892',
+            ],
+            'approved-boss-3c-supplier',
+        );
+        $supplierId = $supplier['data']['id'];
+
+        $this->rawMaterials->revise($this->rawSteward, $this->context, $materialId, [
+            'category_id' => $this->categoryId,
+            'name' => 'Snapshot supplier material revised',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'supplier_ids' => [$supplierId],
+        ], $this->rawVersion($materialId));
+        $this->rawMaterials->submit($this->rawSteward, $this->context, $materialId, $this->rawVersion($materialId));
+        $this->rawMaterials->approve(
+            $this->rawSteward,
+            $this->context,
+            $materialId,
+            'Zatwierdzenie snapshotu dostawcy',
+            $this->rawVersion($materialId),
+        );
+
+        $revisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
+        $snapshot = DB::table('raw_material_approved_supplier_snapshots')
+            ->where('organization_id', $this->rawSteward->organization_id)
+            ->where('revision_id', $revisionId)
+            ->first();
+        $this->assertNotNull($snapshot);
+        $this->assertSame('APPROVED_NONEMPTY', $snapshot->state);
+        $this->assertSame(
+            $supplierId,
+            (string) DB::table('raw_material_approved_supplier_snapshot_items')
+                ->where('snapshot_id', $snapshot->id)
+                ->value('supplier_id'),
+        );
+        $this->assertSame(['Dostawca przed rename'], $this->listedItem($materialId)['supplier_names']);
+        $this->assertSame(['Dostawca przed rename'], $this->detail($materialId)['supplier_names']);
+        $this->assertConstraintViolation(
+            fn (Connection $connection): int => $connection->table('raw_material_approved_supplier_snapshots')
+                ->where('id', $snapshot->id)
+                ->update(['state' => 'APPROVED_EMPTY']),
+        );
+        $this->assertConstraintViolation(
+            fn (Connection $connection): int => $connection->table('raw_material_approved_supplier_snapshot_items')
+                ->where('snapshot_id', $snapshot->id)
+                ->delete(),
+        );
+
+        app(AuthorizationMutationContext::class)->runForSubject(
+            AuthorizationMutationScope::rawMaterialSupplierCorrection(),
+            $this->rawSteward->id,
+            $supplierId,
+            fn () => DB::table('organization_suppliers')
+                ->where('organization_id', $this->rawSteward->organization_id)
+                ->where('id', $supplierId)
+                ->update(['display_name' => 'Dostawca po rename', 'updated_at' => now()]),
+        );
+        $this->assertSame(['Dostawca po rename'], $this->detail($materialId)['supplier_names']);
+    }
+
+    public function test_explicit_empty_supplier_snapshot_returns_empty_array(): void
+    {
+        $material = $this->rawMaterials->create($this->rawSteward, $this->context, [
+            'category_id' => $this->categoryId,
+            'name' => 'Explicit empty supplier material',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'supplier_ids' => [],
+            'supplier_association_empty_confirmed' => true,
+        ]);
+        $this->rawMaterials->reviseAllergenDeclaration(
+            $this->rawSteward,
+            $this->context,
+            $material['id'],
+            [
+                'status' => 'NO_KNOWN_ALLERGENS',
+                'catalog_version_id' => $this->allergenCatalogId,
+                'items' => [],
+            ],
+            $this->rawVersion($material['id']),
+        );
+        $this->rawMaterials->submit($this->rawSteward, $this->context, $material['id'], $this->rawVersion($material['id']));
+        $this->rawMaterials->approve(
+            $this->rawSteward,
+            $this->context,
+            $material['id'],
+            'Zatwierdzenie pustego snapshotu',
+            $this->rawVersion($material['id']),
+        );
+
+        $this->assertSame([], $this->listedItem($material['id'])['supplier_names']);
+        $this->assertSame([], $this->detail($material['id'])['supplier_names']);
+    }
+
+    public function test_empty_supplier_array_requires_explicit_confirmation(): void
+    {
+        $this->expectException(ValidationException::class);
+        $this->rawMaterials->create($this->rawSteward, $this->context, [
+            'category_id' => $this->categoryId,
+            'name' => 'Unconfirmed empty supplier material',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'supplier_ids' => [],
+        ]);
     }
 
     private function createApprovedMaterial(

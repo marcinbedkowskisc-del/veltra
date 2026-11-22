@@ -11,6 +11,8 @@ class AuthorizationMutationScopeTest extends TestCase
     public function test_security_mutation_scopes_are_selected_from_a_closed_catalog(): void
     {
         $this->assertSame('membership.deactivate', AuthorizationMutationScope::membershipDeactivate()->value());
+        $this->assertSame('organization-capability.configure', AuthorizationMutationScope::organizationCapabilityConfigure()->value());
+        $this->assertSame('organization-capability.audit', AuthorizationMutationScope::organizationCapabilityAudit()->value());
 
         foreach ([
             'personnel.request',

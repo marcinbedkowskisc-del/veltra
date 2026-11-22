@@ -72,7 +72,7 @@ abstract class InstallationTestCase extends TestCase
         return Location::on('pgsql')->findOrFail($locationId);
     }
 
-    protected function withForeignOrganizationFixture(callable $operation): mixed
+    protected function withForeignOrganizationFixture(callable $operation, bool $truncateAfterOperation = false): mixed
     {
         [$organizationId, $locationId] = $this->withSetupTransaction(function (Connection $connection): array {
             $connection->statement('ALTER TABLE organizations DROP CONSTRAINT organizations_single_installation_unique');
@@ -94,7 +94,15 @@ abstract class InstallationTestCase extends TestCase
         try {
             return $operation(Location::on('pgsql')->findOrFail($locationId));
         } finally {
-            $this->withSetupTransaction(function (Connection $connection) use ($organizationId, $locationId): void {
+            $this->withSetupTransaction(function (Connection $connection) use ($organizationId, $locationId, $truncateAfterOperation): void {
+                if ($truncateAfterOperation) {
+                    $connection->statement('TRUNCATE TABLE public.organizations CASCADE');
+                    $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
+                    $connection->statement('ALTER TABLE organizations ADD CONSTRAINT organizations_single_installation_unique UNIQUE (installation)');
+
+                    return;
+                }
+
                 $connection->table('locations')->where('id', $locationId)->delete();
                 $connection->table('organizations')->where('id', $organizationId)->delete();
                 $connection->statement('ALTER TABLE organizations ADD CONSTRAINT organizations_single_installation_unique UNIQUE (installation)');

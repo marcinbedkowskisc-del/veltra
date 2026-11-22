@@ -1,6 +1,8 @@
 <?php
 
 use App\Domain\Installation\BusinessRuleViolation;
+use App\Domain\Modules\OrganizationCapabilityAuditException;
+use App\Domain\Modules\OrganizationCapabilityException;
 use App\Domain\RawMaterials\Documents\DocumentStorageException;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
 use App\Domain\RawMaterials\RawMaterialException;
@@ -40,13 +42,57 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/*')) {
                 $response->headers->set('Content-Language', 'pl');
             }
+            if (($request->is('api/v1/boss/raw-materials')
+                    || $request->is('api/v1/boss/raw-materials/*'))
+                && $response->getStatusCode() >= 400) {
+                [$code, $message] = match ($response->getStatusCode()) {
+                    401 => ['UNAUTHENTICATED', __('messages.unauthenticated')],
+                    403 => ['BOSS_RAW_CATALOG_FORBIDDEN', __('messages.unauthorized')],
+                    404 => ['BOSS_RAW_MATERIAL_NOT_FOUND', __('messages.resource_not_found')],
+                    405 => ['METHOD_NOT_ALLOWED', __('messages.boss_raw_catalog_method_not_allowed')],
+                    419 => ['SESSION_EXPIRED', __('messages.session_expired')],
+                    422 => ['VALIDATION_FAILED', __('messages.validation_failed')],
+                    429 => ['TOO_MANY_REQUESTS', __('messages.too_many_requests')],
+                    503 => ['BOSS_RAW_CATALOG_UNAVAILABLE', __('messages.boss_raw_catalog_unavailable')],
+                    default => ['BOSS_RAW_CATALOG_ERROR', __('messages.boss_raw_catalog_request_failed')],
+                };
+                $response->setContent(json_encode([
+                    'error' => [
+                        'code' => $code,
+                        'message' => $message,
+                    ],
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+                $response->headers->set('Content-Type', 'application/json');
+                $response->headers->set('Cache-Control', 'private, no-store');
+                $response->headers->remove('Content-Length');
+            }
 
             return $response;
+        });
+        $exceptions->render(function (OrganizationCapabilityException $exception, Request $request) {
+            if ($request->is('api/v1/security/organization-capabilities/*')) {
+                return response()->json([
+                    'error' => [
+                        'code' => $exception->errorCode,
+                        'message' => $exception->getMessage(),
+                    ],
+                ], $exception->getStatusCode(), $exception->getHeaders());
+            }
+        });
+        $exceptions->render(function (OrganizationCapabilityAuditException $exception, Request $request) {
+            if ($request->is('api/v1/security/organization-capabilities/*')) {
+                return response()->json([
+                    'error' => [
+                        'code' => 'CAPABILITY_AUDIT_PERSISTENCE_FAILED',
+                        'message' => __('messages.organization_capability_audit_failed'),
+                    ],
+                ], 500);
+            }
         });
         $exceptions->dontFlash(['token', 'current_password', 'password', 'password_confirmation']);
         $exceptions->dontReport([BusinessRuleViolation::class]);
         $exceptions->report(function (QueryException $exception) {
-            if (preg_match('/\b(users|location_memberships|activation_tokens|password_reset_tokens|role_assignments|permission_grants|security_events|account_email_deliveries|membership_requests|report_shares)\b/i', $exception->getSql())) {
+            if (preg_match('/\b(users|location_memberships|activation_tokens|password_reset_tokens|role_assignments|permission_grants|security_events|account_email_deliveries|membership_requests|report_shares|organization_capability_states|organization_capability_events)\b/i', $exception->getSql())) {
                 // QueryException messages include SQL bindings, which can contain password hashes.
                 Log::error('Identity database operation failed.', ['sqlstate' => $exception->errorInfo[0] ?? null]);
 

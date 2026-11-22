@@ -142,6 +142,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         ])->assertOk();
 
         $this->selectContext($boss, $this->location);
+        $this->assertFalse(app(RawMaterialAuthorization::class)->hasEffectiveGrant($boss, RawMaterialPermission::View));
         $this->getJson('/api/v1/raw-materials')->assertForbidden();
     }
 

@@ -29,6 +29,12 @@ class BusinessAuthorization
             ->where('role', $role)->where('location_id', $location?->id)->exists();
     }
 
+    public function hasOrganizationRole(User $user, BusinessRole $role): bool
+    {
+        return RoleAssignment::effective()->where('user_id', $user->id)->where('organization_id', $user->organization_id)
+            ->where('role', $role)->whereNull('location_id')->whereNull('membership_id')->exists();
+    }
+
     public function isAdministratorAccount(User $user): bool
     {
         return RoleAssignment::where('organization_id', $user->organization_id)->where('user_id', $user->id)

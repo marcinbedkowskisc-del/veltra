@@ -119,6 +119,16 @@ final readonly class AuthorizationMutationScope
         return new self('module.configure');
     }
 
+    public static function organizationCapabilityConfigure(): self
+    {
+        return new self('organization-capability.configure');
+    }
+
+    public static function organizationCapabilityAudit(): self
+    {
+        return new self('organization-capability.audit');
+    }
+
     public static function permissionBootstrap(): self
     {
         return new self('permission.bootstrap');

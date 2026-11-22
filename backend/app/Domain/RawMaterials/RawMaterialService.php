@@ -519,11 +519,50 @@ final class RawMaterialService
         }));
     }
 
-    private function supplierIdsForEditor(User $actor, string $materialId): array
+    private function supplierIdsForEditor(User $actor, string $materialId, string $revisionId): array
     {
         if (! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
             || ! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierView)) {
             return [];
+        }
+
+        $proposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $materialId)
+            ->where('revision_id', $revisionId)
+            ->first();
+        if ($proposal) {
+            if ($proposal->state === 'PROPOSED_EMPTY') {
+                return [];
+            }
+            if ($proposal->state === 'PROPOSED_NONEMPTY') {
+                return DB::table('raw_material_revision_supplier_proposal_items')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('revision_id', $revisionId)
+                    ->orderBy('supplier_id')
+                    ->pluck('supplier_id')
+                    ->map(static fn (mixed $id): string => (string) $id)
+                    ->all();
+            }
+        }
+
+        $snapshot = DB::table('raw_material_approved_supplier_snapshots')
+            ->where('organization_id', $actor->organization_id)
+            ->where('raw_material_id', $materialId)
+            ->where('revision_id', $revisionId)
+            ->first();
+        if ($snapshot) {
+            if ($snapshot->state === 'APPROVED_EMPTY') {
+                return [];
+            }
+            return DB::table('raw_material_approved_supplier_snapshot_items')
+                ->where('organization_id', $actor->organization_id)
+                ->where('revision_id', $revisionId)
+                ->where('snapshot_id', $snapshot->id)
+                ->orderBy('supplier_id')
+                ->pluck('supplier_id')
+                ->map(static fn (mixed $id): string => (string) $id)
+                ->all();
         }
 
         return DB::table('raw_material_supplier_associations')
@@ -592,6 +631,225 @@ final class RawMaterialService
                 }
             }
         });
+    }
+
+    private function syncSupplierProposal(
+        User $actor,
+        string $materialId,
+        string $revisionId,
+        array $input,
+        ?string $copyBaseRevisionId = null,
+    ): void {
+        $supplierIds = null;
+        $state = 'NOT_PROVIDED';
+
+        if (array_key_exists('supplier_ids', $input)) {
+            $supplierIds = array_values(array_unique($input['supplier_ids']));
+            if ($supplierIds === []) {
+                if (($input['supplier_association_empty_confirmed'] ?? false) !== true) {
+                    throw ValidationException::withMessages([
+                        'supplier_association_empty_confirmed' => [
+                            'Jawnie potwierdź pusty zestaw dostawców.',
+                        ],
+                    ]);
+                }
+                $state = 'PROPOSED_EMPTY';
+            } else {
+                $state = 'PROPOSED_NONEMPTY';
+                $activeCount = DB::table('organization_suppliers')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('lifecycle_state', 'ACTIVE')
+                    ->whereIn('id', $supplierIds)
+                    ->count();
+                if ($activeCount !== count($supplierIds)) {
+                    throw ValidationException::withMessages([
+                        'supplier_ids' => ['Wybierz aktywnych dostawców z biblioteki bieżącej organizacji.'],
+                    ]);
+                }
+            }
+        } elseif ($copyBaseRevisionId !== null) {
+            $baseMaterial = DB::table('raw_materials')
+                ->where('organization_id', $actor->organization_id)
+                ->where('id', $materialId)
+                ->first(['approved_revision_id']);
+            $copyIsApproved = $baseMaterial !== null
+                && (string) $baseMaterial->approved_revision_id === $copyBaseRevisionId;
+
+            if ($copyIsApproved) {
+                $snapshot = DB::table('raw_material_approved_supplier_snapshots')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('raw_material_id', $materialId)
+                    ->where('revision_id', $copyBaseRevisionId)
+                    ->first();
+                if ($snapshot) {
+                    if ($snapshot->state === 'APPROVED_EMPTY') {
+                        $supplierIds = [];
+                        $state = 'PROPOSED_EMPTY';
+                    } else {
+                        $supplierIds = DB::table('raw_material_approved_supplier_snapshot_items')
+                            ->where('organization_id', $actor->organization_id)
+                            ->where('revision_id', $copyBaseRevisionId)
+                            ->where('snapshot_id', $snapshot->id)
+                            ->pluck('supplier_id')
+                            ->map(static fn (mixed $id): string => (string) $id)
+                            ->unique()
+                            ->values()
+                            ->all();
+                        $state = $supplierIds === [] ? 'PROPOSED_EMPTY' : 'PROPOSED_NONEMPTY';
+                    }
+                }
+            } else {
+                $existingProposal = DB::table('raw_material_revision_supplier_proposals')
+                    ->where('organization_id', $actor->organization_id)
+                    ->where('raw_material_id', $materialId)
+                    ->where('revision_id', $copyBaseRevisionId)
+                    ->first();
+                if ($existingProposal) {
+                    $state = (string) $existingProposal->state;
+                    if ($state === 'PROPOSED_EMPTY') {
+                        $supplierIds = [];
+                    } elseif ($state === 'PROPOSED_NONEMPTY') {
+                        $supplierIds = DB::table('raw_material_revision_supplier_proposal_items')
+                        ->where('organization_id', $actor->organization_id)
+                        ->where('revision_id', $copyBaseRevisionId)
+                        ->pluck('supplier_id')
+                        ->map(static fn (mixed $id): string => (string) $id)
+                        ->unique()
+                        ->values()
+                        ->all();
+                    }
+                }
+            }
+            /* Legacy base revisions without proposal or snapshot remain NOT_PROVIDED. */
+        } else {
+            $existingProposal = DB::table('raw_material_revision_supplier_proposals')
+                ->where('organization_id', $actor->organization_id)
+                ->where('revision_id', $revisionId)
+                ->first();
+            if ($existingProposal) {
+                $state = (string) $existingProposal->state;
+                if ($state === 'PROPOSED_NONEMPTY') {
+                    $supplierIds = DB::table('raw_material_revision_supplier_proposal_items')
+                        ->where('organization_id', $actor->organization_id)
+                        ->where('revision_id', $revisionId)
+                        ->pluck('supplier_id')
+                        ->map(static fn (mixed $id): string => (string) $id)
+                        ->unique()
+                        ->values()
+                        ->all();
+                } elseif ($state === 'PROPOSED_EMPTY') {
+                    $supplierIds = [];
+                }
+            }
+        }
+
+        $proposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $actor->organization_id)
+            ->where('revision_id', $revisionId)
+            ->first();
+        $proposalId = $proposal ? (string) $proposal->id : Str::uuid()->toString();
+        if ($proposal) {
+            DB::table('raw_material_revision_supplier_proposals')
+                ->where('id', $proposalId)
+                ->update([
+                    'state' => $state,
+                    'updated_at' => now(),
+                ]);
+        } else {
+            DB::table('raw_material_revision_supplier_proposals')->insert([
+                'id' => $proposalId,
+                'organization_id' => $actor->organization_id,
+                'raw_material_id' => $materialId,
+                'revision_id' => $revisionId,
+                'state' => $state,
+                'created_by' => $actor->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
+
+        DB::table('raw_material_revision_supplier_proposal_items')
+            ->where('organization_id', $actor->organization_id)
+            ->where('revision_id', $revisionId)
+            ->delete();
+        if ($supplierIds !== null && $supplierIds !== []) {
+            foreach ($supplierIds as $supplierId) {
+                DB::table('raw_material_revision_supplier_proposal_items')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'revision_id' => $revisionId,
+                    'supplier_id' => $supplierId,
+                ]);
+            }
+        }
+    }
+
+    private function createApprovedSupplierSnapshot(
+        User $actor,
+        string $materialId,
+        string $revisionId,
+        string $approvalEventId,
+        string $approvalOperationId,
+    ): void {
+        $proposal = DB::table('raw_material_revision_supplier_proposals')
+            ->where('organization_id', $actor->organization_id)
+            ->where('revision_id', $revisionId)
+            ->first();
+        if (! $proposal || $proposal->state === 'NOT_PROVIDED') {
+            return;
+        }
+
+        $snapshotId = Str::uuid()->toString();
+        DB::table('raw_material_approved_supplier_snapshots')->insert([
+            'id' => $snapshotId,
+            'organization_id' => $actor->organization_id,
+            'raw_material_id' => $materialId,
+            'revision_id' => $revisionId,
+            'approval_event_id' => $approvalEventId,
+            'approval_operation_id' => $approvalOperationId,
+            'state' => $proposal->state === 'PROPOSED_EMPTY'
+                ? 'APPROVED_EMPTY'
+                : 'APPROVED_NONEMPTY',
+            'created_by' => $actor->id,
+            'created_at' => now(),
+        ]);
+
+        if ($proposal->state === 'PROPOSED_NONEMPTY') {
+            $supplierIds = DB::table('raw_material_revision_supplier_proposal_items')
+                ->where('organization_id', $actor->organization_id)
+                ->where('revision_id', $revisionId)
+                ->pluck('supplier_id')
+                ->map(static fn (mixed $id): string => (string) $id)
+                ->unique()
+                ->values()
+                ->all();
+            if ($supplierIds === []) {
+                throw ValidationException::withMessages([
+                    'supplier_ids' => ['Zatwierdzony niepusty zestaw dostawców nie może być pusty.'],
+                ]);
+            }
+            $activeIds = DB::table('organization_suppliers')
+                ->where('organization_id', $actor->organization_id)
+                ->where('lifecycle_state', 'ACTIVE')
+                ->whereIn('id', $supplierIds)
+                ->pluck('id')
+                ->map(static fn (mixed $id): string => (string) $id)
+                ->all();
+            if (count($activeIds) !== count($supplierIds)) {
+                throw ValidationException::withMessages([
+                    'supplier_ids' => ['Wybierz aktywnych dostawców z biblioteki bieżącej organizacji.'],
+                ]);
+            }
+            foreach ($supplierIds as $supplierId) {
+                DB::table('raw_material_approved_supplier_snapshot_items')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $actor->organization_id,
+                    'revision_id' => $revisionId,
+                    'snapshot_id' => $snapshotId,
+                    'supplier_id' => $supplierId,
+                ]);
+            }
+        }
     }
 
     public function createCategory(User $actor, Location $context, array $input): array
@@ -1179,7 +1437,7 @@ final class RawMaterialService
             + RawMaterialCatalogValues::present($quantities)
             + app(RawMaterialHistoryService::class)->metadata($actor, $context, $material) + [
                 'pricing_input' => $this->pricingInputForEditor($actor, $revision),
-                'supplier_ids' => $this->supplierIdsForEditor($actor, $material->id),
+                'supplier_ids' => $this->supplierIdsForEditor($actor, $material->id, $revisionId),
                 'supplier_names' => $this->supplierNamesForMaterial($actor->organization_id, $material->id),
                 'allergen_declaration' => $declaration,
                 'storage_variants' => $this->storageVariantsForRevision($revision->id),
@@ -1585,6 +1843,7 @@ final class RawMaterialService
                 $input['change_reason'] ?? null,
             );
             $this->syncSupplierAssociations($actor, $context, $materialId, $input);
+            $this->syncSupplierProposal($actor, $materialId, $revisionId, $input);
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'CREATED', null, [
                 'code' => $code,
                 'revision_id' => $revisionId,
@@ -1671,6 +1930,7 @@ final class RawMaterialService
                 true,
             );
             $this->syncSupplierAssociations($actor, $context, $materialId, $input);
+            $this->syncSupplierProposal($actor, $materialId, $revisionId, $input);
             $this->audit($actor, $context, 'RAW_MATERIAL', $materialId, 'CREATED', null, [
                 'code' => $sku,
                 'revision_id' => $revisionId,
@@ -1953,6 +2213,13 @@ final class RawMaterialService
                 baseRevisionId: $baseRevisionId,
             );
             $this->syncSupplierAssociations($actor, $context, $materialId, $input);
+            $this->syncSupplierProposal(
+                $actor,
+                $materialId,
+                $revisionId,
+                $input,
+                $baseRevisionId,
+            );
             $metadata = [
                 'revision_id' => $revisionId,
                 'revision_hash' => $revision['content_hash'],
@@ -2149,8 +2416,9 @@ final class RawMaterialService
             }
             $previous = $this->stateHash($material);
             $operationId = Str::uuid()->toString();
+            $approvalEventId = Str::uuid()->toString();
             DB::table('raw_material_revision_approval_events')->insert([
-                'id' => Str::uuid()->toString(),
+                'id' => $approvalEventId,
                 'organization_id' => $actor->organization_id,
                 'revision_id' => $revision->id,
                 'operation_id' => $operationId,
@@ -2159,6 +2427,13 @@ final class RawMaterialService
                 'reason' => $reason,
                 'content_hash' => $revision->content_hash,
             ]);
+            $this->createApprovedSupplierSnapshot(
+                $actor,
+                $materialId,
+                $revision->id,
+                $approvalEventId,
+                $operationId,
+            );
             DB::table('raw_materials')->where('id', $materialId)->update([
                 'lifecycle_state' => 'ACTIVE',
                 'approved_revision_id' => $revision->id,
@@ -2376,6 +2651,16 @@ final class RawMaterialService
                 $material = $this->material($actor, $materialId, true);
                 RawMaterialVersion::assertCurrent($material, $expectedVersion);
                 $this->assertDraftDeletable($material);
+                if ($material->working_revision_id !== null) {
+                    DB::table('raw_material_revision_supplier_proposals')
+                        ->where('organization_id', $actor->organization_id)
+                        ->where('revision_id', $material->working_revision_id)
+                        ->delete();
+                    DB::table('raw_material_revision_supplier_proposal_items')
+                        ->where('organization_id', $actor->organization_id)
+                        ->where('revision_id', $material->working_revision_id)
+                        ->delete();
+                }
 
                 $operationId = Str::uuid()->toString();
                 $deletedAt = now();
@@ -2516,6 +2801,13 @@ final class RawMaterialService
                 $reason,
                 $approved->allergen_state,
                 baseRevisionId: $approved->id,
+            );
+            $this->syncSupplierProposal(
+                $actor,
+                $materialId,
+                $revisionId,
+                [],
+                $approved->id,
             );
             $previous = $this->stateHash($material);
             DB::table('raw_materials')->where('id', $materialId)->update([

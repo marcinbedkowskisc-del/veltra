@@ -86,6 +86,34 @@ afterEach(() => {
 })
 
 describe('AdministrationUsersPage', () => {
+  it('renders the user avatar editor and submits an administrator-scoped selection', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, init })
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: details }))
+      if (url.endsWith(`/administration/users/${userId}/avatar`) && init?.method === 'PUT') return Promise.resolve(json({ data: null }))
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Zmień awatar' }))
+    expect(screen.getAllByRole('button', { name: /Wybierz awatar/ })).toHaveLength(64)
+    fireEvent.click(screen.getByRole('button', { name: 'Wybierz awatar abstract-001' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz wybrany awatar' }))
+
+    await waitFor(() => expect(calls.some(({ url, init }) => url.endsWith(`/administration/users/${userId}/avatar`)
+      && init?.method === 'PUT')).toBe(true))
+    const mutation = calls.find(({ url, init }) => url.endsWith(`/administration/users/${userId}/avatar`) && init?.method === 'PUT')
+    expect(JSON.parse(mutation?.init?.body as string)).toEqual({ type: 'LIBRARY', library_id: 'abstract-001' })
+  })
+
   it('excludes inactive locations, scopes role choices, and accepts a blank pending-request decider', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)

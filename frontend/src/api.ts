@@ -75,15 +75,16 @@ async function send(
   options: RequestOptions,
 ): Promise<Response> {
   const headers: Record<string, string> = { Accept: 'application/json', ...options.headers }
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
   if (method !== 'GET') {
     const cookie = document.cookie.split('; ').find((part) => part.startsWith('XSRF-TOKEN='))
     if (cookie) headers['X-XSRF-TOKEN'] ??= decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
-    headers['Content-Type'] ??= 'application/json'
+    if (!isFormData) headers['Content-Type'] ??= 'application/json'
   }
   try {
     return await fetch(path, {
       method, headers, credentials: 'same-origin', cache: 'no-store',
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
       signal: options.signal
         ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
         : AbortSignal.timeout(15_000),

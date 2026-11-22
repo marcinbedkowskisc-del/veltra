@@ -41,6 +41,7 @@ class IdentityAuthenticationTest extends IdentityTestCase
         $this->postJson('/api/v1/auth/login', ['email' => ' PERSON@EXAMPLE.TEST ', 'password' => self::PASSWORD])
             ->assertOk()->assertExactJson(['data' => [
                 'id' => $user->id, 'first_name' => 'Test', 'last_name' => 'Person', 'email' => 'person@example.test',
+                'avatar' => ['type' => 'INITIALS', 'library_id' => null, 'photo_version' => null],
             ]])->assertHeader('Cache-Control', 'no-store, private');
         $this->assertNotSame($before, session()->getId());
         $this->assertNull(session('operating_membership_id'));

@@ -1,4 +1,5 @@
 import { isRecord, request, requestEnvelope } from '../api'
+import { avatarFromResponse, type AvatarInfo } from '../avatars/avatarTypes'
 
 const API = '/api/v1/administration'
 const SECURITY = '/api/v1/security'
@@ -35,6 +36,7 @@ export type UserRow = {
   firstName: string
   lastName: string
   email: string
+  avatar: AvatarInfo
   emailVerifiedAt: string | null
   isActive: boolean
   roles: UserRoleSummary[]
@@ -169,6 +171,7 @@ function parseUser(value: unknown): UserRow {
     firstName: requiredString(value.first_name, 'imię'),
     lastName: requiredString(value.last_name, 'nazwisko'),
     email: requiredString(value.email, 'e-mail'),
+    avatar: avatarFromResponse(value),
     emailVerifiedAt: nullableString(value.email_verified_at, 'weryfikacja e-mail'),
     isActive: value.is_active,
     roles: value.roles.map(parseRoleSummary),

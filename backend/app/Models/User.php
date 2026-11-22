@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Domain\Identity\UserAvatarType;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,15 +13,24 @@ class User extends Authenticatable
 {
     use HasUuids;
 
-    protected $fillable = ['organization_id', 'first_name', 'last_name', 'email', 'password', 'is_active', 'is_initial_identity'];
+    protected $fillable = [
+        'organization_id', 'first_name', 'last_name', 'email', 'password', 'is_active', 'is_initial_identity',
+    ];
 
     protected $hidden = ['password', 'is_initial_identity', 'auth_version', 'email_verified_at'];
 
-    protected $attributes = ['is_active' => true, 'is_initial_identity' => false];
+    protected $attributes = ['is_active' => true, 'is_initial_identity' => false, 'avatar_type' => 'INITIALS'];
 
     protected function casts(): array
     {
-        return ['password' => 'hashed', 'is_active' => 'boolean', 'is_initial_identity' => 'boolean', 'email_verified_at' => 'immutable_datetime', 'auth_version' => 'integer'];
+        return [
+            'password' => 'hashed',
+            'is_active' => 'boolean',
+            'is_initial_identity' => 'boolean',
+            'email_verified_at' => 'immutable_datetime',
+            'auth_version' => 'integer',
+            'avatar_type' => UserAvatarType::class,
+        ];
     }
 
     protected function email(): Attribute

@@ -1,13 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError, isRecord, request } from './api'
+import AvatarManagement from './avatars/AvatarManagement'
+import UserAvatar from './avatars/UserAvatar'
+import { avatarFromResponse, avatarPhotoUrl, type AvatarInfo } from './avatars/avatarTypes'
 
-export type AuthUser = { id: string; first_name: string; last_name: string; email: string }
+export type AuthUser = { id: string; first_name: string; last_name: string; email: string; avatar: AvatarInfo }
 export type AuthLocation = { id: string; name: string; code: string; type: 'CENTRAL_KITCHEN' | 'RESTAURANT' }
 export type AuthContext = { user: AuthUser; location: AuthLocation | null }
 
-function isUser(value: unknown): value is AuthUser {
-  return isRecord(value) && ['id', 'first_name', 'last_name', 'email'].every((key) => typeof value[key] === 'string')
+function parseUser(value: unknown): AuthUser {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.first_name !== 'string'
+    || typeof value.last_name !== 'string' || typeof value.email !== 'string') {
+    throw new Error('Nieprawidłowy profil użytkownika.')
+  }
+  return {
+    id: value.id,
+    first_name: value.first_name,
+    last_name: value.last_name,
+    email: value.email,
+    avatar: avatarFromResponse(value),
+  }
 }
 
 function isLocation(value: unknown): value is AuthLocation {
@@ -22,6 +35,7 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
   const [selected, setSelected] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [avatarEditorOpen, setAvatarEditorOpen] = useState(false)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -30,12 +44,12 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
     setLocations([])
     setCurrent(null)
     setSelected('')
+    setAvatarEditorOpen(false)
     onContextChange(null)
   }, [onContextChange])
 
   const loadProfile = useCallback(async () => {
-    const profile = await request('/api/v1/auth/me')
-    if (!isUser(profile)) throw new Error('Nieprawidłowy profil użytkownika.')
+    const profile = parseUser(await request('/api/v1/auth/me'))
     setUser(profile)
     const assigned = await request('/api/v1/auth/locations')
     if (!Array.isArray(assigned) || !assigned.every(isLocation)) throw new Error('Nieprawidłowa lista lokalizacji.')
@@ -46,6 +60,15 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
     setSelected(operating?.id ?? '')
     onContextChange({ user: profile, location: operating })
   }, [onContextChange])
+
+  const reloadAvatar = useCallback(async () => {
+    try {
+      setUser(parseUser(await request('/api/v1/auth/me')))
+    } catch (cause) {
+      if (cause instanceof ApiError && (cause.status === 401 || cause.status === 419)) reset()
+      setError(cause instanceof Error ? cause.message : 'Nie można odświeżyć profilu.')
+    }
+  }, [reset])
 
   useEffect(() => {
     let active = true
@@ -87,10 +110,6 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
     }
   }
 
-  const initials = user
-    ? `${user.first_name.charAt(0)}${user.last_name.charAt(0)}`.toLocaleUpperCase('pl')
-    : 'V'
-
   function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void act(async () => {
@@ -103,7 +122,10 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
   return (
     <details className="account-menu">
       <summary className="account-menu-trigger" aria-label={user ? `Konto: ${user.first_name} ${user.last_name}` : 'Otwórz konto i zaloguj się'}>
-        <span className="account-avatar" aria-hidden="true">{initials}</span>
+        {user
+          ? <UserAvatar firstName={user.first_name} lastName={user.last_name} avatar={user.avatar}
+            photoUrl={user.avatar.type === 'UPLOAD' ? avatarPhotoUrl(undefined, user.avatar.photoVersion) : undefined} size="medium" decorative />
+          : <span className="account-avatar" aria-hidden="true">V</span>}
         <span className="account-trigger-copy">
           <strong>{user ? `${user.first_name} ${user.last_name}` : 'Konto i lokalizacja'}</strong>
           <small>{user?.email ?? (busy ? 'Sprawdzanie sesji…' : 'Zaloguj się')}</small>
@@ -128,6 +150,18 @@ export default function AuthPanel({ onContextChange }: { onContextChange: (conte
           <>
             <p>Zalogowano: {user.first_name} {user.last_name}</p>
             <p>{user.email}</p>
+            <button type="button" className="button button-secondary" aria-expanded={avatarEditorOpen}
+              onClick={() => setAvatarEditorOpen((open) => !open)}>
+              {avatarEditorOpen ? 'Zamknij ustawienia awatara' : 'Zmień awatar'}
+            </button>
+            {avatarEditorOpen && <AvatarManagement
+              key={user.id}
+              firstName={user.first_name}
+              lastName={user.last_name}
+              avatar={user.avatar}
+              onSaved={() => void reloadAvatar()}
+              onSessionExpired={reset}
+            />}
             <p aria-live="polite">Bieżąca lokalizacja: {current ? `${current.name} (${current.code})` : 'Nie wybrano'}</p>
             {locations.length === 0 && <p>Brak przypisanych aktywnych lokalizacji.</p>}
             <label>Lokalizacja operacyjna

@@ -1,0 +1,43 @@
+.user-avatar {
+  display: inline-grid;
+  flex: 0 0 auto;
+  overflow: hidden;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(145deg, #44628b, #283c5a);
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 50%;
+  font-weight: 700;
+}
+.user-avatar-small { width: 2rem; height: 2rem; font-size: 0.7rem; }
+.user-avatar-medium { width: 2.5rem; height: 2.5rem; font-size: 0.85rem; }
+.user-avatar-large { width: 4.5rem; height: 4.5rem; font-size: 1.2rem; }
+.user-avatar > img, .user-avatar > svg { width: 100%; height: 100%; object-fit: cover; }
+.user-avatar > img { border-radius: inherit; }
+.admin-user-name { display: inline-flex; align-items: center; gap: 0.6rem; }
+
+.avatar-management { display: grid; gap: 1rem; padding: 1rem; background: var(--surface-soft); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.avatar-management-current { display: flex; align-items: center; gap: 1rem; }
+.avatar-management-current h4, .avatar-upload h4 { margin: 0 0 0.25rem; }
+.avatar-management-current p { margin: 0; color: var(--text-secondary); }
+.avatar-gallery { min-width: 0; margin: 0; padding: 0.8rem; border: 1px solid var(--border-strong); border-radius: var(--radius-md); }
+.avatar-gallery legend { padding: 0 0.35rem; font-weight: 650; }
+.avatar-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(3.1rem, 1fr)); gap: 0.45rem; max-height: 18rem; overflow: auto; }
+.avatar-gallery-option { display: grid; width: 3.1rem; height: 3.1rem; padding: 0; overflow: hidden; place-items: center; background: transparent; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.avatar-gallery-option svg { width: 100%; height: 100%; }
+.avatar-gallery-option[aria-pressed="true"] { border-color: var(--accent-strong); box-shadow: var(--focus-ring); }
+.avatar-management-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.avatar-upload { display: grid; gap: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+.avatar-upload label { display: grid; gap: 0.35rem; }
+.avatar-upload input[type="file"] { max-width: 100%; }
+.avatar-cropper { display: grid; justify-items: start; gap: 0.75rem; }
+.avatar-crop-area { position: relative; width: min(100%, 22rem); height: 22rem; overflow: hidden; background: #080f1c; border-radius: var(--radius-md); }
+.avatar-cropper label { width: min(100%, 22rem); }
+.avatar-cropper input[type="range"] { display: block; width: 100%; }
+
+@media (max-width: 520px) {
+  .avatar-management { padding: 0.7rem; }
+  .avatar-crop-area { height: min(78vw, 22rem); }
+  .avatar-gallery-grid { grid-template-columns: repeat(auto-fill, minmax(2.7rem, 1fr)); }
+  .avatar-gallery-option { width: 2.7rem; height: 2.7rem; }
+}

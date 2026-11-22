@@ -2,6 +2,7 @@
 
 namespace App\Domain\Authorization;
 
+use App\Domain\Identity\UserAvatarType;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\LocationMembership;
@@ -328,6 +329,13 @@ final class AdministrationUserService
             'first_name' => $user->first_name,
             'last_name' => $user->last_name,
             'email' => $user->email,
+            'avatar' => [
+                'type' => $user->avatar_type->value,
+                'library_id' => $user->avatar_library_id,
+                'photo_version' => $user->avatar_type === UserAvatarType::Upload
+                    ? hash('sha256', (string) $user->avatar_photo_key)
+                    : null,
+            ],
             'email_verified_at' => $user->email_verified_at,
             'is_active' => $user->is_active,
             'roles' => $roles,

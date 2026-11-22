@@ -6,7 +6,11 @@ import SupplierManagementPage from './administration/SupplierManagementPage'
 import AdministrationUsersPage from './administration/AdministrationUsersPage'
 import AdministrationPermissionsPage from './administration/AdministrationPermissionsPage'
 
-export default function AdministrationPanel({ path, onSessionExpired }: { path: string; onSessionExpired?: () => void }) {
+export default function AdministrationPanel({ path, contextKey, onSessionExpired }: {
+  path: string
+  contextKey?: string
+  onSessionExpired?: () => void
+}) {
   const selected = administrationGroups.flatMap((group) => group.items).find((item) => item.path === path)
   const overview = path === '/administration'
 
@@ -33,7 +37,7 @@ export default function AdministrationPanel({ path, onSessionExpired }: { path: 
           ) : selected.path === '/administration/suppliers' ? (
             <SupplierManagementPage />
           ) : selected.path === '/administration/users' ? (
-            <AdministrationUsersPage onSessionExpired={onSessionExpired} />
+            <AdministrationUsersPage key={contextKey} onSessionExpired={onSessionExpired} />
           ) : selected.path === '/administration/permissions' ? (
             <AdministrationPermissionsPage />
           ) : (

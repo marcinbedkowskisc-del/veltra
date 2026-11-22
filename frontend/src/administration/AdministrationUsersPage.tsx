@@ -5,6 +5,9 @@ import DataTable, { type DataTableColumn } from '../design-system/DataTable'
 import Drawer from '../design-system/Drawer'
 import Pagination from '../design-system/Pagination'
 import VeltraDisclosure from '../design-system/VeltraDisclosure'
+import AvatarManagement from '../avatars/AvatarManagement'
+import UserAvatar from '../avatars/UserAvatar'
+import { avatarPhotoUrl } from '../avatars/avatarTypes'
 import BossLocationRestrictions from './BossLocationRestrictions'
 import {
   assignUserLocation,
@@ -138,7 +141,7 @@ function historyLabel(action: string): string {
     'account.deactivate': 'Wyłączono konto',
     'account.reactivate': 'Włączono konto',
     'account.email_change': 'Zmieniono adres e-mail',
-    'account.profile_update': 'Zmieniono dane użytkownika',
+    'account.profile_update': 'Zmieniono profil użytkownika',
     'boss.location_restrictions': 'Zmieniono ograniczenia lokalizacji roli BOSS',
     'membership.assign': 'Przypisano lokalizację',
     'membership.remove': 'Cofnięto przypisanie do lokalizacji',
@@ -171,6 +174,7 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   const [details, setDetails] = useState<UserDetails | null>(null)
   const [detailsError, setDetailsError] = useState<string | null>(null)
   const [detailsReload, setDetailsReload] = useState(0)
+  const [avatarEditorOpen, setAvatarEditorOpen] = useState(false)
   const [statusReferenceTime, setStatusReferenceTime] = useState(0)
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -323,6 +327,7 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   }
 
   function openUser(id: string) {
+    setAvatarEditorOpen(false)
     if (selectedId !== id) {
       setDetails(null)
       setDetailsError(null)
@@ -435,7 +440,11 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
           setActionError(null)
           setMessage(null)
         }}>
-          {fullName(user)}
+          <span className="admin-user-name">
+            <UserAvatar firstName={user.firstName} lastName={user.lastName} avatar={user.avatar}
+              photoUrl={user.avatar.type === 'UPLOAD' ? avatarPhotoUrl(user.id, user.avatar.photoVersion) : undefined} size="small" decorative />
+            {fullName(user)}
+          </span>
         </button>
       ),
     },
@@ -613,12 +622,21 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
             {details && (
               <>
                 <section className="admin-user-summary">
+                  <div className="admin-user-avatar-summary">
+                    <UserAvatar firstName={details.firstName} lastName={details.lastName} avatar={details.avatar}
+                      photoUrl={details.avatar.type === 'UPLOAD' ? avatarPhotoUrl(details.id, details.avatar.photoVersion) : undefined} size="large" />
+                    <span><strong>Awatar</strong><small>{details.avatar.type === 'UPLOAD' ? 'Zdjęcie profilowe' : details.avatar.type === 'LIBRARY' ? 'Awatar z galerii' : 'Inicjały'}</small></span>
+                  </div>
                   <div><strong>Adres e-mail</strong><span>{details.email}</span><small>{details.emailVerifiedAt ? 'Adres potwierdzony' : 'Adres niepotwierdzony'}</small></div>
                   <div><strong>Status konta</strong><span>{details.isActive ? 'Konto aktywne' : 'Konto nieaktywne'}</span></div>
                   <div><strong>Przypisane lokalizacje</strong><span>{locationSummary(details.locations)}</span></div>
                 </section>
 
                 <section className="admin-user-action-bar" aria-label="Działania na koncie">
+                  <button type="button" className="button button-secondary" aria-expanded={avatarEditorOpen}
+                    onClick={() => setAvatarEditorOpen((open) => !open)}>
+                    {avatarEditorOpen ? 'Zamknij edycję awatara' : 'Zmień awatar'}
+                  </button>
                   <button type="button" className="button button-secondary" onClick={() => {
                     setProfileForm({ firstName: details.firstName, lastName: details.lastName })
                     setProfileOpen((open) => !open)
@@ -641,6 +659,19 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
                     requiresPassword: false,
                   })}>{details.isActive ? 'Wyłącz konto' : 'Włącz konto'}</button>
                 </section>
+
+                {avatarEditorOpen && <AvatarManagement
+                  key={details.id}
+                  userId={details.id}
+                  firstName={details.firstName}
+                  lastName={details.lastName}
+                  avatar={details.avatar}
+                  onSaved={() => {
+                    reloadDirectory()
+                    reloadDetails()
+                  }}
+                  onSessionExpired={onSessionExpired}
+                />}
 
                 {profileOpen && <form className="admin-user-inline-form" onSubmit={(event) => void submitProfile(event)}>
                   <h4>Dane użytkownika</h4>

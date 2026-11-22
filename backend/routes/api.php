@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\V1\RawMaterialDocumentController;
 use App\Http\Controllers\Api\V1\SecurityController;
 use App\Http\Controllers\Api\V1\SecurityStructureController;
 use App\Http\Controllers\Api\V1\SupplyController;
+use App\Http\Controllers\Api\V1\UserAvatarController;
 use App\Http\Controllers\HealthController;
 use App\Http\Middleware\AuditSecurityRejection;
 use App\Http\Middleware\BossRawCatalogNoStore;
@@ -55,6 +56,10 @@ Route::prefix('v1/administration')->middleware([
     Route::get('/users', [AdministrationUserController::class, 'index']);
     Route::get('/users/{user}', [AdministrationUserController::class, 'show'])->whereUuid('user');
     Route::patch('/users/{user}/profile', [AdministrationUserController::class, 'updateProfile'])->whereUuid('user');
+    Route::put('/users/{user}/avatar', [UserAvatarController::class, 'selectForAdministrator'])->whereUuid('user');
+    Route::post('/users/{user}/avatar/photo', [UserAvatarController::class, 'uploadForAdministrator'])->whereUuid('user');
+    Route::delete('/users/{user}/avatar', [UserAvatarController::class, 'resetForAdministrator'])->whereUuid('user');
+    Route::get('/users/{user}/avatar/photo', [UserAvatarController::class, 'administratorPhoto'])->whereUuid('user');
     Route::get('/users/{user}/boss-location-restrictions', [BossLocationController::class, 'showRestrictions'])->whereUuid('user');
     Route::put('/users/{user}/boss-location-restrictions', [BossLocationController::class, 'updateRestrictions'])->whereUuid('user');
     Route::get('/categories', [AdministrationCategoryController::class, 'index']);
@@ -265,6 +270,10 @@ Route::prefix('v1/auth')->middleware(RequireSpaSession::class)->group(function (
     Route::post('/logout', [AuthenticationController::class, 'logout'])->middleware('auth:sanctum');
     Route::middleware(['auth:sanctum', ValidateIdentityContext::class])->group(function (): void {
         Route::get('/me', [AuthenticationController::class, 'me']);
+        Route::put('/avatar', [UserAvatarController::class, 'selectSelf']);
+        Route::post('/avatar/photo', [UserAvatarController::class, 'uploadSelf']);
+        Route::delete('/avatar', [UserAvatarController::class, 'resetSelf']);
+        Route::get('/avatar/photo', [UserAvatarController::class, 'selfPhoto']);
         Route::get('/locations', [AuthenticationController::class, 'locations']);
         Route::get('/operating-location', [AuthenticationController::class, 'currentLocation']);
         Route::put('/operating-location', [AuthenticationController::class, 'selectLocation']);

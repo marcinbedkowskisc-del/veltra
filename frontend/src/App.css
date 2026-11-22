@@ -1856,3 +1856,36 @@ button:disabled, select:disabled, input:disabled {
   .admin-user-action-bar > .button { flex: 1 1 12rem; }
   .admin-user-form-actions > .button { flex: 1 1 auto; }
 }
+
+  .boss-catalog-page { max-width: 1500px; }
+  .boss-catalog-toolbar { align-items: flex-end; }
+  .boss-catalog-search { flex: 1 1 20rem; max-width: 38rem; }
+  .boss-catalog-search input {
+    width: 100%;
+    min-height: 2.45rem;
+    padding: 0.55rem 0.7rem;
+    color: var(--text);
+    background: var(--surface-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+  }
+  .boss-catalog-search input:hover:not(:disabled) { border-color: var(--border-interactive); }
+  .boss-catalog-count { margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--font-size-sm); }
+  .boss-catalog-table { min-width: 850px; }
+  .boss-catalog-table th:last-child, .boss-catalog-table td:last-child { width: 8rem; }
+  .boss-catalog-pagination { margin-top: var(--space-4); }
+  .boss-catalog-detail { margin-top: var(--space-5); }
+  .boss-catalog-detail > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+  .boss-catalog-detail h2 { margin: 0; font-size: var(--font-size-lg); }
+  .boss-catalog-detail dl { display: grid; gap: var(--space-3); margin: var(--space-4) 0 0; }
+  .boss-catalog-detail dl div { display: grid; grid-template-columns: minmax(9rem, 0.4fr) minmax(0, 1fr); gap: var(--space-3); }
+  .boss-catalog-detail dt { color: var(--text-muted); }
+  .boss-catalog-detail dd { margin: 0; overflow-wrap: anywhere; }
+
+  @media (max-width: 720px) {
+    .boss-catalog-toolbar { align-items: stretch; }
+    .boss-catalog-search { max-width: none; }
+    .boss-catalog-toolbar > .button { width: 100%; }
+    .boss-catalog-detail > header { align-items: stretch; flex-direction: column; }
+    .boss-catalog-detail dl div { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
+  }

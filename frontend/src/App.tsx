@@ -6,6 +6,7 @@ import ApplicationShell from './ApplicationShell'
 import AuthPanel, { type AuthContext } from './AuthPanel'
 import { ApiError, isRecord, request } from './api'
 import { developmentStageLabel } from './config/developmentStage'
+import BossRawMaterialsCatalogPage from './bossRawMaterials/BossRawMaterialsCatalogPage'
 import RawMaterialsCatalogPage from './rawMaterials/RawMaterialsCatalogPage'
 
 type Health = {
@@ -48,6 +49,7 @@ function App() {
   } | null>(null)
   const [administrationAttempt, setAdministrationAttempt] = useState(0)
   const isRawMaterialsRoute = window.location.pathname === '/raw-materials'
+  const isBossRawMaterialsRoute = window.location.pathname === '/boss/raw-materials'
   const isAdministrationRoute = window.location.pathname === '/administration'
     || window.location.pathname.startsWith('/administration/')
   const isActivationRoute = window.location.pathname === '/activate'
@@ -171,7 +173,13 @@ function App() {
 
   return (
     <ApplicationShell
-      activePath={isAdministrationRoute ? window.location.pathname : isRawMaterialsRoute ? '/raw-materials' : '/'}
+      activePath={isAdministrationRoute
+        ? window.location.pathname
+        : isBossRawMaterialsRoute
+          ? '/boss/raw-materials'
+          : isRawMaterialsRoute
+            ? '/raw-materials'
+            : '/'}
       showAdministration={administrationStatus === 'allowed'}
       contexts={[{ label: 'Lokalizacja operacyjna', value: contextValue, detail: contextDetail }]}
       footerNote={developmentStageLabel}
@@ -248,6 +256,27 @@ function App() {
           <section className="state-panel">
             <h1>Katalog surowców</h1>
             <p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie w menu konta.' : 'Zaloguj się i wybierz lokalizację, aby otworzyć katalog.'}</p>
+          </section>
+        )
+      ) : isBossRawMaterialsRoute ? (
+        authContext?.user ? (
+          authContext.location ? (
+            <BossRawMaterialsCatalogPage
+              key={`${authContext.user.id}:${authContext.location.id}`}
+              identityKey={authContext.user.id}
+              operatingLocationId={authContext.location.id}
+              onSessionExpired={handleSessionExpired}
+            />
+          ) : (
+            <section className="state-panel">
+              <h1>Katalog surowców BOSS</h1>
+              <p>Wybierz lokalizację operacyjną, aby sprawdzić dostęp.</p>
+            </section>
+          )
+        ) : (
+          <section className="state-panel">
+            <h1>Katalog surowców BOSS</h1>
+            <p>{sessionExpired ? 'Sesja wygasła. Zaloguj się ponownie w menu konta.' : 'Zaloguj się i wybierz lokalizację, aby otworzyć katalog BOSS.'}</p>
           </section>
         )
       ) : (

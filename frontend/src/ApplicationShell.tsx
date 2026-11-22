@@ -26,6 +26,7 @@ const MODULES = [
   { label: 'Moduły', icon: '◈' },
   { label: 'Finanse', icon: '¤' },
   { label: 'RAW', icon: '▦', href: '/raw-materials' },
+  { label: 'Katalog surowców BOSS', icon: '▦', href: '/boss/raw-materials' },
   { label: 'Ustawienia', icon: '⚙' },
   { label: 'Dziennik zdarzeń', icon: '≡' },
 ]

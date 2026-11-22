@@ -63,6 +63,7 @@ const details = {
   ],
   permissions: [],
   effective_permissions: [],
+  raw_permissions: { grants: [], history: [] },
   requests: [{
     id: '88888888-8888-4888-8888-888888888888',
     location_id: restaurantId,
@@ -112,6 +113,246 @@ describe('AdministrationUsersPage', () => {
       && init?.method === 'PUT')).toBe(true))
     const mutation = calls.find(({ url, init }) => url.endsWith(`/administration/users/${userId}/avatar`) && init?.method === 'PUT')
     expect(JSON.parse(mutation?.init?.body as string)).toEqual({ type: 'LIBRARY', library_id: 'abstract-001' })
+  })
+
+  it('renders RAW grant provenance and uses only the existing RAW grant and revoke endpoints', async () => {
+    const grantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const grant = {
+      id: grantId,
+      permission: 'RAW_MATERIALS_VIEW',
+      source: 'DELEGATED',
+      granted_by_name: 'Ewa Delegująca',
+      granted_at: '2026-11-01T10:00:00Z',
+      valid_from: '2026-11-01T10:00:00Z',
+      valid_until: null,
+      revoked_at: null,
+      revoked_by_name: null,
+      is_effective: true,
+      status: 'EFFECTIVE',
+      lineage: [{
+        recipient_name: 'Ewa Delegująca',
+        granted_by_name: 'Adam Opiekun',
+        granted_at: '2026-10-01T10:00:00Z',
+        source: 'BOOTSTRAP',
+        revoked_at: null,
+        revoked_by_name: null,
+      }],
+    }
+    let active = true
+    let newGrantCreated = false
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> | null }> = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      const method = init.method ?? 'GET'
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null
+      calls.push({ url, method, body })
+
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) {
+        const grants = [
+          ...(active ? [grant] : []),
+          ...(newGrantCreated ? [{
+            ...grant,
+            id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            permission: 'RAW_MATERIALS_CREATE',
+            source: 'BOOTSTRAP',
+            granted_by_name: 'Adam Opiekun',
+            lineage: [],
+          }] : []),
+        ]
+        return Promise.resolve(json({ data: { ...details, raw_permissions: {
+          grants,
+          history: active ? [{
+            grant_id: grantId,
+            permission: 'RAW_MATERIALS_VIEW',
+            action: 'GRANTED',
+            actor_name: 'Ewa Delegująca',
+            recipient_name: 'Jan Test',
+            occurred_at: '2026-11-01T10:00:00Z',
+          }] : [],
+        } } }))
+      }
+      if (url.endsWith(`/raw-materials/permissions/${grantId}`) && method === 'DELETE') {
+        active = false
+        return Promise.resolve(json({ data: null }))
+      }
+      if (url.endsWith(`/raw-materials/permissions/${userId}`) && method === 'POST') {
+        newGrantCreated = true
+        return Promise.resolve(json({ data: null }))
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    }))
+
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Uprawnienia RAW' }))
+
+    expect(await screen.findByText('Odczyt katalogu surowców')).toBeTruthy()
+    expect(screen.getByText('Przypisane · efektywne')).toBeTruthy()
+    expect(screen.getByText(/Adam Opiekun → Ewa Delegująca/)).toBeTruthy()
+    expect(screen.getByText('Ewa Delegująca · odbiorca: Jan Test')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cofnij grant' }))
+    const revokeDialog = await screen.findByRole('alertdialog')
+    fireEvent.change(within(revokeDialog).getByLabelText('Powód cofnięcia'), { target: { value: 'Zmiana zakresu obowiązków' } })
+    fireEvent.click(within(revokeDialog).getByRole('button', { name: 'Potwierdź cofnięcie' }))
+    expect(await screen.findByText('Grant RAW został cofnięty. Lista została odświeżona.')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nadaj uprawnienie RAW' }))
+    fireEvent.change(screen.getByLabelText('Uprawnienie RAW'), { target: { value: 'RAW_MATERIALS_CREATE' } })
+    fireEvent.change(screen.getByLabelText('Powód nadania'), { target: { value: 'Zakres obowiązków' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dalej — potwierdź nadanie' }))
+    const grantDialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(grantDialog).getByRole('button', { name: 'Potwierdź nadanie' }))
+    expect(await screen.findByText('Uprawnienie RAW zostało nadane. Lista została odświeżona.')).toBeTruthy()
+    expect(await screen.findByText('Tworzenie surowców')).toBeTruthy()
+
+    expect(calls).toContainEqual({
+      url: `/api/v1/raw-materials/permissions/${grantId}`,
+      method: 'DELETE',
+      body: { reason: 'Zmiana zakresu obowiązków' },
+    })
+    expect(calls).toContainEqual({
+      url: `/api/v1/raw-materials/permissions/${userId}`,
+      method: 'POST',
+      body: { permission: 'RAW_MATERIALS_CREATE', reason: 'Zakres obowiązków' },
+    })
+    expect(calls.some(({ url }) => url.includes('/raw-materials') && !url.includes('/permissions/'))).toBe(false)
+  })
+
+  it('explains that PA administrator status alone cannot grant RAW authority', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      calls.push(`${init.method ?? 'GET'} ${url}`)
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: details }))
+      if (url.endsWith(`/raw-materials/permissions/${userId}`)) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code: 'FORBIDDEN', message: 'Unauthorized' },
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } }))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Uprawnienia RAW' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Nadaj uprawnienie RAW' }))
+    fireEvent.change(screen.getByLabelText('Powód nadania'), { target: { value: 'Zakres obowiązków' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dalej — potwierdź nadanie' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Potwierdź nadanie' }))
+
+    expect(await within(dialog).findByText(/rola Administratora PA sama nie wystarcza/)).toBeTruthy()
+    expect(calls).toContain(`POST /api/v1/raw-materials/permissions/${userId}`)
+    expect(calls.some((call) => call.startsWith('GET ') && call.includes('/raw-materials'))).toBe(false)
+  })
+
+  it('clears the previous user RAW grants immediately when switching user details', async () => {
+    const secondUserId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const secondUser = { ...user, id: secondUserId, first_name: 'Anna', last_name: 'Nowa' }
+    let resolveSecondDetails: ((response: Response) => void) | undefined
+    const firstGrant = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      permission: 'RAW_MATERIALS_VIEW',
+      source: 'BOOTSTRAP',
+      granted_by_name: 'Administrator',
+      granted_at: '2026-11-01T10:00:00Z',
+      valid_from: '2026-11-01T10:00:00Z',
+      valid_until: null,
+      revoked_at: null,
+      revoked_by_name: null,
+      is_effective: true,
+      status: 'EFFECTIVE',
+      lineage: [],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user, secondUser], meta: { current_page: 1, per_page: 25, total: 2, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) {
+        return Promise.resolve(json({ data: { ...details, raw_permissions: { grants: [firstGrant], history: [] } } }))
+      }
+      if (url.endsWith(`/administration/users/${secondUserId}`)) {
+        return new Promise<Response>((resolve) => { resolveSecondDetails = resolve })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Uprawnienia RAW' }))
+    expect(await screen.findByText('Odczyt katalogu surowców')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Anna Nowa' }))
+    expect(await screen.findByText('Ładowanie danych użytkownika…')).toBeTruthy()
+    expect(screen.queryByText('Odczyt katalogu surowców')).toBeNull()
+    resolveSecondDetails?.(json({ data: {
+      ...details,
+      id: secondUserId,
+      first_name: 'Anna',
+      last_name: 'Nowa',
+      raw_permissions: {
+        grants: [{ ...firstGrant, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', permission: 'RAW_MATERIALS_CREATE' }],
+        history: [],
+      },
+    } }))
+
+    expect(await screen.findByRole('heading', { name: 'Anna Nowa' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Uprawnienia RAW' }))
+    expect(await screen.findByText('Tworzenie surowców')).toBeTruthy()
+    expect(screen.queryByText('Odczyt katalogu surowców')).toBeNull()
+  })
+
+  it.each([
+    { status: 419, code: 'SESSION_EXPIRED', expected: 'Sesja formularza wygasła.', expired: true },
+    {
+      status: 503,
+      code: 'RAW_MATERIALS_MODULE_UNAVAILABLE',
+      expected: 'Nadawanie i cofanie przez istniejącą ścieżkę RAW wymaga gotowości modułu RAW_MATERIALS.',
+      expired: false,
+    },
+  ])('handles RAW mutation HTTP $status without replacing readiness or session behavior', async ({ status, code, expected, expired }) => {
+    const onSessionExpired = vi.fn()
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: details }))
+      if (url.endsWith(`/raw-materials/permissions/${userId}`)) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: { code, message: 'Unavailable' },
+        }), { status, headers: { 'Content-Type': 'application/json' } }))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    render(<AdministrationUsersPage onSessionExpired={onSessionExpired} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Uprawnienia RAW' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Nadaj uprawnienie RAW' }))
+    fireEvent.change(screen.getByLabelText('Powód nadania'), { target: { value: 'Zakres obowiązków' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Dalej — potwierdź nadanie' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Potwierdź nadanie' }))
+
+    expect(await within(dialog).findByText(new RegExp(expected))).toBeTruthy()
+    expect(onSessionExpired).toHaveBeenCalledTimes(expired ? 1 : 0)
   })
 
   it('excludes inactive locations, scopes role choices, and accepts a blank pending-request decider', async () => {

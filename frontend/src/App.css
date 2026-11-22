@@ -1840,6 +1840,37 @@ button:disabled, select:disabled, input:disabled {
 }
 .admin-user-confirmation-dialog input:focus-visible { border-color: var(--accent); outline: 0; box-shadow: var(--focus-ring); }
 .admin-user-confirmation-dialog .admin-user-form-actions { justify-content: flex-end; }
+.raw-permissions { display: grid; gap: var(--space-3); min-width: 0; }
+.raw-permissions > p { margin: 0; line-height: 1.5; }
+.raw-permissions-limitation { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.raw-permission-lineage { color: var(--text-secondary); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.raw-permission-form { margin: var(--space-3) 0; }
+.raw-permission-confirmation {
+  align-self: center;
+  height: auto;
+  max-height: calc(100dvh - 2rem);
+  margin-right: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-overlay);
+}
+.raw-permission-confirmation h3, .raw-permission-confirmation p { margin: 0; }
+.raw-permission-confirmation > label { display: grid; gap: 0.4rem; color: var(--text-secondary); font-size: var(--font-size-sm); }
+.raw-permission-confirmation textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 6rem;
+  padding: 0.55rem 0.7rem;
+  color: var(--text);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.raw-permission-confirmation textarea:focus-visible { border-color: var(--accent); outline: 0; box-shadow: var(--focus-ring); }
+.raw-permission-confirmation .admin-user-form-actions { justify-content: flex-end; }
 .admin-permissions-notice { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--accent); border-radius: var(--radius-md); background: var(--accent-soft); }
 .admin-permissions-table-wrap { min-width: 0; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .admin-permissions-table { width: 100%; min-width: 48rem; border-collapse: collapse; text-align: left; }

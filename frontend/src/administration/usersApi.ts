@@ -1,5 +1,6 @@
 import { isRecord, request, requestEnvelope } from '../api'
 import { avatarFromResponse, type AvatarInfo } from '../avatars/avatarTypes'
+import { parseRawPermissionData, type RawPermissionData } from './rawPermissionsApi'
 
 const API = '/api/v1/administration'
 const SECURITY = '/api/v1/security'
@@ -60,6 +61,7 @@ export type UserListQuery = {
 }
 
 export type UserDetails = Omit<UserRow, 'roles'> & {
+  rawPermissions: RawPermissionData
   roles: Array<UserRoleSummary & {
     id: string
     grantedAt: string
@@ -223,6 +225,7 @@ export async function fetchUserDetails(id: string, signal?: AbortSignal): Promis
     || !Array.isArray(result.effective_permissions)) {
     throw new Error('Backend zwrócił nieprawidłowe szczegóły użytkownika.')
   }
+  const rawPermissions = parseRawPermissionData(result.raw_permissions)
   const base = parseUser({
     ...result,
     roles: result.roles.map((role) => isRecord(role) ? {
@@ -237,6 +240,7 @@ export async function fetchUserDetails(id: string, signal?: AbortSignal): Promis
   })
   return {
     ...base,
+    rawPermissions,
     roles: result.roles.map((value) => {
       if (!isRecord(value) || !UUID.test(requiredString(value.id, 'przypisanie roli'))) {
         throw new Error('Backend zwrócił nieprawidłowe przypisanie roli.')

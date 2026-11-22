@@ -9,6 +9,7 @@ import AvatarManagement from '../avatars/AvatarManagement'
 import UserAvatar from '../avatars/UserAvatar'
 import { avatarPhotoUrl } from '../avatars/avatarTypes'
 import BossLocationRestrictions from './BossLocationRestrictions'
+import RawPermissionsManagement from './RawPermissionsManagement'
 import {
   assignUserLocation,
   changeUserEmail,
@@ -280,6 +281,7 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
       })
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
+          setDetails(null)
           setDetailsError(errorText(cause))
           if (cause instanceof ApiError && (cause.status === 401 || cause.status === 419)) onSessionExpired?.()
         }
@@ -295,6 +297,11 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
 
   function reloadDetails() {
     setDetails(null)
+    setDetailsError(null)
+    setDetailsReload((current) => current + 1)
+  }
+
+  function refreshDetails() {
     setDetailsError(null)
     setDetailsReload((current) => current + 1)
   }
@@ -493,6 +500,13 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   ))
   const availableMembershipLocations = activeLocations.filter((location) => !assignedLocationIds.has(location.id))
   const globalRole = roleForm.role === 'ADMINISTRATOR' || roleForm.role === 'BOSS'
+  const rawTargetLimitation = details && !details.isActive
+    ? 'Nie można nadawać RAW: konto odbiorcy jest nieaktywne.'
+    : details && !details.emailVerifiedAt
+      ? 'Nie można nadawać RAW: odbiorca musi mieć potwierdzony adres e-mail.'
+      : details && !details.memberships.some((membership) => membership.isActive && membership.locationIsActive)
+        ? 'Nie można nadawać RAW: odbiorca musi mieć aktywne przypisanie do aktywnej lokalizacji w organizacji.'
+        : null
 
   return (
     <section className="admin-users-page" aria-labelledby="admin-users-title">
@@ -820,6 +834,18 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
                       })}
                     </ul>
                   )}
+                </VeltraDisclosure>
+
+                <VeltraDisclosure title="Uprawnienia RAW">
+                  <RawPermissionsManagement
+                    userId={details.id}
+                    userName={`${details.firstName} ${details.lastName}`.trim()}
+                    targetEligible={rawTargetLimitation === null}
+                    targetLimitation={rawTargetLimitation}
+                    permissions={details.rawPermissions}
+                    onChanged={refreshDetails}
+                    onSessionExpired={onSessionExpired}
+                  />
                 </VeltraDisclosure>
 
                 <VeltraDisclosure title="Efektywne uprawnienia">

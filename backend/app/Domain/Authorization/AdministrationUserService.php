@@ -2,12 +2,15 @@
 
 namespace App\Domain\Authorization;
 
-use App\Domain\Identity\UserAvatarType;
 use App\Domain\Identity\MembershipService;
+use App\Domain\Identity\UserAvatarType;
+use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use App\Models\LocationMembership;
 use App\Models\RoleAssignment;
 use App\Models\User;
+use Carbon\CarbonImmutable;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -242,8 +245,143 @@ final class AdministrationUserService
                     'location_name' => $event->location_name,
                 ])->all(),
                 'effective_permissions' => $this->effectivePermissions($user),
+                'raw_permissions' => $this->rawPermissionsFor($user),
             ],
         ];
+    }
+
+    private function rawPermissionsFor(User $user): array
+    {
+        $rows = collect(DB::select(<<<'SQL'
+            WITH RECURSIVE grant_lineage AS (
+                SELECT grants.id, grants.organization_id, grants.user_id, grants.permission,
+                    grants.granted_by, grants.granted_at, grants.valid_from, grants.valid_until,
+                    grants.delegation_source_id, grants.grant_origin,
+                    grants.delegation_source_id IS NULL AND grants.bootstrap_operation_id IS NOT NULL AS is_bootstrap,
+                    0 AS depth, grants.id AS target_grant_id
+                FROM organization_permission_grants grants
+                WHERE grants.organization_id = ? AND grants.user_id = ?
+                UNION ALL
+                SELECT parent.id, parent.organization_id, parent.user_id, parent.permission,
+                    parent.granted_by, parent.granted_at, parent.valid_from, parent.valid_until,
+                    parent.delegation_source_id, parent.grant_origin,
+                    parent.delegation_source_id IS NULL AND parent.bootstrap_operation_id IS NOT NULL,
+                    child.depth + 1, child.target_grant_id
+                FROM organization_permission_grants parent
+                JOIN grant_lineage child ON child.delegation_source_id = parent.id
+                WHERE parent.organization_id = ?
+            )
+            SELECT lineage.target_grant_id, lineage.id AS grant_id, lineage.organization_id,
+                lineage.user_id, lineage.permission, lineage.granted_at, lineage.valid_from,
+                lineage.valid_until, lineage.depth,
+                CASE
+                    WHEN lineage.grant_origin = 'SYSTEM_PROVISIONING' THEN 'SYSTEM'
+                    WHEN lineage.is_bootstrap THEN 'BOOTSTRAP'
+                    ELSE 'DELEGATED'
+                END AS source,
+                COALESCE(NULLIF(trim(concat_ws(' ', grantors.first_name, grantors.last_name)), ''), 'System') AS granted_by_name,
+                COALESCE(NULLIF(trim(concat_ws(' ', recipients.first_name, recipients.last_name)), ''), 'Użytkownik') AS recipient_name,
+                revocations.occurred_at AS revoked_at,
+                NULLIF(trim(concat_ws(' ', revokers.first_name, revokers.last_name)), '') AS revoked_by_name
+            FROM grant_lineage lineage
+            LEFT JOIN users grantors ON grantors.id = lineage.granted_by
+                AND grantors.organization_id = lineage.organization_id
+            LEFT JOIN users recipients ON recipients.id = lineage.user_id
+                AND recipients.organization_id = lineage.organization_id
+            LEFT JOIN organization_permission_grant_events revocations
+                ON revocations.grant_id = lineage.id AND revocations.event_type = 'REVOKED'
+            LEFT JOIN users revokers ON revokers.id = revocations.actor_user_id
+                AND revokers.organization_id = lineage.organization_id
+            ORDER BY lineage.target_grant_id, lineage.depth DESC
+            SQL, [$user->organization_id, $user->id, $user->organization_id]));
+
+        $effectiveByPermission = [];
+        foreach ($rows->where('depth', 0)->pluck('permission')->unique() as $permissionValue) {
+            $permission = RawMaterialPermission::tryFrom($permissionValue);
+            if ($permission !== null) {
+                $effectiveByPermission[$permissionValue] = array_fill_keys(
+                    app(RawMaterialAuthorization::class)->effectiveGrantIds($user, $permission),
+                    true,
+                );
+            }
+        }
+
+        $now = CarbonImmutable::parse(DB::scalar('SELECT statement_timestamp()'));
+        $groups = $rows->groupBy('target_grant_id');
+        $grants = [];
+        $history = [];
+        foreach ($groups as $chain) {
+            $grant = $chain->firstWhere('depth', 0);
+            if (! $grant) {
+                continue;
+            }
+
+            $isEffective = isset($effectiveByPermission[$grant->permission][$grant->grant_id]);
+            $validFrom = CarbonImmutable::parse($grant->valid_from);
+            $validUntil = $grant->valid_until === null ? null : CarbonImmutable::parse($grant->valid_until);
+            $status = match (true) {
+                $grant->revoked_at !== null => 'REVOKED',
+                $validFrom->greaterThan($now) => 'FUTURE',
+                $validUntil !== null && $validUntil->lessThanOrEqualTo($now) => 'EXPIRED',
+                $isEffective => 'EFFECTIVE',
+                default => 'INACTIVE',
+            };
+            $lineage = $chain->reject(fn (object $item): bool => (int) $item->depth === 0)
+                ->map(fn (object $item): array => [
+                    'recipient_name' => $item->recipient_name,
+                    'granted_by_name' => $item->granted_by_name,
+                    'granted_at' => $item->granted_at,
+                    'source' => $item->source,
+                    'revoked_at' => $item->revoked_at,
+                    'revoked_by_name' => $item->revoked_by_name,
+                ])->values()->all();
+
+            $grants[] = [
+                'id' => $grant->grant_id,
+                'permission' => $grant->permission,
+                'source' => $grant->source,
+                'granted_by_name' => $grant->granted_by_name,
+                'granted_at' => $grant->granted_at,
+                'valid_from' => $grant->valid_from,
+                'valid_until' => $grant->valid_until,
+                'revoked_at' => $grant->revoked_at,
+                'revoked_by_name' => $grant->revoked_by_name,
+                'is_effective' => $isEffective,
+                'status' => $status,
+                'lineage' => $lineage,
+            ];
+
+            foreach ($chain as $item) {
+                $historyKey = $item->grant_id.':GRANTED';
+                $history[$historyKey] = [
+                    'grant_id' => $item->grant_id,
+                    'permission' => $item->permission,
+                    'action' => 'GRANTED',
+                    'actor_name' => $item->granted_by_name,
+                    'recipient_name' => $item->recipient_name,
+                    'occurred_at' => $item->granted_at,
+                ];
+                if ($item->revoked_at !== null) {
+                    $historyKey = $item->grant_id.':REVOKED';
+                    $history[$historyKey] = [
+                        'grant_id' => $item->grant_id,
+                        'permission' => $item->permission,
+                        'action' => 'REVOKED',
+                        'actor_name' => $item->revoked_by_name ?? 'System',
+                        'recipient_name' => $item->recipient_name,
+                        'occurred_at' => $item->revoked_at,
+                    ];
+                }
+            }
+        }
+
+        usort($grants, fn (array $left, array $right): int => strcmp($left['permission'], $right['permission'])
+            ?: strcmp($right['granted_at'], $left['granted_at']));
+        $history = array_values($history);
+        usort($history, fn (array $left, array $right): int => CarbonImmutable::parse($right['occurred_at'])
+            <=> CarbonImmutable::parse($left['occurred_at']));
+
+        return ['grants' => $grants, 'history' => $history];
     }
 
     private function effectivePermissions(User $user): array

@@ -3,8 +3,13 @@
 namespace Tests\Feature;
 
 use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\ConfiguredModuleAvailability;
+use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Authorization\SecurityMutation;
 use App\Domain\Identity\MembershipService;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
+use App\Domain\RawMaterials\RawMaterialPermission;
+use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Connection;
@@ -86,6 +91,77 @@ class AdministrationUsersTest extends AuthorizationTestCase
             ->assertJsonPath('data.history.0.action', 'role.grant.EMPLOYEE')
             ->assertJsonMissingPath('data.password')
             ->assertJsonMissingPath('data.token');
+    }
+
+    public function test_user_details_include_organization_raw_grants_without_module_readiness_or_cross_organization_access(): void
+    {
+        $location = $this->activeRestaurant();
+        $administrator = $this->updateFixture($this->administrator($location), [
+            'first_name' => 'Adam',
+            'last_name' => 'Administrator',
+        ]);
+        $bootstrapper = $this->user('raw-bootstrapper@example.test');
+        $bootstrapper = $this->updateFixture($bootstrapper, ['first_name' => 'Ala', 'last_name' => 'Bootstrap']);
+        $this->role($bootstrapper, BusinessRole::Administrator);
+        app(MembershipService::class)->assign($bootstrapper, $location);
+        $target = $this->updateFixture($this->user('raw-target@example.test'), [
+            'first_name' => 'Anna',
+            'last_name' => 'Raw',
+        ]);
+        app(MembershipService::class)->assign($target, $location);
+        $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
+        app(RawMaterialPermissionBootstrap::class)->grantInitial(
+            $bootstrapper->id,
+            $administrator->id,
+            [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],
+            'Nadanie testowe do PA',
+            self::PASSWORD,
+        );
+        $this->app->bind(ModuleAvailability::class, fn () => new class implements ModuleAvailability
+        {
+            public function enabled(Location $location, string $module): bool
+            {
+                return true;
+            }
+        });
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $administrator,
+            $location,
+            $target,
+            RawMaterialPermission::View,
+            'Delegacja testowa do PA',
+        );
+        $this->app->bind(ModuleAvailability::class, ConfiguredModuleAvailability::class);
+
+        $this->assertDatabaseMissing('location_module_states', [
+            'location_id' => $location->id,
+            'module_key' => 'RAW_MATERIALS',
+        ]);
+        $this->getJson("/api/v1/administration/users/{$target->id}")
+            ->assertOk()
+            ->assertJsonCount(1, 'data.raw_permissions.grants')
+            ->assertJsonPath('data.raw_permissions.grants.0.source', 'DELEGATED')
+            ->assertJsonPath('data.raw_permissions.grants.0.status', 'EFFECTIVE')
+            ->assertJsonPath('data.raw_permissions.grants.0.lineage.0.source', 'BOOTSTRAP')
+            ->assertJsonPath('data.raw_permissions.grants.0.lineage.0.granted_by_name', 'Ala Bootstrap')
+            ->assertJsonPath('data.raw_permissions.grants.0.lineage.0.recipient_name', 'Adam Administrator')
+            ->assertJsonPath('data.raw_permissions.grants.0.granted_by_name', 'Adam Administrator')
+            ->assertJsonPath('data.raw_permissions.grants.0.lineage.0.revoked_at', null)
+            ->assertJsonCount(2, 'data.raw_permissions.history')
+            ->assertJsonMissingPath('data.raw_permissions.grants.0.operation_id');
+
+        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
+            $foreignUser = User::on('pgsql_setup')->create([
+                'organization_id' => $foreignLocation->organization_id,
+                'first_name' => 'Foreign',
+                'last_name' => 'User',
+                'email' => 'foreign-user@example.test',
+                'password' => self::PASSWORD,
+                'is_active' => true,
+            ]);
+
+            $this->getJson("/api/v1/administration/users/{$foreignUser->id}")->assertNotFound();
+        }, truncateAfterOperation: true);
     }
 
     public function test_user_details_project_effective_permissions_through_stage_1d_authorization(): void

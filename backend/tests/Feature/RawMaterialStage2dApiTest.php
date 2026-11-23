@@ -266,6 +266,63 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
             ->where('raw_material_revision_id', $material['revision']['id'])->count());
     }
 
+    public function test_duplicate_supplier_assignments_are_rejected_and_database_uniqueness_is_preserved(): void
+    {
+        $suffix = Str::upper(Str::random(8));
+        $supplierId = app(RawMaterialCommercialService::class)->createSupplier($this->steward, $this->location, [
+            'supplier_code' => "DUPLICATE_{$suffix}",
+            'display_name' => "Dostawca testu duplikatu {$suffix}",
+        ], "duplicate-supplier-{$suffix}")['data']['id'];
+
+        $this->selectContext($this->steward);
+        $reservation = $this->postJson('/api/v1/raw-materials/sku-reservations', [], [
+            'Idempotency-Key' => "duplicate-supplier-reservation-{$suffix}",
+        ])->assertCreated()->json('data');
+        $payload = [
+            'sku_reservation_id' => $reservation['reservation_id'],
+            'category_id' => $this->categoryId,
+            'name' => "Surowiec z powtórzonym dostawcą {$suffix}",
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'supplier_ids' => [$supplierId, $supplierId],
+        ];
+
+        $this->postJson('/api/v1/raw-materials', $payload)
+            ->assertUnprocessable();
+        $this->assertSame(0, DB::table('raw_materials')
+            ->where('organization_id', $this->steward->organization_id)
+            ->count());
+        $this->assertSame(0, DB::table('raw_material_supplier_associations')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('supplier_id', $supplierId)
+            ->count());
+
+        $payload['supplier_ids'] = [$supplierId];
+        $material = $this->postJson('/api/v1/raw-materials', $payload)
+            ->assertCreated()
+            ->json('data');
+        $this->assertSame(1, DB::table('raw_material_supplier_associations')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('raw_material_id', $material['id'])
+            ->where('supplier_id', $supplierId)
+            ->count());
+
+        $this->assertDatabaseRejects('23505', function (Connection $connection) use ($material, $supplierId): void {
+            $connection->table('raw_material_supplier_associations')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => $this->steward->organization_id,
+                'raw_material_id' => $material['id'],
+                'supplier_id' => $supplierId,
+                'created_by' => $this->steward->id,
+            ]);
+        });
+        $this->assertSame(1, DB::table('raw_material_supplier_associations')
+            ->where('organization_id', $this->steward->organization_id)
+            ->where('raw_material_id', $material['id'])
+            ->where('supplier_id', $supplierId)
+            ->count());
+    }
+
     public function test_retired_supplier_compatibility_permission_cannot_be_granted(): void
     {
         $recipient = $this->user('retired-compatibility-permission@example.test');

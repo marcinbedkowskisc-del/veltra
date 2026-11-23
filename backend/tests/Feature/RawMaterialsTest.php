@@ -1481,6 +1481,44 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->count());
     }
 
+    public function test_catalog_csv_export_returns_a_valid_header_only_file_when_no_materials_match(): void
+    {
+        Storage::fake('raw_material_csv_exports');
+        $this->assertSame(
+            0,
+            DB::table('raw_materials')
+                ->where('organization_id', $this->steward->organization_id)
+                ->where('lifecycle_state', 'ACTIVE')
+                ->whereNull('deleted_at')
+                ->count(),
+        );
+        $this->selectRawMaterialApiContext($this->steward);
+
+        $export = $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/catalog-exports')
+            ->assertCreated()
+            ->assertJsonPath('data.row_count', 0)
+            ->json('data');
+        $download = $this->actingAs($this->steward, 'web')
+            ->get($export['download_url'])
+            ->assertOk()
+            ->assertHeader('content-type', 'text/csv; charset=UTF-8');
+        $csv = $download->streamedContent();
+
+        $this->assertSame("ingredient_id;ingredient_name\n", $csv);
+        $stream = fopen('php://temp', 'w+b');
+        fwrite($stream, $csv);
+        rewind($stream);
+        $rows = [];
+        while (($row = fgetcsv($stream, null, ';', '"', '')) !== false) {
+            $rows[] = $row;
+        }
+        fclose($stream);
+
+        $this->assertSame([['ingredient_id', 'ingredient_name']], $rows);
+        $this->assertSame(0, $export['row_count']);
+    }
+
     public function test_catalog_csv_export_rejects_formula_risk_names_without_creating_a_file(): void
     {
         Storage::fake('raw_material_csv_exports');

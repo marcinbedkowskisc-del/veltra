@@ -102,6 +102,21 @@ describe('walidacja formularza tworzenia surowca', () => {
     expect(validateRawMaterialCreate({ ...packagePrice, pricingAmount: '1.123456789012345' }).pricingAmount).toBeTruthy()
   })
 
+  it('odrzuca jednostki nieobecne w przekazanym słowniku, także gdy jest pusty', () => {
+    const values = {
+      ...validValues(),
+      baseUnitCode: 'unknown',
+      nominalQuantity: '10',
+      pricingBasis: 'NOMINAL_UNIT' as const,
+      pricingAmount: '10',
+      pricingUnitCode: 'unknown',
+    }
+    const errors = validateRawMaterialCreate(values, true, [])
+    expect(errors.baseUnitCode).toBeTruthy()
+    expect(errors.pricingUnitCode).toBeTruthy()
+    expect(validateRawMaterialCreate({ ...values, baseUnitCode: 'g', pricingUnitCode: 'kg' }, true, []).baseUnitCode).toBeTruthy()
+  })
+
   it('wymaga liczb całkowitych dla jednostki pc', () => {
     const values = {
       ...validValues(),

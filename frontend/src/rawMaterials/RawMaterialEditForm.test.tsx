@@ -193,6 +193,101 @@ describe('formularz edycji surowca', () => {
     expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('pricing')
   })
 
+  it('nie wysyła niezmienionej ceny jednostkowej podczas edycji innych danych', async () => {
+    const editor = makeEditor()
+    editor.values.pricingBasis = 'NOMINAL_UNIT'
+    editor.values.pricingAmount = '20'
+    editor.values.pricingUnitCode = 'kg'
+    editorMock.mockResolvedValue(editor)
+    capabilitiesMock.mockResolvedValue({
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
+    })
+    renderForm()
+    fireEvent.change(await screen.findByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('pricing')
+  })
+
+  it('nie dodaje historycznej archiwalnej jednostki ani ceny przy zmianie nazwy', async () => {
+    const editor = makeEditor({ historicalPricingUnit: true })
+    editor.values.baseUnitCode = 'g'
+    editor.values.pricingBasis = 'NOMINAL_UNIT'
+    editor.values.pricingAmount = '10'
+    editor.values.pricingUnitCode = 'kg'
+    editor.values.conversions = []
+    editorMock.mockResolvedValue(editor)
+    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
+      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
+      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
+    ])
+    capabilitiesMock.mockResolvedValue({
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
+    })
+    renderForm()
+    fireEvent.change(await screen.findByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    const payload = reviseMock.mock.calls.at(-1)?.[1]
+    expect(payload).not.toHaveProperty('pricing')
+    expect(payload?.conversions).toEqual([])
+  })
+
+  it('wymaga jawnej nowej ceny przed zmianą ilości z historyczną jednostką', async () => {
+    const editor = makeEditor({ historicalPricingUnit: true })
+    editor.values.baseUnitCode = 'g'
+    editor.values.pricingBasis = 'NOMINAL_UNIT'
+    editor.values.pricingAmount = '10'
+    editor.values.pricingUnitCode = 'kg'
+    editor.values.conversions = []
+    editorMock.mockResolvedValue(editor)
+    capabilitiesMock.mockResolvedValue({
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
+    })
+    renderForm()
+    fireEvent.change(await screen.findByLabelText('Nominalna'), { target: { value: '20' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    expect(await screen.findByText(/Aby zmienić jednostkę lub ilości/)).toBeTruthy()
+    expect(reviseMock).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'PACKAGE' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    expect(await screen.findByText('Podaj nową cenę dla bieżącej rewizji.')).toBeTruthy()
+    expect(reviseMock).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText(/^Średnia cena netto opakowania/), { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    await screen.findByText('Zapisano nową rewizję roboczą v5')
+    expect(reviseMock.mock.calls.at(-1)?.[1]).toMatchObject({
+      pricing: { basis: 'PACKAGE', amount: '10' },
+      conversions: [],
+    })
+  })
+
+  it('nie przypisuje archiwalnej jednostki historycznej jako nowej ceny', async () => {
+    const editor = makeEditor({ historicalPricingUnit: true })
+    editor.values.baseUnitCode = 'g'
+    editor.values.pricingBasis = 'NOMINAL_UNIT'
+    editor.values.pricingAmount = '10'
+    editor.values.pricingUnitCode = 'kg'
+    editor.values.conversions = []
+    editorMock.mockResolvedValue(editor)
+    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
+      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
+      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
+    ])
+    capabilitiesMock.mockResolvedValue({
+      ...makeCapabilities(),
+      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
+    })
+    renderForm()
+    fireEvent.change(await screen.findByLabelText('Średnia cena netto za kg nominalne (PLN)'), { target: { value: '11' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+    expect(await screen.findByText(/aktywną jednostkę ceny dla bieżącej rewizji/)).toBeTruthy()
+    expect(reviseMock).not.toHaveBeenCalled()
+  })
+
   it('nie wysyła zmienionej ceny po cofnięciu grantu w trakcie edycji', async () => {
     const authorized = {
       ...makeCapabilities(),

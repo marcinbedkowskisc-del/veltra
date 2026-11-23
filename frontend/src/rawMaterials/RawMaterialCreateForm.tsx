@@ -139,12 +139,12 @@ export default function RawMaterialCreateForm({
   const [documentUploadIds, setDocumentUploadIds] = useState<string[]>([])
   const [documentsUploading, setDocumentsUploading] = useState(false)
   const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>(RAW_UNIT_OPTIONS_BASELINE)
-  const [unitsLoading, setUnitsLoading] = useState(false)
+  const [unitsLoading, setUnitsLoading] = useState(true)
   const [unitsError, setUnitsError] = useState<string | null>(null)
   const [attempted, setAttempted] = useState(false)
   const [approving, setApproving] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
-  const [initialValues] = useState(emptyRawMaterialCreateValues)
+  const [initialValues, setInitialValues] = useState(emptyRawMaterialCreateValues)
   const active = useRef(true)
   const reservationKey = useRef<string | null>(null)
   const reservation = useRef<RawMaterialSkuReservation | null>(null)
@@ -173,6 +173,14 @@ export default function RawMaterialCreateForm({
     void fetchRawMaterialUnits(controller.signal).then((result) => {
       if (!active.current) return
       setUnitOptions(result)
+      const alignPricingUnit = (current: RawMaterialCreateValues) => {
+        const base = result.find((unit) => unit.code === current.baseUnitCode && unit.archivedAt === null)
+        const pricing = result.find((unit) => unit.code === current.pricingUnitCode && unit.archivedAt === null)
+        if (!base || pricing?.dimension === base.dimension) return current
+        return { ...current, pricingUnitCode: base.code }
+      }
+      setValues(alignPricingUnit)
+      setInitialValues(alignPricingUnit)
       setUnitsError(null)
     }).catch((cause: unknown) => {
       if (!controller.signal.aborted && active.current) {
@@ -435,7 +443,7 @@ export default function RawMaterialCreateForm({
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (phase !== 'editing' || operationLocked.current || documentsUploading) return
+    if (phase !== 'editing' || operationLocked.current || documentsUploading || unitsLoading || unitsError) return
     setAttempted(true)
     setFormError(null)
     setServerErrors({})

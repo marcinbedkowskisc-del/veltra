@@ -40,7 +40,7 @@ export default function RawMaterialPricingFields({
     values.baseUnitCode, values.nominalQuantity, values.usableQuantity,
     values.usableQuantityExplicit, values.pricingBasis, amount, values.pricingUnitCode,
   ])
-  const valid = canCalculate && amount !== '' && !errors.nominalQuantity && !errors.usableQuantity
+  const valid = canCalculate && amount !== '' && !errors.baseUnitCode && !errors.nominalQuantity && !errors.usableQuantity
     && !errors.pricingAmount && !errors.pricingUnitCode
 
   useEffect(() => {

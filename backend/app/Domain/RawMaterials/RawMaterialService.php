@@ -3458,15 +3458,53 @@ final class RawMaterialService
             $amount = $event->net_pln_per_package;
             $unitCode = null;
         }
-        if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT'], true)) {
+        if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT', 'LEGACY_BASE_UNIT'], true)) {
             return null;
         }
 
-        return [
+        $pricing = [
             'basis' => $basis,
             'amount' => (string) $amount,
             'unit_code' => $unitCode,
         ];
+        if ($basis !== 'PACKAGE') {
+            $currentUnit = DB::table('raw_material_revision_units')
+                ->where('organization_id', $actor->organization_id)
+                ->where('revision_id', $revision->id)
+                ->where('unit_code', $unitCode)->first();
+            $usableInRevision = $currentUnit
+                && $currentUnit->dimension === $revision->base_unit_dimension
+                && in_array($currentUnit->conversion_kind, ['BASE', 'METRIC'], true)
+                && ($basis !== 'LEGACY_BASE_UNIT' || $unitCode === $revision->base_unit_code);
+            if (! $usableInRevision) {
+                $sourceUnit = DB::table('raw_material_revision_units')
+                    ->join('raw_material_revisions', 'raw_material_revisions.id', '=', 'raw_material_revision_units.revision_id')
+                    ->where('raw_material_revision_units.organization_id', $actor->organization_id)
+                    ->where('raw_material_revision_units.revision_id', $event->pricing_revision_id)
+                    ->where('raw_material_revision_units.unit_code', $unitCode)
+                    ->first([
+                        'raw_material_revision_units.unit_code',
+                        'raw_material_revision_units.dimension',
+                        'raw_material_revision_units.conversion_kind',
+                        'raw_material_revisions.base_unit_code',
+                        'raw_material_revisions.base_unit_dimension',
+                    ]);
+                if (! $sourceUnit || $sourceUnit->dimension !== $sourceUnit->base_unit_dimension
+                    || ! in_array($sourceUnit->conversion_kind, ['BASE', 'METRIC'], true)
+                    || ($basis === 'LEGACY_BASE_UNIT'
+                        && ($sourceUnit->conversion_kind !== 'BASE' || $unitCode !== $sourceUnit->base_unit_code))) {
+                    throw new \LogicException('The reference price source unit cannot be verified.');
+                }
+                $pricing['source_unit'] = [
+                    'revision_id' => $event->pricing_revision_id,
+                    'unit_code' => $sourceUnit->unit_code,
+                    'dimension' => $sourceUnit->dimension,
+                    'conversion_kind' => $sourceUnit->conversion_kind,
+                ];
+            }
+        }
+
+        return $pricing;
     }
 
     private function presentCurrent(User $actor, string $materialId): array

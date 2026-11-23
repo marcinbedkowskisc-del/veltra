@@ -221,7 +221,7 @@ function decimalGreaterThan(left: string, right: string): boolean {
 export function validateRawMaterialCreate(
   values: RawMaterialCreateValues,
   requireNominal = false,
-  units: RawMaterialUnitOption[] = [],
+  units: RawMaterialUnitOption[] = RAW_UNIT_OPTIONS_BASELINE,
 ): Record<string, string> {
   const errors: Record<string, string> = {}
   const name = values.name.trim()
@@ -231,6 +231,9 @@ export function validateRawMaterialCreate(
   if (!name) errors.name = 'Podaj nazwę surowca.'
   else if ([...name].length > 200) errors.name = 'Nazwa może mieć maksymalnie 200 znaków.'
   if ([...description].length > 10000) errors.description = 'Opis może mieć maksymalnie 10 000 znaków.'
+  if (!units.some((unit) => unit.code === values.baseUnitCode)) {
+    errors.baseUnitCode = 'Wybierz prawidłową jednostkę podstawową.'
+  }
 
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
@@ -258,7 +261,8 @@ export function validateRawMaterialCreate(
   }
   if (pricingAmount && !nominal) errors.nominalQuantity = 'Cena wymaga ilości nominalnej.'
   if (values.pricingBasis === 'NOMINAL_UNIT'
-    && unitDimension(values.pricingUnitCode, units) !== unitDimension(values.baseUnitCode, units)) {
+    && (!units.some((unit) => unit.code === values.pricingUnitCode)
+      || unitDimension(values.pricingUnitCode, units) !== unitDimension(values.baseUnitCode, units))) {
     errors.pricingUnitCode = 'Jednostka ceny nie odpowiada jednostce surowca.'
   }
 
@@ -279,7 +283,7 @@ export function validateRawMaterialCreate(
   const seenUnits = new Set<string>([values.baseUnitCode])
   values.conversions.forEach((conversion, index) => {
     if (!/^[a-z][a-z0-9_]{0,23}$/.test(conversion.unitCode)
-      || (units.length > 0 && !units.some((unit) => unit.code === conversion.unitCode))) {
+      || !units.some((unit) => unit.code === conversion.unitCode)) {
       errors[`conversions.${index}.unitCode`] = 'Wybierz prawidłową jednostkę.'
       return
     }

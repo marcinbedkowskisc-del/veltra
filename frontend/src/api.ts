@@ -23,6 +23,7 @@ export type ApiEnvelope = {
 type RequestOptions = {
   signal?: AbortSignal
   headers?: Record<string, string>
+  timeoutMs?: number
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -86,8 +87,8 @@ async function send(
       method, headers, credentials: 'same-origin', cache: 'no-store',
       body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
       signal: options.signal
-        ? AbortSignal.any([options.signal, AbortSignal.timeout(15_000)])
-        : AbortSignal.timeout(15_000),
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 15_000)])
+        : AbortSignal.timeout(options.timeoutMs ?? 15_000),
     })
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'TimeoutError') {
@@ -137,21 +138,21 @@ export async function request(
   return (await requestEnvelope(path, method, body, options)).data
 }
 
-function safeDownloadName(header: string | null): string {
+function safeDownloadName(header: string | null, fallback = 'katalog-raw.csv'): string {
   const encoded = header?.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
   const quoted = header?.match(/filename="([^"]+)"/i)?.[1]
   let name: string
   try {
-    name = encoded ? decodeURIComponent(encoded) : quoted ?? 'katalog-raw.csv'
+    name = encoded ? decodeURIComponent(encoded) : quoted ?? fallback
   } catch {
-    throw new Error('Backend zwrócił nieprawidłową nazwę pliku eksportu.')
+    throw new Error('Backend zwrócił nieprawidłową nazwę pliku.')
   }
   name = [...name].map((character) => {
     const code = character.charCodeAt(0)
     return character === '/' || character === '\\' || code < 32 || code === 127 ? '_' : character
   }).join('').trim()
 
-  return name || 'katalog-raw.csv'
+  return name || fallback
 }
 
 export async function requestDownload(path: string, options: RequestOptions = {}): Promise<{ blob: Blob; filename: string }> {
@@ -164,5 +165,28 @@ export async function requestDownload(path: string, options: RequestOptions = {}
   return {
     blob: await response.blob(),
     filename: safeDownloadName(response.headers.get('Content-Disposition')),
+  }
+}
+
+export async function requestFile(
+  path: string,
+  expectedMediaTypes: string[],
+  fallbackFilename: string,
+  options: RequestOptions = {},
+): Promise<{ blob: Blob; filename: string; mediaType: string }> {
+  const response = await send(path, 'GET', undefined, {
+    ...options,
+    headers: { Accept: expectedMediaTypes.join(', '), ...options.headers },
+  })
+  if (!response.ok) throw await parseErrorResponse(response)
+  const mediaType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
+  if (!mediaType || !expectedMediaTypes.includes(mediaType)) {
+    throw new Error('Backend zwrócił plik w nieobsługiwanym formacie.')
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: safeDownloadName(response.headers.get('Content-Disposition'), fallbackFilename),
+    mediaType,
   }
 }

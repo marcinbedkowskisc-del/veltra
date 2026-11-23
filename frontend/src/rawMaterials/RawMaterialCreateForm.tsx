@@ -3,6 +3,7 @@ import { ApiError } from '../api'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
 import RawMaterialPricingFields from './RawMaterialPricingFields'
+import RawMaterialDocumentsSection from './RawMaterialDocumentsSection'
 import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
   buildRawMaterialCreatePayload,
@@ -113,6 +114,7 @@ export default function RawMaterialCreateForm({
   canViewUsableCost = false,
   canManageSuppliers = false,
   canCreateApproved = false,
+  operatingLocationId,
   returnFocus,
   onClose,
   onCreated,
@@ -134,6 +136,8 @@ export default function RawMaterialCreateForm({
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
   const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
   const [supplierError, setSupplierError] = useState<string | null>(null)
+  const [documentUploadIds, setDocumentUploadIds] = useState<string[]>([])
+  const [documentsUploading, setDocumentsUploading] = useState(false)
   const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>(RAW_UNIT_OPTIONS_BASELINE)
   const [unitsLoading, setUnitsLoading] = useState(false)
   const [unitsError, setUnitsError] = useState<string | null>(null)
@@ -149,7 +153,8 @@ export default function RawMaterialCreateForm({
   const attemptStage = useRef<AttemptStage>('reservation')
   const operationLocked = useRef(false)
   const createdNotified = useRef(false)
-  const dirty = JSON.stringify(values) !== JSON.stringify(initialValues) || allergens.status !== 'UNKNOWN'
+  const dirty = JSON.stringify(values) !== JSON.stringify(initialValues)
+    || allergens.status !== 'UNKNOWN' || documentUploadIds.length > 0 || documentsUploading
   const locked = isBusy(phase) || phase === 'complete'
     || phase === 'session-expired' || phase === 'forbidden'
     || phase === 'conflict' || phase === 'unavailable' || unitsLoading || Boolean(unitsError)
@@ -430,7 +435,7 @@ export default function RawMaterialCreateForm({
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (phase !== 'editing' || operationLocked.current) return
+    if (phase !== 'editing' || operationLocked.current || documentsUploading) return
     setAttempted(true)
     setFormError(null)
     setServerErrors({})
@@ -447,6 +452,7 @@ export default function RawMaterialCreateForm({
 
     const payload = { ...buildRawMaterialCreatePayload(values, canManageSuppliers && supplierOptionsLoaded,
       canManageReferencePrice && canViewReferencePrice, unitOptions),
+      ...(documentUploadIds.length ? { document_upload_ids: documentUploadIds } : {}),
       ...(allergens.status !== 'UNKNOWN' ? { allergen_declaration: allergens } : {}) }
     const key = reservationKey.current ?? crypto.randomUUID()
     reservationKey.current = key
@@ -467,7 +473,7 @@ export default function RawMaterialCreateForm({
   }
 
   function requestClose() {
-    if (isBusy(phase)) return
+    if (isBusy(phase) || documentsUploading) return
     if (phase === 'complete') {
       onClose()
       return
@@ -867,6 +873,16 @@ export default function RawMaterialCreateForm({
               </div>
               ) },
             ]} />
+            <RawMaterialDocumentsSection
+              mode="create"
+              operatingLocationId={operatingLocationId}
+              onUploadIdsChange={setDocumentUploadIds}
+              onBusyChange={setDocumentsUploading}
+              disabled={locked}
+              onSessionExpired={onSessionExpired}
+              onAuthorizationDenied={onAuthorizationDenied}
+              onModuleUnavailable={onModuleUnavailable}
+            />
 
             <div className="create-form-footer">
               <p>Numer SKU zostanie nadany automatycznie.{!canCreateApproved && ' Surowiec zostanie zapisany jako szkic.'}</p>
@@ -874,10 +890,10 @@ export default function RawMaterialCreateForm({
                 <button type="button" className="button button-secondary" onClick={requestClose} disabled={isBusy(phase)}>
                   Anuluj
                 </button>
-                <button type="submit" className="button button-primary" disabled={locked || categories.length === 0}>
+                <button type="submit" className="button button-primary" disabled={locked || documentsUploading || categories.length === 0}>
                   Utwórz szkic
                 </button>
-                {canCreateApproved && <button type="submit" value="approve" className="button button-primary" disabled={locked || categories.length === 0}>
+                {canCreateApproved && <button type="submit" value="approve" className="button button-primary" disabled={locked || documentsUploading || categories.length === 0}>
                   Dodaj i zatwierdź surowiec
                 </button>}
               </div>

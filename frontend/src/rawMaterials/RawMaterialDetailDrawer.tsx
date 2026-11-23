@@ -17,6 +17,7 @@ import type { CategoryOption } from './catalog'
 import type { RawMaterialDetail, RawMaterialReferencePrice, RawMaterialRevision } from './detail'
 import RawMaterialEditForm from './RawMaterialEditForm'
 import RawMaterialWorkflow from './RawMaterialWorkflow'
+import RawMaterialDocumentsSection from './RawMaterialDocumentsSection'
 
 type Props = {
   materialId: string
@@ -521,7 +522,7 @@ export default function RawMaterialDetailDrawer({
           )}
           {detailState === 'ready' && detail && detailLoadedRefreshKey === refreshKey && !syntheticPreview && !editOpen && (
             <RawMaterialWorkflow
-              key={`${materialId}:${operatingLocationId}:${refreshKey}`}
+              key={`${materialId}:${operatingLocationId}:${working ? 'editor' : 'current'}:${refreshKey}`}
               materialId={materialId}
               refreshKey={refreshKey}
               onSaved={onWorkflowSaved}
@@ -709,6 +710,25 @@ export default function RawMaterialDetailDrawer({
                           </ol>
                         ) : <p className="detail-muted">Brak dostępnych zmian.</p>)}
                       </section>
+                    </div>
+                  ),
+                },
+                {
+                  id: 'documents',
+                  label: 'Dokumenty',
+                  content: (
+                    <div className="detail-content detail-tab-content">
+                      <RawMaterialDocumentsSection
+                        key={`${materialId}:${operatingLocationId}:${refreshKey}`}
+                        materialId={materialId}
+                        operatingLocationId={operatingLocationId}
+                        view={working ? 'editor' : 'current'}
+                        mode="read"
+                        refreshKey={refreshKey}
+                        onSessionExpired={onSessionExpired}
+                        onAuthorizationDenied={onClose}
+                        onModuleUnavailable={onModuleUnavailable}
+                      />
                     </div>
                   ),
                 },

@@ -652,6 +652,52 @@ button:disabled, select:disabled, input:disabled {
 .detail-muted, .detail-state { color: var(--text-muted); font-size: 0.83rem; }
 .detail-state { margin: 1rem 0; }
 .detail-section .state-panel { margin: 0; }
+.raw-documents { display: grid; gap: 0.85rem; min-width: 0; }
+.raw-documents > h3 { margin: 0; font-size: 1rem; }
+.raw-documents-upload { display: grid; gap: 0.45rem; }
+.raw-document-list, .raw-document-upload-list {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.raw-document-list > li, .raw-document-upload-list > li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.85rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.raw-document-metadata, .raw-document-upload-list li > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.raw-document-metadata strong, .raw-document-upload-list strong { color: var(--text); }
+.raw-document-metadata span, .raw-document-upload-list span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+.raw-document-list > li.is-detached { border-color: var(--warning); }
+.raw-document-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.45rem; }
+.raw-document-actions .button { white-space: nowrap; }
+.raw-document-preview {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.raw-document-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.raw-document-preview img { display: block; max-width: 100%; max-height: 70vh; margin-inline: auto; object-fit: contain; }
+.raw-document-preview iframe { width: 100%; height: min(70vh, 52rem); border: 1px solid var(--border); background: white; }
 
 .create-form-backdrop {
   position: fixed;
@@ -872,6 +918,9 @@ button:disabled, select:disabled, input:disabled {
 }
 
 @media (max-width: 720px) {
+  .raw-document-list > li, .raw-document-upload-list > li { flex-direction: column; }
+  .raw-document-actions { justify-content: flex-start; }
+  .raw-document-preview-heading { align-items: flex-start; flex-direction: column; }
   .app-header { min-height: 64px; flex-wrap: wrap; gap: 1rem; padding: 0.75rem 1rem; }
   .primary-nav { order: 3; width: 100%; min-height: 2.35rem; gap: 1.25rem; }
   .stage-label { font-size: 0.62rem; }

@@ -56,6 +56,7 @@ export type RawMaterialCreatePayload = {
     unit_code?: RawMaterialPricingUnit
   }
   supplier_ids?: string[]
+  document_upload_ids?: string[]
   aliases?: string[]
   conversions?: Array<{
     unit_code: RawMaterialUnit

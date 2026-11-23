@@ -7,11 +7,13 @@ import {
   fetchRawMaterialCapabilities,
   fetchRawMaterialCompletion,
   fetchRawMaterialEditor,
+  fetchRawMaterialDocuments,
   fetchAllergenDeclaration,
   fetchAllergenCatalogs,
   fetchRawMaterialUnits,
   previewRawMaterialPricing,
   reviseRawMaterial,
+  uploadRawMaterialDocuments,
   type RawMaterialCapabilities,
   type RawMaterialCompletion,
   type RawMaterialEditor,
@@ -28,6 +30,8 @@ vi.mock('./api', async (importOriginal) => ({
   fetchRawMaterialUnits: vi.fn(),
   previewRawMaterialPricing: vi.fn(),
   reviseRawMaterial: vi.fn(),
+  fetchRawMaterialDocuments: vi.fn(),
+  uploadRawMaterialDocuments: vi.fn(),
 }))
 
 const materialId = '00000000-0000-4000-8000-000000000401'
@@ -83,6 +87,8 @@ const capabilitiesMock = vi.mocked(fetchRawMaterialCapabilities)
 const completionMock = vi.mocked(fetchRawMaterialCompletion)
 const editorMock = vi.mocked(fetchRawMaterialEditor)
 const reviseMock = vi.mocked(reviseRawMaterial)
+const documentListingMock = vi.mocked(fetchRawMaterialDocuments)
+const uploadMock = vi.mocked(uploadRawMaterialDocuments)
 
 function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialEditForm>> = {}) {
   return render(
@@ -115,6 +121,18 @@ beforeEach(() => {
   completionMock.mockResolvedValue(makeCompletion())
   editorMock.mockResolvedValue(makeEditor())
   reviseMock.mockResolvedValue(makeSaved())
+  documentListingMock.mockResolvedValue({ revisionId, documents: [] })
+  uploadMock.mockImplementation(async (files) => files.map(({ key }) => ({
+    key,
+    uploadId: '00000000-0000-4000-8000-000000000406',
+    filename: 'nowy.txt',
+    mediaType: 'text/plain',
+    sizeBytes: 3,
+    status: 'STAGED' as const,
+    errorCode: null,
+    message: 'Plik oczekuje na zapis surowca.',
+    expiresAt: '2026-11-11T12:00:00Z',
+  })))
   vi.mocked(previewRawMaterialPricing).mockResolvedValue({
     netPlnPerPackage: '20.00000000000000', usableUnitCost: '0.25000000000000', usableCostBasis: 'PLN/100g',
   })
@@ -126,6 +144,38 @@ afterEach(() => {
 })
 
 describe('formularz edycji surowca', () => {
+  it('wiąże upload i odłączenie dokumentu z zapisem dokładnej nowej rewizji', async () => {
+    const versionId = '00000000-0000-4000-8000-000000000407'
+    documentListingMock.mockResolvedValueOnce({
+      revisionId,
+      documents: [{
+        id: versionId,
+        filename: 'obecny.txt',
+        documentType: 'OTHER',
+        mediaType: 'text/plain',
+        sizeBytes: 12,
+        status: 'CLEAN',
+        downloadUrl: `/api/v1/raw-materials/${materialId}/documents/${versionId}/download?view=editor`,
+        previewUrl: null,
+      }],
+    })
+    renderForm()
+    expect(await screen.findByText('obecny.txt')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Odłącz przy zapisie' }))
+    fireEvent.change(screen.getByLabelText('Dodaj pliki'), {
+      target: { files: [new File(['abc'], 'nowy.txt', { type: 'text/plain' })] },
+    })
+    expect(await screen.findByText(/Skan AV czysty; oczekuje na zapis materiału/)).toBeTruthy()
+    await waitFor(() => expect(fetchRawMaterialUnits).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
+
+    await screen.findByRole('heading', { name: /Zapisano nową rewizję roboczą/ })
+    expect(reviseMock).toHaveBeenCalledWith(materialId, expect.objectContaining({
+      document_upload_ids: ['00000000-0000-4000-8000-000000000406'],
+      detach_document_version_ids: [versionId],
+    }), version)
+  })
+
   it('pokazuje cenę tylko z prawem odczytu i blokuje jej edycję bez prawa zapisu', async () => {
     const editor = makeEditor()
     editor.values.pricingAmount = '20'

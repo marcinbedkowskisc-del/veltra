@@ -10,8 +10,10 @@ import {
   fetchRawMaterialUnits,
   previewRawMaterialPricing,
   reserveRawMaterialSku,
+  uploadRawMaterialDocuments,
   type CreatedRawMaterial,
   type RawMaterialSkuReservation,
+  type RawMaterialUploadResult,
 } from './api'
 
 vi.mock('./api', async (importOriginal) => ({
@@ -22,6 +24,7 @@ vi.mock('./api', async (importOriginal) => ({
   fetchRawMaterialUnits: vi.fn(),
   previewRawMaterialPricing: vi.fn(),
   reserveRawMaterialSku: vi.fn(),
+  uploadRawMaterialDocuments: vi.fn(),
 }))
 
 const categoryId = '00000000-0000-4000-8000-000000000001'
@@ -43,6 +46,7 @@ const categories: CategoryOption[] = [{ id: categoryId, name: 'Produkty spożywc
 const reserveMock = vi.mocked(reserveRawMaterialSku)
 const createMock = vi.mocked(createRawMaterial)
 const createApprovedMock = vi.mocked(createApprovedRawMaterial)
+const uploadMock = vi.mocked(uploadRawMaterialDocuments)
 const allergenCatalogId = '00000000-0000-4000-8000-000000000005'
 
 function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCreateForm>> = {}) {
@@ -73,6 +77,17 @@ beforeEach(() => {
   reserveMock.mockResolvedValue(reservation)
   createMock.mockResolvedValue(created)
   createApprovedMock.mockResolvedValue({ ...created, lifecycleState: 'ACTIVE' })
+  uploadMock.mockImplementation(async (files) => files.map(({ key }): RawMaterialUploadResult => ({
+    key,
+    uploadId: '00000000-0000-4000-8000-000000000106',
+    filename: 'specyfikacja.txt',
+    mediaType: 'text/plain',
+    sizeBytes: 3,
+    status: 'STAGED',
+    errorCode: null,
+    message: 'Plik oczekuje na zapis surowca.',
+    expiresAt: '2026-11-11T12:00:00Z',
+  })))
   vi.mocked(fetchAllergenCatalogs).mockResolvedValue([{ id: allergenCatalogId, versionNumber: 1, isCurrent: true, definitions: [] }])
   vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
     { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
@@ -94,6 +109,26 @@ afterEach(() => {
 })
 
 describe('formularz tworzenia surowca RAW', () => {
+  it('dołącza wyłącznie czysty staged upload podczas zapisu nowej rewizji', async () => {
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
+    fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
+    expect((screen.getByLabelText(/Kategoria/) as HTMLSelectElement).value).toBe(categoryId)
+    fireEvent.change(screen.getByLabelText('Dodaj pliki'), {
+      target: { files: [new File(['abc'], 'specyfikacja.txt', { type: 'text/plain' })] },
+    })
+    expect(await screen.findByText(/Skan AV czysty; oczekuje na zapis materiału/)).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Utwórz szkic' })).toHaveProperty('disabled', false))
+    fireEvent.submit(screen.getByRole('button', { name: 'Utwórz szkic' }).closest('form')!)
+    await waitFor(() => expect(reserveMock).toHaveBeenCalled())
+
+    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      document_upload_ids: ['00000000-0000-4000-8000-000000000106'],
+    }), reservationId)
+  })
+
   it('pokazuje i serializuje cenę wyłącznie przy przyznanym uprawnieniu', async () => {
     renderForm()
     expect(screen.queryByRole('heading', { name: /Cena zakupu/ })).toBeNull()

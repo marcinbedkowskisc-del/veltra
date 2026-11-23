@@ -67,10 +67,15 @@ final class RawMaterialDocumentSetService
         if ($revisionId === null) {
             throw new RawMaterialDocumentException('RAW_MATERIAL_DOCUMENT_NOT_FOUND', 'Nie znaleziono dostępnej rewizji dokumentów.', 404);
         }
-        $versions = DB::table('raw_material_document_versions')
-            ->where('organization_id', $actor->organization_id)
-            ->whereIn('id', $this->ids($actor->organization_id, $revisionId))
-            ->orderBy('original_filename')->orderBy('id')->get();
+        $versions = DB::table('raw_material_document_versions as versions')
+            ->join('raw_material_documents as documents', function ($join): void {
+                $join->on('documents.id', '=', 'versions.document_id')
+                    ->on('documents.organization_id', '=', 'versions.organization_id');
+            })
+            ->where('versions.organization_id', $actor->organization_id)
+            ->whereIn('versions.id', $this->ids($actor->organization_id, $revisionId))
+            ->orderBy('versions.original_filename')->orderBy('versions.id')
+            ->get(['versions.*', 'documents.document_type']);
 
         return [
             'revision_id' => $revisionId,
@@ -82,6 +87,7 @@ final class RawMaterialDocumentSetService
                 return [
                     'id' => $version->id,
                     'filename' => $version->original_filename,
+                    'document_type' => $version->document_type,
                     'media_type' => $version->media_type,
                     'size_bytes' => (int) $version->size_bytes,
                     'status' => $scan,

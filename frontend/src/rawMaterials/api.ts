@@ -1,4 +1,4 @@
-import { isRecord, request, requestDownload, requestEnvelope } from '../api'
+import { isRecord, request, requestDownload, requestEnvelope, requestFile } from '../api'
 import {
   catalogSearchParams,
   parseCategories,
@@ -102,6 +102,8 @@ export type RawMaterialEditPayload = {
     unit_code?: RawMaterialPricingUnit
   }
   supplier_ids?: string[]
+  document_upload_ids?: string[]
+  detach_document_version_ids?: string[]
   aliases: string[]
   conversions: Array<{
     unit_code: RawMaterialUnit
@@ -120,8 +122,52 @@ export type RevisedRawMaterial = {
   revision: { id: string; revisionNo: number }
 }
 
+export type RawMaterialDocumentStatus = 'PENDING' | 'CLEAN' | 'INFECTED' | 'ERROR'
+export type RawMaterialDocumentType =
+  | 'ALLERGEN_DECLARATION'
+  | 'SUPPLIER_CERTIFICATE'
+  | 'SPECIFICATION'
+  | 'SAFETY_DATA_SHEET'
+  | 'OTHER'
+
+export type RawMaterialDocument = {
+  id: string
+  filename: string
+  documentType: RawMaterialDocumentType
+  mediaType: string
+  sizeBytes: number
+  status: RawMaterialDocumentStatus
+  downloadUrl: string | null
+  previewUrl: string | null
+}
+
+export type RawMaterialDocumentListing = {
+  revisionId: string
+  documents: RawMaterialDocument[]
+}
+
+export type RawMaterialUploadResult = {
+  key: string
+  uploadId: string | null
+  filename: string | null
+  mediaType: string | null
+  sizeBytes: number | null
+  status: 'STAGED' | 'FAILED'
+  errorCode: string | null
+  message: string
+  expiresAt: string | null
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const RAW_SKU = /^RAW-\d{6}$/
+const DOCUMENT_TYPES: readonly RawMaterialDocumentType[] = [
+  'ALLERGEN_DECLARATION',
+  'SUPPLIER_CERTIFICATE',
+  'SPECIFICATION',
+  'SAFETY_DATA_SHEET',
+  'OTHER',
+]
+const DOCUMENT_MEDIA_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'text/plain', 'text/csv']
 
 function isReservationStatus(value: unknown): value is RawMaterialSkuReservation['status'] {
   return value === 'RESERVED' || value === 'EXPIRED' || value === 'CONSUMED'
@@ -375,6 +421,102 @@ function parseRevisedRawMaterial(value: unknown, expectedId: string): RevisedRaw
   }
 }
 
+function isDocumentType(value: unknown): value is RawMaterialDocumentType {
+  return typeof value === 'string' && DOCUMENT_TYPES.some((type) => type === value)
+}
+
+function documentUrl(
+  value: unknown,
+  materialId: string,
+  versionId: string,
+  action: 'preview' | 'download',
+  view: 'current' | 'editor',
+): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') throw new Error('Backend zwrócił nieprawidłowy adres dokumentu.')
+  const url = new URL(value, window.location.origin)
+  const expectedPath = `${RAW_API}/${encodeURIComponent(materialId)}/documents/${encodeURIComponent(versionId)}/${action}`
+  if (url.origin !== window.location.origin || url.pathname !== expectedPath
+    || url.search !== (view === 'editor' ? '?view=editor' : '')) {
+    throw new Error('Backend zwrócił nieprawidłowy adres dokumentu.')
+  }
+  return `${url.pathname}${url.search}`
+}
+
+function parseRawMaterialDocuments(
+  value: unknown,
+  materialId: string,
+  view: 'current' | 'editor',
+): RawMaterialDocumentListing {
+  if (!isRecord(value) || typeof value.revision_id !== 'string' || !UUID.test(value.revision_id)
+    || !Array.isArray(value.documents)) {
+    throw new Error('Backend zwrócił nieprawidłową listę dokumentów surowca.')
+  }
+  const documents = value.documents.map((item): RawMaterialDocument => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !UUID.test(item.id)
+      || typeof item.filename !== 'string' || !item.filename
+      || !isDocumentType(item.document_type)
+      || typeof item.media_type !== 'string' || !DOCUMENT_MEDIA_TYPES.includes(item.media_type)
+      || !Number.isSafeInteger(item.size_bytes) || Number(item.size_bytes) < 0
+      || !['PENDING', 'CLEAN', 'INFECTED', 'ERROR'].includes(String(item.status))) {
+      throw new Error('Backend zwrócił nieprawidłowy dokument surowca.')
+    }
+    const status = item.status as RawMaterialDocumentStatus
+    const downloadUrl = documentUrl(item.download_url, materialId, item.id, 'download', view)
+    const previewUrl = documentUrl(item.preview_url, materialId, item.id, 'preview', view)
+    if ((status === 'CLEAN') !== (downloadUrl !== null)
+      || (previewUrl !== null && (!['application/pdf', 'image/png', 'image/jpeg'].includes(item.media_type)
+        || status !== 'CLEAN'))) {
+      throw new Error('Backend zwrócił niespójny stan dokumentu surowca.')
+    }
+    return {
+      id: item.id,
+      filename: item.filename,
+      documentType: item.document_type,
+      mediaType: item.media_type,
+      sizeBytes: Number(item.size_bytes),
+      status,
+      downloadUrl,
+      previewUrl,
+    }
+  })
+
+  return { revisionId: value.revision_id, documents }
+}
+
+function parseUploadResult(value: unknown, key: string): RawMaterialUploadResult {
+  if (!isRecord(value) || (value.key !== undefined && value.key !== key)
+    || (value.upload_id !== undefined && value.upload_id !== null
+      && (typeof value.upload_id !== 'string' || !UUID.test(value.upload_id)))
+    || (value.filename !== undefined && value.filename !== null && typeof value.filename !== 'string')
+    || (value.media_type !== undefined && value.media_type !== null && typeof value.media_type !== 'string')
+    || (value.size_bytes !== undefined && value.size_bytes !== null
+      && (!Number.isSafeInteger(value.size_bytes) || Number(value.size_bytes) < 0))
+    || (value.status !== 'STAGED' && value.status !== 'FAILED')
+    || (value.error_code !== undefined && value.error_code !== null && typeof value.error_code !== 'string')
+    || typeof value.message !== 'string'
+    || (value.expires_at !== undefined && value.expires_at !== null && typeof value.expires_at !== 'string')) {
+    throw new Error('Backend zwrócił nieprawidłowy wynik uploadu dokumentu.')
+  }
+  if (value.status === 'STAGED' && (typeof value.upload_id !== 'string' || typeof value.filename !== 'string'
+    || !value.filename
+    || typeof value.media_type !== 'string' || typeof value.size_bytes !== 'number')) {
+    throw new Error('Backend nie potwierdził poprawnego stagingu dokumentu.')
+  }
+
+  return {
+    key,
+    uploadId: typeof value.upload_id === 'string' ? value.upload_id : null,
+    filename: typeof value.filename === 'string' ? value.filename : null,
+    mediaType: typeof value.media_type === 'string' ? value.media_type : null,
+    sizeBytes: typeof value.size_bytes === 'number' ? value.size_bytes : null,
+    status: value.status,
+    errorCode: typeof value.error_code === 'string' ? value.error_code : null,
+    message: value.message,
+    expiresAt: typeof value.expires_at === 'string' ? value.expires_at : null,
+  }
+}
+
 export async function fetchRawMaterialCapabilities(
   expectedLocationId: string,
   signal?: AbortSignal,
@@ -418,6 +560,62 @@ export async function reviseRawMaterial(
     payload,
     { headers: { 'If-Match': version } },
   ), id)
+}
+
+export async function fetchRawMaterialDocuments(
+  id: string,
+  view: 'current' | 'editor',
+  signal?: AbortSignal,
+): Promise<RawMaterialDocumentListing> {
+  const query = view === 'editor' ? '?view=editor' : ''
+  const value = await request(`${RAW_API}/${encodeURIComponent(id)}/documents${query}`, 'GET', undefined, { signal })
+  return parseRawMaterialDocuments(value, id, view)
+}
+
+export async function uploadRawMaterialDocuments(
+  files: Array<{ file: File; key: string }>,
+  signal?: AbortSignal,
+): Promise<RawMaterialUploadResult[]> {
+  const body = new FormData()
+  files.forEach(({ file, key }, index) => {
+    body.append(`files[${index}]`, file, file.name)
+    body.append(`keys[${index}]`, key)
+  })
+  const response = await requestEnvelope('/api/v1/raw-materials/document-uploads', 'POST', body, {
+    signal,
+    timeoutMs: 60_000,
+  })
+  if (!Array.isArray(response.data) || response.data.length !== files.length) {
+    throw new Error('Backend zwrócił niepełny wynik uploadu dokumentów.')
+  }
+  const results = response.data.map((item, index) => parseUploadResult(item, files[index].key))
+  if (new Set(results.map((result) => result.key)).size !== files.length) {
+    throw new Error('Backend zwrócił powielone wyniki uploadu dokumentów.')
+  }
+  return results
+}
+
+export async function retryRawMaterialDocumentUpload(
+  uploadId: string,
+  key: string,
+  signal?: AbortSignal,
+): Promise<RawMaterialUploadResult> {
+  const value = await request(
+    `${RAW_API}/document-uploads/${encodeURIComponent(uploadId)}/retry`,
+    'POST',
+    {},
+    { signal, timeoutMs: 60_000 },
+  )
+  return parseUploadResult(value, key)
+}
+
+export async function fetchRawMaterialDocumentFile(
+  path: string,
+  mediaType: string,
+  filename: string,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; filename: string; mediaType: string }> {
+  return requestFile(path, [mediaType], filename, { signal, timeoutMs: 60_000 })
 }
 
 export async function fetchCatalog(query: CatalogQuery, signal?: AbortSignal): Promise<CatalogPage> {

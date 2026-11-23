@@ -215,6 +215,7 @@ trait RawDocumentsStage3eB3Tests
         $this->selectRawMaterialApiContext($this->steward);
         $base = '/api/v1/raw-materials/'.$material['id'].'/documents';
         $list = $this->getJson($base)->assertOk()->json('data.documents.0');
+        $this->assertSame('OTHER', $list['document_type']);
         $this->assertArrayNotHasKey('storage_key', $list);
         $this->assertArrayNotHasKey('upload_id', $list);
         $this->assertNull($list['download_url']);

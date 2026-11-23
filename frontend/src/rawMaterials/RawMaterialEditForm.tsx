@@ -4,6 +4,7 @@ import { formatNumber } from '../design-system/formatting'
 import Tabs from '../design-system/Tabs'
 import AllergenFields from './AllergenFields'
 import RawMaterialPricingFields from './RawMaterialPricingFields'
+import RawMaterialDocumentsSection from './RawMaterialDocumentsSection'
 import { lifecycleLabel } from './catalog'
 import { supplierLabel, type CategoryOption, type SupplierOption } from './catalog'
 import {
@@ -105,6 +106,8 @@ function buildEditPayload(
   includeSuppliers: boolean,
   initialValues: RawMaterialCreateValues,
   units: RawMaterialUnitOption[],
+  documentUploadIds: string[],
+  detachDocumentVersionIds: string[],
 ): RawMaterialEditPayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
@@ -139,6 +142,8 @@ function buildEditPayload(
       },
     } : {}),
     ...(includeSuppliers ? { supplier_ids: values.supplierIds } : {}),
+    ...(documentUploadIds.length ? { document_upload_ids: documentUploadIds } : {}),
+    ...(detachDocumentVersionIds.length ? { detach_document_version_ids: detachDocumentVersionIds } : {}),
     aliases: values.aliases.map((alias) => alias.trim()).filter(Boolean),
     conversions,
     ...(changeReason.trim() ? { change_reason: changeReason.trim() } : {}),
@@ -174,6 +179,9 @@ export default function RawMaterialEditForm({
   const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>([])
   const [supplierOptionsLoaded, setSupplierOptionsLoaded] = useState(false)
   const [supplierError, setSupplierError] = useState<string | null>(null)
+  const [documentUploadIds, setDocumentUploadIds] = useState<string[]>([])
+  const [detachDocumentVersionIds, setDetachDocumentVersionIds] = useState<string[]>([])
+  const [documentsUploading, setDocumentsUploading] = useState(false)
   const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>([])
   const [unitsLoading, setUnitsLoading] = useState(true)
   const [unitsError, setUnitsError] = useState<string | null>(null)
@@ -195,7 +203,8 @@ export default function RawMaterialEditForm({
   const operationLocked = useRef(false)
   const dirty = values !== null && initialValues !== null
     && (JSON.stringify(values) !== JSON.stringify(initialValues)
-      || JSON.stringify(allergens) !== JSON.stringify(initialAllergens))
+      || JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
+      || documentUploadIds.length > 0 || detachDocumentVersionIds.length > 0 || documentsUploading)
   useLayoutEffect(() => {
     locationRef.current = operatingLocationId
     categoriesRef.current = categories
@@ -430,7 +439,7 @@ export default function RawMaterialEditForm({
   }
 
   function closeForm() {
-    if (isBusy(phase)) return
+    if (isBusy(phase) || documentsUploading) return
     if (dirty && !window.confirm('Odrzucić niezapisane zmiany?')) return
     onClose()
   }
@@ -630,6 +639,8 @@ export default function RawMaterialEditForm({
       canManageSuppliers && supplierOptionsLoaded,
       initialValues ?? values,
       unitOptions,
+      documentUploadIds,
+      detachDocumentVersionIds,
     ),
       ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
     operationLocked.current = true
@@ -1008,12 +1019,27 @@ export default function RawMaterialEditForm({
               </label>
                 </>) },
               ]} />
+              <RawMaterialDocumentsSection
+                key={`${materialId}:${operatingLocationId}`}
+                materialId={materialId}
+                operatingLocationId={operatingLocationId}
+                view="editor"
+                mode="edit"
+                detachIds={detachDocumentVersionIds}
+                onUploadIdsChange={setDocumentUploadIds}
+                onDetachIdsChange={setDetachDocumentVersionIds}
+                onBusyChange={setDocumentsUploading}
+                disabled={phase !== 'editing'}
+                onSessionExpired={onSessionExpired}
+                onAuthorizationDenied={onAuthorizationDenied}
+                onModuleUnavailable={onModuleUnavailable}
+              />
 
               <div className="create-form-footer">
                 <p>Zapis utworzy wersję roboczą. Przechowywanie i dokumenty zmienia się w osobnych sekcjach.</p>
                 <div className="create-form-actions">
                   <button type="button" className="button button-secondary" onClick={closeForm} disabled={isBusy(phase)}>Anuluj</button>
-                  <button type="submit" className="button button-primary" disabled={phase !== 'editing'}>
+                  <button type="submit" className="button button-primary" disabled={phase !== 'editing' || documentsUploading}>
                     Zapisz nową rewizję roboczą
                   </button>
                 </div>

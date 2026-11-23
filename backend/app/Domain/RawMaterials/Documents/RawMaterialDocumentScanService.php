@@ -56,48 +56,6 @@ final class RawMaterialDocumentScanService
         return $this->recordResult($version, $outcome);
     }
 
-    public function requireCleanCompatibilityEvidence(string $organizationId, string $versionId): object
-    {
-        $version = DB::table('raw_material_document_versions as versions')
-            ->join('raw_material_document_version_links as links', function ($join): void {
-                $join->on('links.document_version_id', '=', 'versions.id')
-                    ->on('links.organization_id', '=', 'versions.organization_id');
-            })
-            ->where('versions.id', $versionId)
-            ->where('versions.organization_id', $organizationId)
-            ->where('links.link_purpose', 'SUPPLIER_COMPATIBILITY_EVIDENCE')
-            ->select([
-                'versions.id',
-                'versions.sha256',
-            ])->first();
-
-        if (! $version) {
-            throw new RawMaterialDocumentException(
-                'RAW_MATERIAL_COMPATIBILITY_EVIDENCE_NOT_FOUND',
-                'Nie znaleziono dowodu zgodności w tej organizacji.',
-                404,
-            );
-        }
-
-        $latestResult = DB::table('raw_material_document_scan_results')
-            ->where('document_version_id', $version->id)
-            ->where('organization_id', $organizationId)
-            ->orderByDesc('scan_number')
-            ->first(['sha256', 'result_state']);
-
-        if (! $latestResult
-            || ! hash_equals($version->sha256, $latestResult->sha256)
-            || $latestResult->result_state !== DocumentScanStatus::Clean->value) {
-            throw new RawMaterialDocumentException(
-                'RAW_MATERIAL_COMPATIBILITY_EVIDENCE_NOT_CLEAN',
-                'Dowód zgodności nie może być użyty, dopóki skanowanie nie zakończy się wynikiem CLEAN dla tej wersji i sumy kontrolnej.',
-                409,
-            );
-        }
-
-        return $version;
-    }
-
     private function recordError(object $version, string $errorCode): array
     {
         Log::warning('Skanowanie dokumentu nie zakończyło się wiarygodnym wynikiem; dokument pozostaje zablokowany.', [

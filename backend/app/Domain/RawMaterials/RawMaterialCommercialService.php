@@ -72,12 +72,7 @@ final class RawMaterialCommercialService
 
         $query = DB::table('supplier_product_revisions')
             ->where('supplier_product_revisions.organization_id', $actor->organization_id)
-            ->where('supplier_product_revisions.supplier_product_id', $productId)
-            ->leftJoin('raw_material_supplier_compatibility_status as compatibility', function ($join): void {
-                $join->on('compatibility.supplier_product_id', '=', 'supplier_product_revisions.supplier_product_id')
-                    ->on('compatibility.organization_id', '=', 'supplier_product_revisions.organization_id')
-                    ->on('compatibility.supplier_product_revision_id', '=', 'supplier_product_revisions.id');
-            });
+            ->where('supplier_product_revisions.supplier_product_id', $productId);
         if (! $this->sharePolicy->isPrimaryContext($context)) {
             $query->join('raw_materials as materials', function ($join): void {
                 $join->on('materials.id', '=', 'supplier_product_revisions.raw_material_id')
@@ -88,7 +83,6 @@ final class RawMaterialCommercialService
 
         return ['data' => $query->orderByDesc('supplier_product_revisions.revision_no')->get([
             'supplier_product_revisions.*',
-            'compatibility.status as current_compatibility_status',
         ])
             ->map(fn (object $revision): array => [
                 'id' => $revision->id,
@@ -102,7 +96,6 @@ final class RawMaterialCommercialService
                 'content_unit_code' => $revision->content_unit_code,
                 'to_base_factor' => (string) $revision->to_base_factor_snapshot,
                 'base_quantity' => (string) $revision->base_quantity_snapshot,
-                'compatibility_status' => $revision->current_compatibility_status ?? 'PENDING',
                 'created_at' => $revision->created_at,
             ])->all()];
     }
@@ -376,10 +369,6 @@ final class RawMaterialCommercialService
                 $join->on('revisions.supplier_product_id', '=', 'products.id')
                     ->on('revisions.organization_id', '=', 'products.organization_id');
             })
-            ->leftJoin('raw_material_supplier_compatibility_status as compatibility', function ($join): void {
-                $join->on('compatibility.supplier_product_id', '=', 'products.id')
-                    ->on('compatibility.organization_id', '=', 'products.organization_id');
-            })
             ->join('raw_materials as materials', function ($join): void {
                 $join->on('materials.id', '=', 'products.raw_material_id')
                     ->on('materials.organization_id', '=', 'products.organization_id');
@@ -398,7 +387,6 @@ final class RawMaterialCommercialService
                 'revisions.id as revision_id', 'revisions.revision_no', 'revisions.product_name',
                 'revisions.supplier_sku', 'revisions.gtin', 'revisions.purchase_unit_code',
                 'revisions.content_quantity', 'revisions.content_unit_code', 'revisions.base_quantity_snapshot',
-                'compatibility.status as compatibility_status',
             ]);
         if (! $isPrimary) {
             $query->where('materials.lifecycle_state', 'ACTIVE')
@@ -427,7 +415,6 @@ final class RawMaterialCommercialService
                     'content_quantity' => (string) $row->content_quantity,
                     'content_unit_code' => $row->content_unit_code,
                     'base_quantity' => (string) $row->base_quantity_snapshot,
-                    'compatibility_status' => $row->compatibility_status ?? 'PENDING',
                 ],
             ])->all(),
             'meta' => ['current_page' => $page->currentPage(), 'per_page' => $page->perPage(), 'total' => $page->total()],
@@ -1763,11 +1750,6 @@ final class RawMaterialCommercialService
                 'content_unit_code' => $revision->content_unit_code,
                 'to_base_factor' => (string) $revision->to_base_factor_snapshot,
                 'base_quantity' => (string) $revision->base_quantity_snapshot,
-                'compatibility_status' => DB::table('raw_material_supplier_compatibility_status')
-                    ->where('organization_id', $actor->organization_id)
-                    ->where('supplier_product_id', $productId)
-                    ->where('supplier_product_revision_id', $revision->id)
-                    ->value('status') ?? 'PENDING',
             ],
         ];
     }

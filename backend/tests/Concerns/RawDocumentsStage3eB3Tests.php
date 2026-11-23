@@ -848,19 +848,29 @@ trait RawDocumentsStage3eB3Tests
         $this->assertStringContainsString('Eksport 51', $csv);
     }
 
-    public function test_stage3e_b3_supplier_evidence_and_unrelated_versions_are_not_material_attachments(): void
+    public function test_stage3e_b3_supplier_certificate_is_an_optional_material_attachment(): void
     {
         $this->b3Storage();
         $fixture = $this->createCommercialOfferFixture('Dowody B3', 'B3EVID', 'B3EVIDP', 'b3-evidence');
         $document = app(RawMaterialDocumentService::class)->create(
             $this->steward, $this->location, DB::table('raw_materials')->where('id', $fixture['material_id'])->value('approved_revision_id'), 'OTHER',
-            'dowod.txt', 'Dowód produktu dostawcy', 'SUPPLIER_COMPATIBILITY_EVIDENCE', $fixture['product_revision_id'],
+            'certyfikat.txt', 'Informacyjny certyfikat dostawcy',
         );
         app(RawMaterialDocumentScanService::class)->scanVersion($document['version']['id']);
         $this->selectRawMaterialApiContext($this->steward);
         $base = '/api/v1/raw-materials/'.$fixture['material_id'].'/documents';
-        $this->getJson($base)->assertOk()->assertJsonCount(0, 'data.documents');
-        $this->get($base.'/'.$document['version']['id'].'/download')->assertNotFound();
+        $this->getJson($base)->assertOk()->assertJsonCount(1, 'data.documents');
+        $this->get($base.'/'.$document['version']['id'].'/download')->assertOk();
+        $products = $this->getJson('/api/v1/raw-materials/'.$fixture['material_id'].'/supplier-products')
+            ->assertOk()->json('data');
+        $this->assertNotEmpty($products);
+        $this->assertArrayNotHasKey('compatibility_status', $products[0]);
+        $this->assertArrayNotHasKey('compatibility_status', $products[0]['current_revision']);
+        $this->assertSame(0, DB::table('raw_material_supplier_compatibility_assessments')->count());
+        $this->getJson('/api/v1/raw-materials/supplier-products/'.$fixture['product_id'].'/offers')
+            ->assertOk()->assertJsonCount(1, 'data');
+        $this->getJson('/api/v1/raw-materials/supplier-products/'.Str::uuid().'/compatibility-assessments')
+            ->assertNotFound();
         $material = $this->rawMaterialService->create($this->steward, $this->location, [
             'category_id' => DB::table('raw_material_categories')->value('id'), 'name' => 'Niepowiązany szkic', 'base_unit_code' => 'g', 'nominal_quantity' => '1000',
         ]);

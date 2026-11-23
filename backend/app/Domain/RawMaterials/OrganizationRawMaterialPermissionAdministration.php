@@ -130,11 +130,15 @@ final class OrganizationRawMaterialPermissionAdministration
             ->where('id', $grantId)
             ->first();
         $permission = $grant ? RawMaterialPermission::tryFrom($grant->permission) : null;
-        if (! $permission) {
+        $isLegacyCompatibilityPermission = $grant?->permission === 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE';
+        if (! $permission && ! $isLegacyCompatibilityPermission) {
             throw new AuthorizationException(__('messages.unauthorized'));
         }
 
-        $this->contexts->run(AuthorizationMutationScope::permissionRevoke($permission), $actor->id, function () use ($actor, $context, $grantId, $reason): void {
+        $scope = $permission
+            ? AuthorizationMutationScope::permissionRevoke($permission)
+            : AuthorizationMutationScope::legacySupplierCompatibilityPermissionRevoke();
+        $this->contexts->run($scope, $actor->id, function () use ($actor, $context, $grantId, $reason): void {
             DB::transaction(function () use ($actor, $context, $grantId, $reason): void {
                 Organization::whereKey($actor->organization_id)->lockForUpdate()->firstOrFail();
                 $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::PermissionDelegate);

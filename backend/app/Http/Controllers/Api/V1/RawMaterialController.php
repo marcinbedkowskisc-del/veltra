@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
-use App\Domain\RawMaterials\RawMaterialCompatibilityAssessmentService;
 use App\Domain\RawMaterials\RawMaterialHistoryService;
 use App\Domain\RawMaterials\RawMaterialLocationShareAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
@@ -20,7 +19,6 @@ use App\Http\Requests\RawMaterialBulkShareLocationsRequest;
 use App\Http\Requests\RawMaterialBulkShareMaterialsRequest;
 use App\Http\Requests\RawMaterialCategoryRenameRequest;
 use App\Http\Requests\RawMaterialCategoryRequest;
-use App\Http\Requests\RawMaterialCompatibilityAssessmentRequest;
 use App\Http\Requests\RawMaterialCreateApprovedRequest;
 use App\Http\Requests\RawMaterialDataRequest;
 use App\Http\Requests\RawMaterialExchangeRateOverrideRequest;
@@ -229,32 +227,6 @@ class RawMaterialController extends Controller
             $request->validated(),
             $request->idempotencyKey(),
         ));
-    }
-
-    public function supplierCompatibilityAssessments(
-        Request $request,
-        string $product,
-        RawMaterialCompatibilityAssessmentService $service,
-    ): JsonResponse {
-        return response()->json($service->history(
-            $request->user(),
-            $request->attributes->get('operating_location'),
-            $product,
-        ));
-    }
-
-    public function assessSupplierCompatibility(
-        RawMaterialCompatibilityAssessmentRequest $request,
-        string $product,
-        RawMaterialCompatibilityAssessmentService $service,
-    ): JsonResponse {
-        return response()->json($service->assess(
-            $request->user(),
-            $request->attributes->get('operating_location'),
-            $product,
-            $request->validated(),
-            $request->idempotencyKey(),
-        ), 201);
     }
 
     public function archiveSupplierProduct(

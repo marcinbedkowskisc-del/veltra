@@ -14,7 +14,6 @@ use App\Domain\RawMaterials\Documents\PrivateDocumentStorage;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentScanService;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
-use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
 use App\Jobs\ScanRawMaterialDocumentVersion;
@@ -158,6 +157,30 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         );
     }
 
+    public function test_compatibility_history_is_retained_read_only_and_new_links_are_informational(): void
+    {
+        $this->assertNotNull(DB::scalar("SELECT to_regclass('public.raw_material_supplier_compatibility_assessments')"));
+        $this->assertNull(DB::scalar("SELECT to_regclass('public.raw_material_supplier_compatibility_status')"));
+        $this->assertNull(DB::scalar("SELECT to_regclass('public.raw_material_approved_compatibility_document_evidence')"));
+        $this->assertFalse((bool) DB::scalar(
+            "SELECT has_table_privilege(current_user, 'public.raw_material_supplier_compatibility_assessments', 'INSERT')",
+        ));
+        DB::table('raw_material_supplier_compatibility_assessments')->limit(1)->get();
+
+        $document = $this->documents->create(
+            $this->steward,
+            $this->location,
+            $this->revisionId,
+            'SUPPLIER_CERTIFICATE',
+            'informacyjny-certyfikat.txt',
+            "certificate data\n",
+        );
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_document_version_links')
+            ->where('document_version_id', $document['version']['id'])
+            ->update(['link_purpose' => 'ALLERGEN_EVIDENCE']));
+    }
+
     public function test_clamav_scans_synthetic_clean_and_eicar_samples(): void
     {
         $scanner = app(DocumentScanner::class);
@@ -173,19 +196,10 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         $this->assertSame('Eicar-Test-Signature', $infected->detectionName);
     }
 
-    public function test_only_clean_exact_checksum_scan_is_compatibility_evidence(): void
+    public function test_scan_results_remain_file_security_controls_only(): void
     {
-        $version = $this->createCompatibilityEvidenceVersion();
+        $version = $this->createScannableDocumentVersion();
         $scanService = app(RawMaterialDocumentScanService::class);
-
-        try {
-            $scanService->requireCleanCompatibilityEvidence($this->steward->organization_id, $version['version']['id']);
-            $this->fail('PENDING evidence was accepted.');
-        } catch (RawMaterialDocumentException $exception) {
-            $this->assertSame('RAW_MATERIAL_COMPATIBILITY_EVIDENCE_NOT_CLEAN', $exception->errorCode);
-        }
-        $this->assertSame(0, DB::table('raw_material_approved_compatibility_document_evidence')
-            ->where('document_version_id', $version['version']['id'])->count());
 
         $this->app->instance(DocumentScanner::class, new class implements DocumentScanner
         {
@@ -198,11 +212,7 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         $clean = $scanService->scanVersion($version['version']['id']);
         $this->assertSame('CLEAN', $clean['status']);
         $this->assertSame($version['version']['sha256'], $clean['sha256']);
-        $this->assertSame($version['version']['id'], $scanService
-            ->requireCleanCompatibilityEvidence($this->steward->organization_id, $version['version']['id'])
-            ->id);
-        $this->assertSame(1, DB::table('raw_material_approved_compatibility_document_evidence')
-            ->where('document_version_id', $version['version']['id'])->count());
+        $this->assertSame('DRAFT', DB::table('raw_materials')->where('id', $this->materialId)->value('lifecycle_state'));
 
         $this->app->instance(DocumentScanner::class, new class implements DocumentScanner
         {
@@ -214,15 +224,6 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         $scanService = app(RawMaterialDocumentScanService::class);
         $infected = $scanService->scanVersion($version['version']['id']);
         $this->assertSame('INFECTED', $infected['status']);
-
-        try {
-            $scanService->requireCleanCompatibilityEvidence($this->steward->organization_id, $version['version']['id']);
-            $this->fail('INFECTED evidence was accepted.');
-        } catch (RawMaterialDocumentException $exception) {
-            $this->assertSame('RAW_MATERIAL_COMPATIBILITY_EVIDENCE_NOT_CLEAN', $exception->errorCode);
-        }
-        $this->assertSame(0, DB::table('raw_material_approved_compatibility_document_evidence')
-            ->where('document_version_id', $version['version']['id'])->count());
 
         $this->assertSame(
             ['PENDING', 'CLEAN', 'INFECTED'],
@@ -236,7 +237,7 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
 
     public function test_scanner_errors_missing_payload_and_checksum_mismatch_remain_blocked(): void
     {
-        $version = $this->createCompatibilityEvidenceVersion();
+        $version = $this->createScannableDocumentVersion();
         $scanService = app(RawMaterialDocumentScanService::class);
         $this->app->instance(DocumentScanner::class, new class implements DocumentScanner
         {
@@ -250,16 +251,16 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         $error = $scanService->scanVersion($version['version']['id']);
         $this->assertSame('ERROR', $error['status']);
         $this->assertSame('CLAMAV_UNAVAILABLE', $error['error_code']);
-        $this->assertDatabaseScanEvidenceBlocked($scanService, $version['version']['id']);
+        $this->assertSame('DRAFT', DB::table('raw_materials')->where('id', $this->materialId)->value('lifecycle_state'));
 
-        $second = $this->createCompatibilityEvidenceVersion();
+        $second = $this->createScannableDocumentVersion();
         $storedVersion = DB::table('raw_material_document_versions')
             ->where('id', $second['version']['id'])->first();
         Storage::disk('raw_material_documents')->delete($storedVersion->storage_key);
         $missing = $scanService->scanVersion($second['version']['id']);
         $this->assertSame('ERROR', $missing['status']);
         $this->assertSame('RAW_MATERIAL_DOCUMENT_PAYLOAD_MISSING', $missing['error_code']);
-        $this->assertDatabaseScanEvidenceBlocked($scanService, $second['version']['id']);
+        $this->assertSame('DRAFT', DB::table('raw_materials')->where('id', $this->materialId)->value('lifecycle_state'));
     }
 
     public function test_runtime_cannot_record_authoritative_scan_results_or_mutate_scan_history(): void
@@ -465,86 +466,16 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         }
     }
 
-    private function createCompatibilityEvidenceVersion(): array
+    private function createScannableDocumentVersion(): array
     {
-        $material = DB::table('raw_materials')->where('id', $this->materialId)
-            ->first(['lifecycle_state', 'approved_revision_id']);
-        if ($material->lifecycle_state !== 'ACTIVE') {
-            $catalogVersionId = $this->publishedScanTestCatalog();
-            $this->rawMaterials->reviseAllergenDeclaration($this->steward, $this->location, $this->materialId, [
-                'status' => 'NO_KNOWN_ALLERGENS',
-                'catalog_version_id' => $catalogVersionId,
-                'items' => [],
-            ], expectedVersion: $this->rawVersion($this->materialId));
-            $this->rawMaterials->submit($this->steward, $this->location, $this->materialId, expectedVersion: $this->rawVersion($this->materialId));
-            $this->rawMaterials->approve($this->steward, $this->location, $this->materialId, 'Testowa akceptacja surowca', expectedVersion: $this->rawVersion($this->materialId));
-            $material = DB::table('raw_materials')->where('id', $this->materialId)
-                ->first(['lifecycle_state', 'approved_revision_id']);
-        }
-
-        $suffix = Str::upper(Str::random(8));
-        $commercial = app(RawMaterialCommercialService::class);
-        $supplierId = $commercial->createSupplier($this->steward, $this->location, [
-            'supplier_code' => 'SCAN_'.$suffix,
-            'display_name' => 'Dostawca testów skanowania',
-        ], 'scan-supplier-'.$suffix)['data']['id'];
-        $product = $commercial->createProduct($this->steward, $this->location, $this->materialId, [
-            'supplier_id' => $supplierId,
-            'raw_material_revision_id' => $material->approved_revision_id,
-            'product_name' => 'Produkt syntetyczny do skanowania',
-            'supplier_sku' => 'SCAN-'.$suffix,
-            'purchase_unit_code' => 'PACK',
-            'content_quantity' => '1',
-            'content_unit_code' => 'g',
-        ], 'scan-product-'.$suffix);
-        $supplierProductRevisionId = $product['data']['current_revision']['id'];
-
         return $this->documents->create(
             $this->steward,
             $this->location,
-            $material->approved_revision_id,
+            $this->revisionId,
             'SUPPLIER_CERTIFICATE',
             'synthetic-supplier-certificate.txt',
-            "synthetic supplier evidence {$suffix}\n",
-            'SUPPLIER_COMPATIBILITY_EVIDENCE',
-            $supplierProductRevisionId,
+            "synthetic supplier certificate\n",
         );
-    }
-
-    private function publishedScanTestCatalog(): string
-    {
-        $versionId = Str::uuid()->toString();
-        $versionNumber = (int) DB::connection('pgsql_setup')
-            ->table('raw_material_allergen_catalog_versions')->max('version_number') + 1;
-        $this->withSetupTransaction(function (Connection $connection) use ($versionId, $versionNumber): void {
-            $connection->table('raw_material_allergen_catalog_versions')->insert([
-                'id' => $versionId,
-                'version_number' => $versionNumber,
-                'status' => 'DRAFT',
-            ]);
-            $connection->table('raw_material_allergen_definitions')->insert([
-                'catalog_version_id' => $versionId,
-                'allergen_code' => 'TEST_SCAN',
-                'name_pl' => 'Alergen testowy',
-                'display_order' => 1,
-            ]);
-            $connection->table('raw_material_allergen_catalog_versions')->where('id', $versionId)
-                ->update(['status' => 'PUBLISHED', 'published_at' => now()]);
-        });
-
-        return $versionId;
-    }
-
-    private function assertDatabaseScanEvidenceBlocked(
-        RawMaterialDocumentScanService $scanService,
-        string $versionId,
-    ): void {
-        try {
-            $scanService->requireCleanCompatibilityEvidence($this->steward->organization_id, $versionId);
-            $this->fail('An unclean scan result was accepted as compatibility evidence.');
-        } catch (RawMaterialDocumentException $exception) {
-            $this->assertSame('RAW_MATERIAL_COMPATIBILITY_EVIDENCE_NOT_CLEAN', $exception->errorCode);
-        }
     }
 
     protected function assertDatabaseRejects(string $sqlState, callable $operation): void

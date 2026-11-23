@@ -8,6 +8,7 @@ use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
@@ -214,6 +215,75 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
         } catch (RawMaterialException $exception) {
             $this->assertSame('RAW_MATERIAL_REVISION_NOT_EDITABLE', $exception->errorCode);
         }
+    }
+
+    public function test_raw_material_form_assigns_and_removes_multiple_suppliers_without_documents_or_assessments(): void
+    {
+        $suffix = Str::upper(Str::random(8));
+        $commercial = app(RawMaterialCommercialService::class);
+        $supplierIds = [];
+        foreach (['A', 'B'] as $label) {
+            $supplierIds[] = $commercial->createSupplier($this->steward, $this->location, [
+                'supplier_code' => "FORM_{$suffix}_{$label}",
+                'display_name' => "Dostawca formularza {$label} {$suffix}",
+            ], "form-supplier-{$suffix}-{$label}")['data']['id'];
+        }
+        sort($supplierIds);
+
+        $this->selectContext($this->steward);
+        $reservation = $this->postJson('/api/v1/raw-materials/sku-reservations', [], [
+            'Idempotency-Key' => "form-supplier-reservation-{$suffix}",
+        ])->assertCreated()->json('data');
+        $payload = [
+            'sku_reservation_id' => $reservation['reservation_id'],
+            'category_id' => $this->categoryId,
+            'name' => "Surowiec z wieloma dostawcami {$suffix}",
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'supplier_ids' => $supplierIds,
+        ];
+        $material = $this->postJson('/api/v1/raw-materials', $payload)
+            ->assertCreated()->json('data');
+
+        $this->assertSame($supplierIds, $this->getJson('/api/v1/raw-materials/'.$material['id'].'/editor')
+            ->assertOk()->json('data.supplier_ids'));
+        $this->assertSame(2, DB::table('raw_material_supplier_associations')
+            ->where('raw_material_id', $material['id'])->count());
+
+        unset($payload['sku_reservation_id']);
+        $payload['supplier_ids'] = [$supplierIds[1]];
+        $payload['name'] .= ' - edycja';
+        $this->patchJson('/api/v1/raw-materials/'.$material['id'].'/draft', $payload, [
+            'If-Match' => $material['version'],
+        ])->assertOk();
+
+        $this->assertSame([$supplierIds[1]], $this->getJson('/api/v1/raw-materials/'.$material['id'].'/editor')
+            ->assertOk()->json('data.supplier_ids'));
+        $this->assertSame([$supplierIds[1]], DB::table('raw_material_supplier_associations')
+            ->where('raw_material_id', $material['id'])->orderBy('supplier_id')->pluck('supplier_id')->all());
+        $this->assertSame(0, DB::table('raw_material_supplier_compatibility_assessments')->count());
+        $this->assertSame(0, DB::table('raw_material_document_version_links')
+            ->where('raw_material_revision_id', $material['revision']['id'])->count());
+    }
+
+    public function test_retired_supplier_compatibility_permission_cannot_be_granted(): void
+    {
+        $recipient = $this->user('retired-compatibility-permission@example.test');
+        app(MembershipService::class)->assign($recipient, $this->location);
+        $this->selectContext($this->steward);
+        $constraint = DB::table('pg_constraint')
+            ->where('conname', 'organization_permission_grants_supplier_compatibility_retired_check')
+            ->value('convalidated');
+        $this->assertFalse((bool) $constraint);
+
+        $this->postJson('/api/v1/raw-materials/permissions/'.$recipient->id, [
+            'permission' => 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE',
+            'reason' => 'Test wycofanego uprawnienia',
+        ])->assertUnprocessable();
+        $this->assertSame(0, DB::table('organization_permission_grants')
+            ->where('user_id', $recipient->id)
+            ->where('permission', 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE')
+            ->count());
     }
 
     public function test_specialized_permissions_are_explicit_and_revision_reads_are_organization_scoped(): void

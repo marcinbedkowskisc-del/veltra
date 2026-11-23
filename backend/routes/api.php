@@ -196,10 +196,6 @@ Route::prefix('v1/raw-materials')->middleware([
         ->whereUuid('product');
     Route::post('/supplier-products/{product}/revisions', [RawMaterialController::class, 'reviseSupplierProduct'])
         ->whereUuid('product');
-    Route::get('/supplier-products/{product}/compatibility-assessments', [RawMaterialController::class, 'supplierCompatibilityAssessments'])
-        ->whereUuid('product');
-    Route::post('/supplier-products/{product}/compatibility-assessments', [RawMaterialController::class, 'assessSupplierCompatibility'])
-        ->whereUuid('product');
     Route::post('/supplier-products/{product}/archive', [RawMaterialController::class, 'archiveSupplierProduct'])
         ->whereUuid('product');
     Route::get('/supplier-products/{product}/offers', [RawMaterialController::class, 'supplierOffers'])

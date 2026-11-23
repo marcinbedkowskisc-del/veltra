@@ -149,6 +149,11 @@ final readonly class AuthorizationMutationScope
         return new self('permission.revoke.'.$permission->value);
     }
 
+    public static function legacySupplierCompatibilityPermissionRevoke(): self
+    {
+        return new self('permission.revoke.RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE');
+    }
+
     public static function roleGrant(BusinessRole $role): self
     {
         return new self('role.grant.'.$role->value);

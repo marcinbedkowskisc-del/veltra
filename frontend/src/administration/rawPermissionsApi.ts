@@ -26,12 +26,13 @@ export const rawPermissionOptions = [
   { value: 'RAW_MATERIALS_EXCHANGE_RATE_MANAGE', label: 'Zarządzanie kursami walut' },
   { value: 'RAW_MATERIALS_ALLERGEN_MANAGE', label: 'Zarządzanie alergenami' },
   { value: 'RAW_MATERIALS_STORAGE_MANAGE', label: 'Zarządzanie warunkami przechowywania' },
-  { value: 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE', label: 'Zatwierdzanie zgodności dostawców' },
   { value: 'RAW_MATERIALS_AUDIT_VIEW', label: 'Podgląd audytu RAW' },
   { value: 'RAW_MATERIALS_PERMISSION_DELEGATE', label: 'Delegowanie uprawnień RAW' },
 ] as const
 
 export type RawPermissionId = typeof rawPermissionOptions[number]['value']
+type LegacyRawPermissionId = 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE'
+type RawPermissionRecordId = RawPermissionId | LegacyRawPermissionId
 export type RawPermissionStatus = 'EFFECTIVE' | 'INACTIVE' | 'FUTURE' | 'EXPIRED' | 'REVOKED'
 export type RawPermissionSource = 'BOOTSTRAP' | 'SYSTEM' | 'DELEGATED'
 
@@ -46,7 +47,7 @@ export type RawPermissionLineage = {
 
 export type RawPermissionGrant = {
   id: string
-  permission: RawPermissionId
+  permission: RawPermissionRecordId
   source: RawPermissionSource
   grantedByName: string
   grantedAt: string
@@ -61,7 +62,7 @@ export type RawPermissionGrant = {
 
 export type RawPermissionHistoryEvent = {
   grantId: string
-  permission: RawPermissionId
+  permission: RawPermissionRecordId
   action: 'GRANTED' | 'REVOKED'
   actorName: string
   recipientName: string
@@ -73,7 +74,11 @@ export type RawPermissionData = {
   history: RawPermissionHistoryEvent[]
 }
 
-const permissionValues = new Set<string>(rawPermissionOptions.map(({ value }) => value))
+const permissionValues = new Set<string>([
+  ...rawPermissionOptions.map(({ value }) => value),
+  'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE',
+])
+const grantablePermissionValues = new Set<string>(rawPermissionOptions.map(({ value }) => value))
 const statuses = new Set<RawPermissionStatus>(['EFFECTIVE', 'INACTIVE', 'FUTURE', 'EXPIRED', 'REVOKED'])
 const sources = new Set<RawPermissionSource>(['BOOTSTRAP', 'SYSTEM', 'DELEGATED'])
 
@@ -93,11 +98,11 @@ function nullableString(value: unknown, label: string): string | null {
   return requiredString(value, label)
 }
 
-function permissionId(value: unknown): RawPermissionId {
+function permissionId(value: unknown): RawPermissionRecordId {
   if (typeof value !== 'string' || !permissionValues.has(value)) {
     throw new Error('Backend zwrócił nieznane uprawnienie RAW.')
   }
-  return value as RawPermissionId
+  return value as RawPermissionRecordId
 }
 
 function source(value: unknown): RawPermissionSource {
@@ -172,7 +177,10 @@ export function parseRawPermissionData(value: unknown): RawPermissionData {
   }
 }
 
-export function rawPermissionLabel(permission: RawPermissionId): string {
+export function rawPermissionLabel(permission: RawPermissionRecordId): string {
+  if (permission === 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE') {
+    return 'Zgodność dostawców (uprawnienie historyczne)'
+  }
   return rawPermissionOptions.find((option) => option.value === permission)?.label ?? permission
 }
 
@@ -187,6 +195,9 @@ export async function grantRawPermission(
   validFrom?: string,
   validUntil?: string,
 ): Promise<void> {
+  if (!grantablePermissionValues.has(permission)) {
+    throw new Error('Nie można nadawać wycofanego uprawnienia RAW.')
+  }
   await request(`${RAW}/permissions/${encodeURIComponent(userId)}`, 'POST', {
     permission,
     reason,

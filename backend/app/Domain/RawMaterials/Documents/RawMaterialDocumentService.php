@@ -27,12 +27,6 @@ final class RawMaterialDocumentService
         'OTHER',
     ];
 
-    private const LINK_PURPOSES = [
-        'RAW_MATERIAL_SUPPORTING_DOCUMENT',
-        'ALLERGEN_EVIDENCE',
-        'SUPPLIER_COMPATIBILITY_EVIDENCE',
-    ];
-
     public function __construct(
         private readonly RawMaterialAuthorization $authorization,
         private readonly RawMaterialLocationSharePolicy $sharePolicy,
@@ -47,12 +41,10 @@ final class RawMaterialDocumentService
         string $documentType,
         string $originalFilename,
         string $contents,
-        string $linkPurpose = 'RAW_MATERIAL_SUPPORTING_DOCUMENT',
-        ?string $supplierProductRevisionId = null,
     ): array {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Create);
-        $this->validateMetadata($documentType, $originalFilename, $contents, $linkPurpose, $supplierProductRevisionId);
-        $revision = $this->requireRevision($actor, $rawMaterialRevisionId, $supplierProductRevisionId);
+        $this->validateMetadata($documentType, $originalFilename, $contents);
+        $revision = $this->requireRevision($actor, $rawMaterialRevisionId);
         $payload = $this->preparePayload($originalFilename, $contents);
         $objectKey = $this->newObjectKey();
         $this->storeAndVerify($objectKey, $contents, $payload['sha256']);
@@ -67,8 +59,6 @@ final class RawMaterialDocumentService
                     $documentType,
                     $payload,
                     $objectKey,
-                    $linkPurpose,
-                    $supplierProductRevisionId,
                 ): array {
                     $documentId = Str::uuid()->toString();
                     DB::table('raw_material_documents')->insert([
@@ -85,8 +75,6 @@ final class RawMaterialDocumentService
                         $revision->id,
                         $payload,
                         $objectKey,
-                        $linkPurpose,
-                        $supplierProductRevisionId,
                     );
                     $this->recordEvent($actor, $documentId, null, 'DOCUMENT_CREATED', [
                         'document_type' => $documentType,
@@ -116,11 +104,9 @@ final class RawMaterialDocumentService
         string $rawMaterialRevisionId,
         string $originalFilename,
         string $contents,
-        string $linkPurpose = 'RAW_MATERIAL_SUPPORTING_DOCUMENT',
-        ?string $supplierProductRevisionId = null,
     ): array {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::Edit);
-        $this->validateMetadata('OTHER', $originalFilename, $contents, $linkPurpose, $supplierProductRevisionId);
+        $this->validateMetadata('OTHER', $originalFilename, $contents);
 
         $document = DB::table('raw_material_documents')
             ->where('id', $documentId)
@@ -133,7 +119,7 @@ final class RawMaterialDocumentService
                 404,
             );
         }
-        $revision = $this->requireRevision($actor, $rawMaterialRevisionId, $supplierProductRevisionId);
+        $revision = $this->requireRevision($actor, $rawMaterialRevisionId);
         $payload = $this->preparePayload($originalFilename, $contents);
         $objectKey = $this->newObjectKey();
         $this->storeAndVerify($objectKey, $contents, $payload['sha256']);
@@ -148,8 +134,6 @@ final class RawMaterialDocumentService
                     $revision,
                     $payload,
                     $objectKey,
-                    $linkPurpose,
-                    $supplierProductRevisionId,
                 ): array {
                     DB::select(
                         'SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))',
@@ -177,8 +161,6 @@ final class RawMaterialDocumentService
                         $revision->id,
                         $payload,
                         $objectKey,
-                        $linkPurpose,
-                        $supplierProductRevisionId,
                     );
                     $this->recordVersionEvents($actor, $documentId, $version, $revision->id);
 
@@ -310,7 +292,6 @@ final class RawMaterialDocumentService
         ]);
         $version = $this->insertVersion(
             $actor, $documentId, 1, $revisionId, (array) $upload, $upload->storage_key,
-            'RAW_MATERIAL_SUPPORTING_DOCUMENT', null,
         );
         $this->recordEvent($actor, $documentId, null, 'DOCUMENT_CREATED', ['document_type' => 'OTHER']);
         $this->recordVersionEvents($actor, $documentId, $version, $revisionId);
@@ -326,8 +307,6 @@ final class RawMaterialDocumentService
         string $rawMaterialRevisionId,
         array $payload,
         string $objectKey,
-        string $linkPurpose,
-        ?string $supplierProductRevisionId,
     ): object {
         $versionId = Str::uuid()->toString();
         $storedAt = now()->utc();
@@ -349,8 +328,8 @@ final class RawMaterialDocumentService
             'document_version_id' => $versionId,
             'organization_id' => $actor->organization_id,
             'raw_material_revision_id' => $rawMaterialRevisionId,
-            'supplier_product_revision_id' => $supplierProductRevisionId,
-            'link_purpose' => $linkPurpose,
+            'supplier_product_revision_id' => null,
+            'link_purpose' => 'RAW_MATERIAL_SUPPORTING_DOCUMENT',
         ]);
 
         return (object) [
@@ -408,11 +387,8 @@ final class RawMaterialDocumentService
         ]);
     }
 
-    private function requireRevision(
-        User $actor,
-        string $revisionId,
-        ?string $supplierProductRevisionId,
-    ): object {
+    private function requireRevision(User $actor, string $revisionId): object
+    {
         $revision = DB::table('raw_material_revisions')
             ->where('id', $revisionId)
             ->where('organization_id', $actor->organization_id)
@@ -430,31 +406,12 @@ final class RawMaterialDocumentService
             );
         }
 
-        if ($supplierProductRevisionId !== null && ! DB::table('supplier_product_revisions')
-            ->where('id', $supplierProductRevisionId)
-            ->where('organization_id', $actor->organization_id)
-            ->where('raw_material_revision_id', $revisionId)
-            ->exists()) {
-            throw new RawMaterialDocumentException(
-                'RAW_MATERIAL_SUPPLIER_REVISION_MISMATCH',
-                'Rewizja produktu dostawcy nie jest powiązana ze wskazaną rewizją surowca.',
-                422,
-            );
-        }
-
         return $revision;
     }
 
-    private function validateMetadata(
-        string $documentType,
-        string $originalFilename,
-        string $contents,
-        string $linkPurpose,
-        ?string $supplierProductRevisionId,
-    ): void {
-        if (! in_array($documentType, self::DOCUMENT_TYPES, true)
-            || ! in_array($linkPurpose, self::LINK_PURPOSES, true)
-            || (($linkPurpose === 'SUPPLIER_COMPATIBILITY_EVIDENCE') !== ($supplierProductRevisionId !== null))) {
+    private function validateMetadata(string $documentType, string $originalFilename, string $contents): void
+    {
+        if (! in_array($documentType, self::DOCUMENT_TYPES, true)) {
             throw new RawMaterialDocumentException(
                 'RAW_MATERIAL_DOCUMENT_METADATA_INVALID',
                 'Dane dokumentu lub jego powiązania są nieprawidłowe.',

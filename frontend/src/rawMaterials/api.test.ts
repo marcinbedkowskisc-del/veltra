@@ -351,6 +351,100 @@ describe('kontrakt edycji surowca', () => {
     })
   })
 
+  it.each([
+    ['mg', 'kg', 'MASS'],
+    ['g', 'kg', 'MASS'],
+    ['kg', 'kg', 'MASS'],
+    ['ml', 'ml', 'VOLUME'],
+    ['l', 'ml', 'VOLUME'],
+    ['pc', 'pc', 'COUNT'],
+    ['mg_custom', 'kg', 'MASS'],
+    ['a'.repeat(24), 'kg', 'MASS'],
+  ])('akceptuje cenę nominalną w jednostce %s', async (code, baseCode, dimension) => {
+    const base = { unit_code: baseCode, dimension, conversion_kind: 'BASE', to_base_factor: '1', basis: null }
+    const unit = { unit_code: code, dimension, conversion_kind: 'METRIC', to_base_factor: '0.001', basis: null }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        ...editorData,
+        pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: code },
+        revision: { ...editorData.revision, base_unit_code: baseCode, base_unit_dimension: dimension,
+          units: code === baseCode ? [base] : [base, unit] },
+      },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
+      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: code },
+    })
+  })
+
+  it.each([
+    ['nieznany kod', 'missing', []],
+    ['nieprawidłowy kod', 'BAD', [{ unit_code: 'BAD', dimension: 'MASS', conversion_kind: 'METRIC' }]],
+    ['inny wymiar', 'ml', [{ unit_code: 'ml', dimension: 'VOLUME', conversion_kind: 'MATERIAL_SPECIFIC', to_base_factor: '1', basis: 'x' }]],
+    ['przeliczenie specyficzne', 'g', [{ unit_code: 'g', dimension: 'MASS', conversion_kind: 'MATERIAL_SPECIFIC' }]],
+  ])('odrzuca nieprawidłową jednostkę ceny: %s', async (_label, code, units) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        ...editorData,
+        pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: code },
+        revision: { ...editorData.revision, units: [editorData.revision.units[0], ...units] },
+      },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
+  it('wczytuje historyczną cenę bazową jako cenę jednostkową bez zmiany jej wartości', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'LEGACY_BASE_UNIT', amount: '12', unit_code: 'kg' } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
+      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: 'kg' },
+    })
+  })
+
+  it('wczytuje cenę z potwierdzoną jednostką wcześniejszej rewizji bez zmiany podstawy', async () => {
+    const source = { revision_id: '00000000-0000-4000-8000-000000000209',
+      unit_code: 'mg', dimension: 'MASS', conversion_kind: 'METRIC' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: 'mg', source_unit: source } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
+      historicalPricingUnit: true,
+      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: 'mg' },
+    })
+  })
+
+  it.each([
+    { revision_id: revisionId, unit_code: 'mg', dimension: 'MASS', conversion_kind: 'METRIC' },
+    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'g', dimension: 'MASS', conversion_kind: 'METRIC' },
+    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'mg', dimension: 'MASS', conversion_kind: 'MATERIAL_SPECIFIC' },
+    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'mg', dimension: 'INVALID', conversion_kind: 'METRIC' },
+  ])('odrzuca nieprawidłowe pochodzenie jednostki ceny: %o', async (source) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: 'mg', source_unit: source } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
+  it('odrzuca historyczną cenę w jednostce innej niż podstawowa', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'LEGACY_BASE_UNIT', amount: '12', unit_code: 'g' } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
+  it('odrzuca jednostkę ceny dołączoną do ceny za opakowanie', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'PACKAGE', amount: '12', unit_code: null } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
+      values: { pricingBasis: 'PACKAGE', pricingAmount: '12' },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: { ...editorData, pricing_input: { basis: 'PACKAGE', amount: '12', unit_code: 'kg' } },
+    }))))
+    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
+  })
+
   it('wysyła pełny payload PATCH i nieprzezroczysty token If-Match', async () => {
     const revised = {
       id: materialId,

@@ -1,0 +1,11 @@
+FROM node:24-alpine
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci && chown -R node:node /app
+COPY --chown=node:node . .
+COPY --chown=node:node --from=backend-data allergen_dictionaries_master_v1_1.json /backend/database/data/allergen_dictionaries_master_v1_1.json
+
+USER node
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]

@@ -50,7 +50,9 @@ x-preview-image: &preview-image
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: veltra-postgres:17-alpine
+    build:
+      context: ./docker/postgres
     pull_policy: never
     environment:
       POSTGRES_DB: veltra_pa07b2_browser_preview
@@ -62,8 +64,6 @@ services:
       APP_DB_MIGRATION_PASSWORD: ${PA07B2_PREVIEW_MIGRATOR_PASSWORD:?Generate a preview-only migration password}
     tmpfs:
       - /var/lib/postgresql/data:rw,noexec,nosuid,size=1g
-    volumes:
-      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
     networks: [preview]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${APP_DB_MIGRATION_USERNAME}\" -d \"$${POSTGRES_DB}\""]

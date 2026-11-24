@@ -306,6 +306,170 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             ->where('id', $unit['id'])->value('to_base_factor'));
     }
 
+    public function test_editor_preserves_inherited_price_when_its_unit_is_not_in_the_working_revision(): void
+    {
+        $this->role($this->steward, BusinessRole::Administrator);
+        $catalogVersionId = $this->publishedCatalog([]);
+        $material = $this->createMaterial('Cena z poprzedniej rewizji', [
+            'conversions' => [['unit_code' => 'kg']],
+            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg'],
+            'allergen_declaration' => [
+                'status' => 'NO_KNOWN_ALLERGENS',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [],
+            ],
+        ]);
+        $id = $material['id'];
+        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
+        $revised = $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Cena z poprzedniej rewizji poprawiona',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'conversions' => [],
+        ], expectedVersion: $this->rawVersion($id));
+        $this->assertSame(['g'], DB::table('raw_material_revision_units')
+            ->where('revision_id', $revised['revision']['id'])->pluck('unit_code')->all());
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
+            ->assertJsonPath('data.pricing_input.basis', 'NOMINAL_UNIT')
+            ->assertJsonPath('data.pricing_input.amount', '10.00000000000000')
+            ->assertJsonPath('data.pricing_input.unit_code', 'kg')
+            ->assertJsonPath('data.pricing_input.source_unit.revision_id', $material['revision']['id'])
+            ->assertJsonPath('data.pricing_input.source_unit.unit_code', 'kg')
+            ->assertJsonPath('data.pricing_input.source_unit.dimension', 'MASS')
+            ->assertJsonPath('data.pricing_input.source_unit.conversion_kind', 'METRIC');
+        $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Edycja bez zmiany ceny',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'conversions' => [],
+        ], expectedVersion: $this->rawVersion($id));
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+
+        try {
+            $this->rawMaterials->revise($this->steward, $this->location, $id, [
+                'category_id' => $this->categoryId,
+                'name' => 'Zmiana ilości bez potwierdzenia ceny',
+                'base_unit_code' => 'g',
+                'nominal_quantity' => '2000',
+                'conversions' => [],
+            ], expectedVersion: $this->rawVersion($id));
+            $this->fail('A historical unit absent from the revision cannot be used for recalculation.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('pricing.unit_code', $exception->errors());
+        }
+
+        $confirmed = $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Zmiana ilości z jawną ceną',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '2000',
+            'conversions' => [],
+            'pricing' => ['basis' => 'PACKAGE', 'amount' => '10'],
+        ], expectedVersion: $this->rawVersion($id));
+        $this->assertSame('PACKAGE', DB::table('raw_material_revisions')
+            ->where('id', $confirmed['revision']['id'])->value('pricing_input_basis'));
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+    }
+
+    public function test_editor_identifies_archived_price_unit_from_an_earlier_revision(): void
+    {
+        $this->role($this->steward, BusinessRole::Administrator);
+        $unit = $this->rawMaterials->createAdministrationUnit($this->administrator, $this->location, [
+            'code' => 'mg_old',
+            'name' => 'Jednostka historyczna',
+            'symbol' => 'mgh',
+            'dimension' => 'MASS',
+            'base_unit_code' => 'g',
+            'to_base_factor' => '0.001',
+        ]);
+        $material = $this->createMaterial('Cena w archiwalnej jednostce', [
+            'conversions' => [['unit_code' => 'mg_old']],
+            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '0.01', 'unit_code' => 'mg_old'],
+            'allergen_declaration' => [
+                'status' => 'NO_KNOWN_ALLERGENS',
+                'catalog_version_id' => $this->publishedCatalog([]),
+                'items' => [],
+            ],
+        ]);
+        $id = $material['id'];
+        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
+        $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Bez starej jednostki',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '1000',
+            'conversions' => [],
+        ], expectedVersion: $this->rawVersion($id));
+        $this->rawMaterials->archiveAdministrationUnit($this->administrator, $this->location, $unit['id']);
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
+            ->assertJsonPath('data.pricing_input.basis', 'NOMINAL_UNIT')
+            ->assertJsonPath('data.pricing_input.unit_code', 'mg_old')
+            ->assertJsonPath('data.pricing_input.source_unit.revision_id', $material['revision']['id'])
+            ->assertJsonPath('data.pricing_input.source_unit.conversion_kind', 'METRIC');
+    }
+
+    public function test_editor_exposes_pending_legacy_base_price_and_preserves_it_on_non_price_edits(): void
+    {
+        $this->role($this->steward, BusinessRole::Administrator);
+        $catalogVersionId = $this->publishedCatalog([]);
+        $material = $this->createMaterial('Historyczna cena', [
+            'allergen_declaration' => [
+                'status' => 'NO_KNOWN_ALLERGENS',
+                'catalog_version_id' => $catalogVersionId,
+                'items' => [],
+            ],
+        ]);
+        $id = $material['id'];
+        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
+        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
+        app(RawMaterialCommercialService::class)->setReferencePrice($this->steward, $this->location, $id, [
+            'expected_event_no' => 0,
+            'event_type' => 'PRICE_SET',
+            'effective_from' => now()->toDateString(),
+            'net_pln_per_base_unit' => '0.01',
+            'reason_code' => 'MANUAL',
+        ], 'legacy-price-test-0001');
+        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $this->location->id,
+        ])->assertOk();
+        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
+            ->assertJsonPath('data.pricing_input.basis', 'LEGACY_BASE_UNIT')
+            ->assertJsonPath('data.pricing_input.amount', '0.01000000000000')
+            ->assertJsonPath('data.pricing_input.unit_code', 'g');
+        $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Historyczna cena z nową ilością',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '2000',
+        ], expectedVersion: $this->rawVersion($id));
+
+        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
+            ->assertJsonPath('data.pricing_input.basis', 'LEGACY_BASE_UNIT')
+            ->assertJsonPath('data.pricing_input.amount', '0.01000000000000')
+            ->assertJsonPath('data.pricing_input.unit_code', 'g');
+        $revised = $this->rawMaterials->revise($this->steward, $this->location, $id, [
+            'category_id' => $this->categoryId,
+            'name' => 'Historyczna cena bez zmiany',
+            'base_unit_code' => 'g',
+            'nominal_quantity' => '2000',
+        ], expectedVersion: $this->rawVersion($id));
+        $this->assertSame('LEGACY_BASE_UNIT', DB::table('raw_material_revisions')
+            ->where('id', $revised['revision']['id'])->value('pricing_input_basis'));
+        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
+    }
+
     public function test_omitted_usable_quantity_defaults_to_nominal_and_does_not_keep_stale_yield(): void
     {
         $material = $this->createMaterial('Wydajność domyślna', ['nominal_quantity' => '2800']);

@@ -65,6 +65,12 @@ function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCr
   return { ...render(<RawMaterialCreateForm {...props} />), props }
 }
 
+async function renderReadyForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCreateForm>> = {}) {
+  const result = renderForm(overrides)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Utwórz szkic' })).toHaveProperty('disabled', false))
+  return result
+}
+
 function enterValidBasicFields() {
   fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
   fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
@@ -109,8 +115,38 @@ afterEach(() => {
 })
 
 describe('formularz tworzenia surowca RAW', () => {
-  it('dołącza wyłącznie czysty staged upload podczas zapisu nowej rewizji', async () => {
+  it('blokuje zapis do czasu pobrania słownika jednostek', async () => {
+    let resolveUnits!: (value: Awaited<ReturnType<typeof fetchRawMaterialUnits>>) => void
+    vi.mocked(fetchRawMaterialUnits).mockReturnValue(new Promise((resolve) => { resolveUnits = resolve }))
     renderForm()
+    expect(screen.getByRole('button', { name: 'Utwórz szkic' })).toHaveProperty('disabled', true)
+    fireEvent.submit(screen.getByRole('button', { name: 'Utwórz szkic' }).closest('form')!)
+    expect(reserveMock).not.toHaveBeenCalled()
+    await act(async () => resolveUnits([]))
+  })
+
+  it('wybiera dostępną jednostkę ceny, gdy domyślny kilogram jest archiwalny', async () => {
+    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
+      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
+      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
+    ])
+    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Zamknij formularz dodawania surowca' }))
+    expect(window.confirm).not.toHaveBeenCalled()
+    cleanup()
+    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    enterValidBasicFields()
+    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
+    fireEvent.change(screen.getByLabelText('Średnia cena netto za g nominalne (PLN)'), { target: { value: '10' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
+      pricing: { basis: 'NOMINAL_UNIT', amount: '10', unit_code: 'g' },
+    }), reservationId)
+  })
+
+  it('dołącza wyłącznie czysty staged upload podczas zapisu nowej rewizji', async () => {
+    await renderReadyForm()
     fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '10' } })
     fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
@@ -130,11 +166,11 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('pokazuje i serializuje cenę wyłącznie przy przyznanym uprawnieniu', async () => {
-    renderForm()
+    await renderReadyForm()
     expect(screen.queryByRole('heading', { name: /Cena zakupu/ })).toBeNull()
     cleanup()
 
-    renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
     expect(screen.getByRole('heading', { name: /Cena zakupu/ })).toBeTruthy()
     enterValidBasicFields()
     fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
@@ -150,7 +186,7 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('pokazuje obliczenie backendu dla obu podstaw i ukrywa koszt bez FOODCOST_VIEW', async () => {
-    const { rerender, props } = renderForm({
+    const { rerender, props } = await renderReadyForm({
       canManageReferencePrice: true, canViewReferencePrice: true, canViewUsableCost: true,
     })
     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
@@ -178,7 +214,7 @@ describe('formularz tworzenia surowca RAW', () => {
     vi.mocked(previewRawMaterialPricing)
       .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
       .mockResolvedValueOnce({ netPlnPerPackage: '30.00000000000000' })
-    const { rerender, props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    const { rerender, props } = await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
     fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
     await waitFor(() => expect(previewRawMaterialPricing).toHaveBeenCalledTimes(1))
@@ -193,7 +229,7 @@ describe('formularz tworzenia surowca RAW', () => {
 
   it('jawnie zgłasza błąd podglądu i odmawia dostępu po odpowiedzi 403', async () => {
     vi.mocked(previewRawMaterialPricing).mockRejectedValueOnce(new Error('Błąd połączenia.'))
-    const { props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+    const { props } = await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
     fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
     expect(await screen.findByText(/Podgląd ceny niedostępny: Błąd połączenia/)).toBeTruthy()
@@ -204,7 +240,7 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('zachowuje dane w zakładkach i zatwierdza kompletny surowiec jednym żądaniem', async () => {
-    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
     fireEvent.change(screen.getByLabelText(/Opis/), { target: { value: 'Opis testowy' } })
@@ -226,7 +262,7 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('kieruje do błędnej zakładki i nie rezerwuje SKU bez deklaracji', async () => {
-    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
     expect(await screen.findByText('Wybierz deklarację alergenów.')).toBeTruthy()
@@ -237,7 +273,7 @@ describe('formularz tworzenia surowca RAW', () => {
 
   it('ponawia niepewne zatwierdzenie z tym samym payloadem i rezerwacją', async () => {
     createApprovedMock.mockRejectedValueOnce(new Error('Brak odpowiedzi.'))
-    renderForm({ canManageAllergens: true, canCreateApproved: true })
+    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
     await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
@@ -258,7 +294,7 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('pokazuje wymagane pola, a rezerwację SKU wykonuje dopiero po poprawnym submit', async () => {
-    renderForm()
+    await renderReadyForm()
     expect(screen.getByRole('dialog', { name: 'Dodaj surowiec' })).toBeTruthy()
     expect(screen.getByLabelText(/Kategoria/)).toHaveProperty('required', true)
     expect(screen.getByLabelText(/Nazwa surowca/)).toHaveProperty('required', true)
@@ -276,7 +312,7 @@ describe('formularz tworzenia surowca RAW', () => {
   })
 
   it('wysyła mapowany payload i używa serwerowej rezerwacji SKU/idempotencji', async () => {
-    renderForm()
+    await renderReadyForm()
     enterValidBasicFields()
     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '12,5' } })
     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
@@ -329,7 +365,7 @@ describe('formularz tworzenia surowca RAW', () => {
     reserveMock.mockImplementation(() => new Promise((resolve) => {
       resolveReservation = resolve
     }))
-    renderForm()
+    await renderReadyForm()
     enterValidBasicFields()
     const submit = screen.getByRole('button', { name: 'Utwórz szkic' })
     fireEvent.click(submit)
@@ -342,9 +378,9 @@ describe('formularz tworzenia surowca RAW', () => {
     expect(createMock).toHaveBeenCalledTimes(1)
   })
 
-  it('ostrzega przy odrzucaniu zmian i respektuje anulowanie potwierdzenia', () => {
+  it('ostrzega przy odrzucaniu zmian i respektuje anulowanie potwierdzenia', async () => {
     const onClose = vi.fn()
-    renderForm({ onClose })
+    await renderReadyForm({ onClose })
     fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Nazwa tymczasowa' } })
     vi.mocked(window.confirm).mockReturnValueOnce(false)
     fireEvent.click(screen.getByRole('button', { name: 'Anuluj' }))
@@ -358,7 +394,7 @@ describe('formularz tworzenia surowca RAW', () => {
   it.each([401, 419])('blokuje zapis po wygaśnięciu sesji HTTP %s', async (status) => {
     const onSessionExpired = vi.fn()
     reserveMock.mockRejectedValue(new ApiError(status, 'Sesja wygasła.'))
-    renderForm({ onSessionExpired })
+    await renderReadyForm({ onSessionExpired })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -370,7 +406,7 @@ describe('formularz tworzenia surowca RAW', () => {
   it('zamyka ścieżkę zapisu i zgłasza odmowę HTTP 403', async () => {
     const onAuthorizationDenied = vi.fn()
     reserveMock.mockRejectedValue(new ApiError(403, 'Brak uprawnień.'))
-    renderForm({ onAuthorizationDenied })
+    await renderReadyForm({ onAuthorizationDenied })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -383,7 +419,7 @@ describe('formularz tworzenia surowca RAW', () => {
     createMock.mockRejectedValue(new ApiError(422, 'Sprawdź dane.', null, {
       name: ['Nazwa jest już używana.'],
     }))
-    renderForm()
+    await renderReadyForm()
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -394,7 +430,7 @@ describe('formularz tworzenia surowca RAW', () => {
 
   it('nie ponawia konfliktu HTTP 409 innym payloadem', async () => {
     createMock.mockRejectedValue(new ApiError(409, 'Konflikt.', 'RAW_SKU_RESERVATION_CONFLICT'))
-    renderForm()
+    await renderReadyForm()
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -406,7 +442,7 @@ describe('formularz tworzenia surowca RAW', () => {
   it('blokuje formularz po HTTP 503 i przekazuje stan niedostępności', async () => {
     const onModuleUnavailable = vi.fn()
     reserveMock.mockRejectedValue(new ApiError(503, 'Moduł niedostępny.', 'RAW_MATERIALS_MODULE_UNAVAILABLE'))
-    renderForm({ onModuleUnavailable })
+    await renderReadyForm({ onModuleUnavailable })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -417,7 +453,7 @@ describe('formularz tworzenia surowca RAW', () => {
 
   it('po niejednoznacznym wyniku ponawia dokładnie tę samą rezerwację i zapis', async () => {
     createMock.mockRejectedValueOnce(new Error('Przekroczono czas oczekiwania na odpowiedź backendu.'))
-    renderForm()
+    await renderReadyForm()
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
 
@@ -435,7 +471,7 @@ describe('formularz tworzenia surowca RAW', () => {
     reserveMock.mockImplementation(() => new Promise((resolve) => {
       resolveReservation = resolve
     }))
-    const { unmount } = renderForm()
+    const { unmount } = await renderReadyForm()
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
     await waitFor(() => expect(reserveMock).toHaveBeenCalledTimes(1))
@@ -447,7 +483,7 @@ describe('formularz tworzenia surowca RAW', () => {
 
   it('przekazuje serwerowy identyfikator do istniejącego widoku szczegółów', async () => {
     const onOpenCreated = vi.fn()
-    renderForm({ onOpenCreated })
+    await renderReadyForm({ onOpenCreated })
     enterValidBasicFields()
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
     await screen.findByRole('heading', { name: 'Surowiec utworzony' })

@@ -86,6 +86,7 @@ export type RawMaterialEditor = {
   revisionId: string
   revisionNo: number
   version: string
+  historicalPricingUnit?: boolean
   values: RawMaterialCreateValues
 }
 
@@ -323,11 +324,13 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
   let pricingUnitCode: RawMaterialPricingUnit = baseUnitCode
   if (value.pricing_input !== null && value.pricing_input !== undefined) {
     if (!isRecord(value.pricing_input)
-      || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT')
+      || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT'
+        && value.pricing_input.basis !== 'LEGACY_BASE_UNIT')
       || typeof value.pricing_input.amount !== 'string' || !DECIMAL.test(value.pricing_input.amount)) {
       throw invalid()
     }
-    pricingBasis = value.pricing_input.basis
+    if (value.pricing_input.basis === 'PACKAGE' && value.pricing_input.unit_code != null) throw invalid()
+    pricingBasis = value.pricing_input.basis === 'PACKAGE' ? 'PACKAGE' : 'NOMINAL_UNIT'
     pricingAmount = value.pricing_input.amount
     if (pricingBasis === 'NOMINAL_UNIT') {
       if (typeof value.pricing_input.unit_code !== 'string'
@@ -369,11 +372,25 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
   })
   const baseUnit = units.find((unit) => isRecord(unit) && unit.unit_code === baseUnitCode)
   const pricingUnit = units.find((unit) => isRecord(unit) && unit.unit_code === pricingUnitCode)
+  const pricingInput = isRecord(value.pricing_input) ? value.pricing_input : null
+  const currentPricingUnitValid = isRecord(pricingUnit)
+    && pricingUnit.dimension === revision.base_unit_dimension
+    && ['BASE', 'METRIC'].includes(String(pricingUnit.conversion_kind))
+    && (pricingInput?.basis !== 'LEGACY_BASE_UNIT' || pricingUnitCode === baseUnitCode)
+  let historicalPricingUnit = false
+  if (pricingBasis === 'NOMINAL_UNIT' && !currentPricingUnitValid) {
+    const source = pricingInput?.source_unit
+    if (!isRecord(source) || typeof source.revision_id !== 'string' || !UUID.test(source.revision_id)
+      || source.revision_id === revision.id || source.unit_code !== pricingUnitCode
+      || typeof source.dimension !== 'string' || !RAW_DIMENSIONS.includes(source.dimension as typeof RAW_DIMENSIONS[number])
+      || !['BASE', 'METRIC'].includes(String(source.conversion_kind))
+      || (pricingInput?.basis === 'LEGACY_BASE_UNIT' && source.conversion_kind !== 'BASE')) throw invalid()
+    historicalPricingUnit = true
+  } else if (pricingInput?.source_unit !== undefined) {
+    throw invalid()
+  }
   if (baseUnitCount !== 1 || !baseUnit || !isRecord(baseUnit)
-    || baseUnit.dimension !== revision.base_unit_dimension || baseUnit.conversion_kind !== 'BASE'
-    || pricingBasis === 'NOMINAL_UNIT' && (!pricingUnit || !isRecord(pricingUnit)
-      || pricingUnit.dimension !== revision.base_unit_dimension
-      || !['BASE', 'METRIC'].includes(String(pricingUnit.conversion_kind)))) throw invalid()
+    || baseUnit.dimension !== revision.base_unit_dimension || baseUnit.conversion_kind !== 'BASE') throw invalid()
 
   return {
     id: value.id,
@@ -382,6 +399,7 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
     revisionId: revision.id as string,
     revisionNo: revision.revision_no as number,
     version: value.version,
+    ...(historicalPricingUnit ? { historicalPricingUnit: true } : {}),
     values: {
       categoryId,
       name,

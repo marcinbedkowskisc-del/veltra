@@ -41,7 +41,9 @@ x-test-environment: &test-environment
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: veltra-postgres:17-alpine
+    build:
+      context: ./docker/postgres
     environment:
       POSTGRES_DB: veltra_testing
       POSTGRES_USER: veltra_test_admin
@@ -52,8 +54,6 @@ services:
       APP_DB_MIGRATION_PASSWORD: ${TEST_DB_MIGRATION_PASSWORD}
     tmpfs:
       - /var/lib/postgresql/data
-    volumes:
-      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
     networks: [isolated]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U veltra_migrator -d veltra_testing"]

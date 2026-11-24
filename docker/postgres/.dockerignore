@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!10-create-runtime-role.sh
+.env
+.env.*

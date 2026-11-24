@@ -47,7 +47,7 @@ docker --context default run --rm --user "$(id -u):$(id -g)" \
 docker --context default volume create --label com.veltra.environment=primary --label com.veltra.storage=postgres veltra-primary-postgres-data
 docker --context default volume create --label com.veltra.environment=primary --label com.veltra.storage=redis veltra-primary-redis-data
 
-docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml build backend frontend
+docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml build backend frontend postgres
 docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml up -d --wait postgres redis
 docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml run --rm --no-deps migrate
 docker --context default compose -p veltra-primary -f compose.yaml -f compose.primary.yaml up -d --wait
@@ -111,6 +111,9 @@ Compose testowy wymaga pliku `tests/compose/test.env` zawierajacego wylacznie
 syntetyczne zmienne `TEST_*`; wrapper sprawdza jego
 zawartosc i nie dziedziczy `.env`, `COMPOSE_*` ani `DOCKER_*`.
 Skrypt PostgreSQL przygotowuje role i granty dla nowej, nietrwalej bazy.
+Obraz `veltra-postgres:17-alpine` zawiera ten skrypt; po jego zmianie nalezy
+ponownie zbudowac usluge `postgres`. Izolowany preview z `pull_policy: never`
+wymaga zbudowania tego obrazu w swoim daemonie przed uruchomieniem.
 Skrypty
 `docker-entrypoint-initdb.d` nie sa uruchamiane ponownie na istniejacym
 wolumenie. Przy istniejacej instalacji administrator musi jawnie uzupelnic
@@ -282,6 +285,7 @@ Brak lub niezgodnosc kontekstu zatrzymuje polecenie przed operacja na zasobach.
 
 ```bash
 # Start testowych zaleznosci i migracje pustej bazy w tmpfs.
+scripts/compose-test build postgres
 scripts/compose-test up -d postgres redis clamav
 scripts/compose-test run --build --rm migrate-test
 

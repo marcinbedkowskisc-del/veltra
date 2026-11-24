@@ -111,7 +111,9 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:17-alpine
+    image: veltra-postgres:17-alpine
+    build:
+      context: ./docker/postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-veltra}
       POSTGRES_USER: ${POSTGRES_USER:-veltra}
@@ -122,7 +124,6 @@ services:
       APP_DB_MIGRATION_PASSWORD: ${APP_DB_MIGRATION_PASSWORD:?Run the environment initialization command from README}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./docker/postgres/10-create-runtime-role.sh:/docker-entrypoint-initdb.d/10-create-runtime-role.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${APP_DB_MIGRATION_USERNAME}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s

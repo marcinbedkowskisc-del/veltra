@@ -108,6 +108,8 @@ function buildEditPayload(
   units: RawMaterialUnitOption[],
   documentUploadIds: string[],
   detachDocumentVersionIds: string[],
+  historicalPricingUnit: boolean,
+  historicalPriceConfirmed: boolean,
 ): RawMaterialEditPayload {
   const nominal = normalizeDecimalInput(values.nominalQuantity)
   const usable = normalizeDecimalInput(values.usableQuantity)
@@ -122,10 +124,11 @@ function buildEditPayload(
       to_base_factor: normalizeDecimalInput(conversion.toBaseFactor),
       basis: conversion.basis.trim(),
     }
-  }), values, includePricing)
+  }), values, includePricing && (!historicalPricingUnit || historicalPriceConfirmed))
   const pricingChanged = values.pricingBasis !== initialValues.pricingBasis
     || values.pricingAmount !== initialValues.pricingAmount
     || (values.pricingBasis === 'NOMINAL_UNIT' && values.pricingUnitCode !== initialValues.pricingUnitCode)
+    || (historicalPricingUnit && historicalPriceConfirmed)
 
   return {
     category_id: values.categoryId,
@@ -188,6 +191,7 @@ export default function RawMaterialEditForm({
   const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
   const [focusError, setFocusError] = useState(0)
   const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
+  const [historicalPriceConfirmed, setHistoricalPriceConfirmed] = useState(false)
   const [changeReason, setChangeReason] = useState('')
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
@@ -278,6 +282,7 @@ export default function RawMaterialEditForm({
         const formattedValues = editableValues(editor.values)
         setValues(formattedValues)
         setInitialValues(formattedValues)
+        setHistoricalPriceConfirmed(false)
         setCanEditAllergens(permitted)
         setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
         setCanViewUsableCost(capabilities.actions.viewUsableCost === true)
@@ -539,6 +544,7 @@ export default function RawMaterialEditForm({
       const formattedValues = editableValues(editor.values)
       setValues(formattedValues)
       setInitialValues(formattedValues)
+      setHistoricalPriceConfirmed(false)
       setCanEditAllergens(permitted)
       setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
       setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
@@ -619,6 +625,29 @@ export default function RawMaterialEditForm({
       return
     }
     const errors = validateRawMaterialCreate(values, true, unitOptions)
+    if (snapshot.historicalPricingUnit && initialValues) {
+      if (!historicalPriceConfirmed) {
+        delete errors.pricingUnitCode
+        const canonical = (value: string) => {
+          const [integer, fraction = ''] = normalizeDecimalInput(value).split('.')
+          return `${integer.replace(/^0+(?=\d)/, '')}.${fraction.replace(/0+$/, '')}`
+        }
+        const effectiveUsable = (v: RawMaterialCreateValues) => v.usableQuantityExplicit ? v.usableQuantity : v.nominalQuantity
+        if (values.baseUnitCode !== initialValues.baseUnitCode
+          || canonical(values.nominalQuantity) !== canonical(initialValues.nominalQuantity)
+          || canonical(effectiveUsable(values)) !== canonical(effectiveUsable(initialValues))) {
+          errors.pricingAmount = 'Cena pochodzi z wcześniejszej rewizji. Aby zmienić jednostkę lub ilości, wybierz i podaj cenę świadomie.'
+        }
+      } else {
+        if (!normalizeDecimalInput(values.pricingAmount)) {
+          errors.pricingAmount = 'Podaj nową cenę dla bieżącej rewizji.'
+        }
+        if (values.pricingBasis === 'NOMINAL_UNIT'
+          && unitOptions.find((unit) => unit.code === values.pricingUnitCode)?.archivedAt !== null) {
+          errors.pricingAmount = 'Wybierz cenę opakowania lub aktywną jednostkę ceny dla bieżącej rewizji.'
+        }
+      }
+    }
     const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
     const declarationError = allergensChanged ? allergenError(allergens, false) : null
     setAllergenValidation(declarationError)
@@ -641,6 +670,8 @@ export default function RawMaterialEditForm({
       unitOptions,
       documentUploadIds,
       detachDocumentVersionIds,
+      snapshot.historicalPricingUnit === true,
+      historicalPriceConfirmed,
     ),
       ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
     operationLocked.current = true
@@ -865,16 +896,25 @@ export default function RawMaterialEditForm({
                     )}
                     <span className="field-hint">Pozostaw ilość użytkową pustą, aby automatycznie użyć nominalnej. Maksymalnie 6 miejsc po przecinku.</span>
                   </fieldset>
-                  {canViewReferencePrice && (
+                  {canViewReferencePrice && (<>
+                    {snapshot.historicalPricingUnit && <p className="field-hint">
+                      Cena zachowuje jednostkę z wcześniejszej rewizji. Zmiana ilości lub jednostki wymaga świadomego podania ceny dla bieżącej rewizji.
+                    </p>}
                     <RawMaterialPricingFields id="edit" values={values}
                       disabled={phase !== 'editing' || !canManageReferencePrice || unitsLoading || Boolean(unitsError)}
-                      canCalculate={canManageReferencePrice} canViewCost={canViewUsableCost}
+                      canCalculate={canManageReferencePrice && (!snapshot.historicalPricingUnit || historicalPriceConfirmed)} canViewCost={canViewUsableCost}
                       error={getError('pricingAmount')} unitOptions={unitOptions}
-                      onBasisChange={(value) => setField('pricingBasis', value)}
-                      onAmountChange={(value) => setField('pricingAmount', value)}
+                      onBasisChange={(value) => {
+                        setHistoricalPriceConfirmed(true)
+                        if (snapshot.historicalPricingUnit && value !== values.pricingBasis) {
+                          setField('pricingAmount', '')
+                        }
+                        setField('pricingBasis', value)
+                      }}
+                      onAmountChange={(value) => { setHistoricalPriceConfirmed(true); setField('pricingAmount', value) }}
                       onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
                       onModuleUnavailable={onModuleUnavailable} />
-                  )}
+                  </>)}
                   {canManageSuppliers && (
                     <label className="create-form-field create-form-field-wide" htmlFor="edit-suppliers">
                       Dostawcy — powiązania informacyjne

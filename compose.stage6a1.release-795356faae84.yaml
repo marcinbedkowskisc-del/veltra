@@ -1,0 +1,13 @@
+services:
+  backend:
+    image: veltra-stage6a1-backend:rc-795356faae84-20261123
+    build: !reset null
+  migrate:
+    image: veltra-stage6a1-backend:rc-795356faae84-20261123
+    build: !reset null
+  queue:
+    image: veltra-stage6a1-backend:rc-795356faae84-20261123
+    build: !reset null
+  frontend:
+    image: veltra-stage6a1-frontend:rc-795356faae84-20261123-complete
+    build: !reset null

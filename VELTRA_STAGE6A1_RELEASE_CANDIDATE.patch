@@ -1,0 +1,992 @@
+diff --git a/backend/tests/Feature/RawMaterialRevisionDataModelTest.php b/backend/tests/Feature/RawMaterialRevisionDataModelTest.php
+index 7379ca9..926bdbb 100644
+--- a/backend/tests/Feature/RawMaterialRevisionDataModelTest.php
++++ b/backend/tests/Feature/RawMaterialRevisionDataModelTest.php
+@@ -306,6 +306,170 @@ public function test_archived_custom_unit_keeps_raw_revision_reference_and_locks
+             ->where('id', $unit['id'])->value('to_base_factor'));
+     }
+ 
++    public function test_editor_preserves_inherited_price_when_its_unit_is_not_in_the_working_revision(): void
++    {
++        $this->role($this->steward, BusinessRole::Administrator);
++        $catalogVersionId = $this->publishedCatalog([]);
++        $material = $this->createMaterial('Cena z poprzedniej rewizji', [
++            'conversions' => [['unit_code' => 'kg']],
++            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '10', 'unit_code' => 'kg'],
++            'allergen_declaration' => [
++                'status' => 'NO_KNOWN_ALLERGENS',
++                'catalog_version_id' => $catalogVersionId,
++                'items' => [],
++            ],
++        ]);
++        $id = $material['id'];
++        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
++        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
++        $revised = $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Cena z poprzedniej rewizji poprawiona',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '1000',
++            'conversions' => [],
++        ], expectedVersion: $this->rawVersion($id));
++        $this->assertSame(['g'], DB::table('raw_material_revision_units')
++            ->where('revision_id', $revised['revision']['id'])->pluck('unit_code')->all());
++        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
++
++        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
++            'location_id' => $this->location->id,
++        ])->assertOk();
++        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
++            ->assertJsonPath('data.pricing_input.basis', 'NOMINAL_UNIT')
++            ->assertJsonPath('data.pricing_input.amount', '10.00000000000000')
++            ->assertJsonPath('data.pricing_input.unit_code', 'kg')
++            ->assertJsonPath('data.pricing_input.source_unit.revision_id', $material['revision']['id'])
++            ->assertJsonPath('data.pricing_input.source_unit.unit_code', 'kg')
++            ->assertJsonPath('data.pricing_input.source_unit.dimension', 'MASS')
++            ->assertJsonPath('data.pricing_input.source_unit.conversion_kind', 'METRIC');
++        $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Edycja bez zmiany ceny',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '1000',
++            'conversions' => [],
++        ], expectedVersion: $this->rawVersion($id));
++        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
++
++        try {
++            $this->rawMaterials->revise($this->steward, $this->location, $id, [
++                'category_id' => $this->categoryId,
++                'name' => 'Zmiana ilości bez potwierdzenia ceny',
++                'base_unit_code' => 'g',
++                'nominal_quantity' => '2000',
++                'conversions' => [],
++            ], expectedVersion: $this->rawVersion($id));
++            $this->fail('A historical unit absent from the revision cannot be used for recalculation.');
++        } catch (ValidationException $exception) {
++            $this->assertArrayHasKey('pricing.unit_code', $exception->errors());
++        }
++
++        $confirmed = $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Zmiana ilości z jawną ceną',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '2000',
++            'conversions' => [],
++            'pricing' => ['basis' => 'PACKAGE', 'amount' => '10'],
++        ], expectedVersion: $this->rawVersion($id));
++        $this->assertSame('PACKAGE', DB::table('raw_material_revisions')
++            ->where('id', $confirmed['revision']['id'])->value('pricing_input_basis'));
++        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
++    }
++
++    public function test_editor_identifies_archived_price_unit_from_an_earlier_revision(): void
++    {
++        $this->role($this->steward, BusinessRole::Administrator);
++        $unit = $this->rawMaterials->createAdministrationUnit($this->administrator, $this->location, [
++            'code' => 'mg_old',
++            'name' => 'Jednostka historyczna',
++            'symbol' => 'mgh',
++            'dimension' => 'MASS',
++            'base_unit_code' => 'g',
++            'to_base_factor' => '0.001',
++        ]);
++        $material = $this->createMaterial('Cena w archiwalnej jednostce', [
++            'conversions' => [['unit_code' => 'mg_old']],
++            'pricing' => ['basis' => 'NOMINAL_UNIT', 'amount' => '0.01', 'unit_code' => 'mg_old'],
++            'allergen_declaration' => [
++                'status' => 'NO_KNOWN_ALLERGENS',
++                'catalog_version_id' => $this->publishedCatalog([]),
++                'items' => [],
++            ],
++        ]);
++        $id = $material['id'];
++        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
++        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
++        $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Bez starej jednostki',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '1000',
++            'conversions' => [],
++        ], expectedVersion: $this->rawVersion($id));
++        $this->rawMaterials->archiveAdministrationUnit($this->administrator, $this->location, $unit['id']);
++        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
++            'location_id' => $this->location->id,
++        ])->assertOk();
++        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
++            ->assertJsonPath('data.pricing_input.basis', 'NOMINAL_UNIT')
++            ->assertJsonPath('data.pricing_input.unit_code', 'mg_old')
++            ->assertJsonPath('data.pricing_input.source_unit.revision_id', $material['revision']['id'])
++            ->assertJsonPath('data.pricing_input.source_unit.conversion_kind', 'METRIC');
++    }
++
++    public function test_editor_exposes_pending_legacy_base_price_and_preserves_it_on_non_price_edits(): void
++    {
++        $this->role($this->steward, BusinessRole::Administrator);
++        $catalogVersionId = $this->publishedCatalog([]);
++        $material = $this->createMaterial('Historyczna cena', [
++            'allergen_declaration' => [
++                'status' => 'NO_KNOWN_ALLERGENS',
++                'catalog_version_id' => $catalogVersionId,
++                'items' => [],
++            ],
++        ]);
++        $id = $material['id'];
++        $this->rawMaterials->submit($this->steward, $this->location, $id, expectedVersion: $this->rawVersion($id));
++        $this->rawMaterials->approve($this->steward, $this->location, $id, 'Cena testowa', expectedVersion: $this->rawVersion($id));
++        app(RawMaterialCommercialService::class)->setReferencePrice($this->steward, $this->location, $id, [
++            'expected_event_no' => 0,
++            'event_type' => 'PRICE_SET',
++            'effective_from' => now()->toDateString(),
++            'net_pln_per_base_unit' => '0.01',
++            'reason_code' => 'MANUAL',
++        ], 'legacy-price-test-0001');
++        $this->actingAs($this->steward, 'web')->putJson('/api/v1/auth/operating-location', [
++            'location_id' => $this->location->id,
++        ])->assertOk();
++        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
++            ->assertJsonPath('data.pricing_input.basis', 'LEGACY_BASE_UNIT')
++            ->assertJsonPath('data.pricing_input.amount', '0.01000000000000')
++            ->assertJsonPath('data.pricing_input.unit_code', 'g');
++        $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Historyczna cena z nową ilością',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '2000',
++        ], expectedVersion: $this->rawVersion($id));
++
++        $this->getJson("/api/v1/raw-materials/{$id}/editor")->assertOk()
++            ->assertJsonPath('data.pricing_input.basis', 'LEGACY_BASE_UNIT')
++            ->assertJsonPath('data.pricing_input.amount', '0.01000000000000')
++            ->assertJsonPath('data.pricing_input.unit_code', 'g');
++        $revised = $this->rawMaterials->revise($this->steward, $this->location, $id, [
++            'category_id' => $this->categoryId,
++            'name' => 'Historyczna cena bez zmiany',
++            'base_unit_code' => 'g',
++            'nominal_quantity' => '2000',
++        ], expectedVersion: $this->rawVersion($id));
++        $this->assertSame('LEGACY_BASE_UNIT', DB::table('raw_material_revisions')
++            ->where('id', $revised['revision']['id'])->value('pricing_input_basis'));
++        $this->assertSame(1, DB::table('raw_material_reference_price_events')->where('raw_material_id', $id)->count());
++    }
++
+     public function test_omitted_usable_quantity_defaults_to_nominal_and_does_not_keep_stale_yield(): void
+     {
+         $material = $this->createMaterial('Wydajność domyślna', ['nominal_quantity' => '2800']);
+diff --git a/frontend/src/rawMaterials/RawMaterialCreateForm.test.tsx b/frontend/src/rawMaterials/RawMaterialCreateForm.test.tsx
+index bc4799e..43f6f17 100644
+--- a/frontend/src/rawMaterials/RawMaterialCreateForm.test.tsx
++++ b/frontend/src/rawMaterials/RawMaterialCreateForm.test.tsx
+@@ -65,6 +65,12 @@ function renderForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCr
+   return { ...render(<RawMaterialCreateForm {...props} />), props }
+ }
+ 
++async function renderReadyForm(overrides: Partial<React.ComponentProps<typeof RawMaterialCreateForm>> = {}) {
++  const result = renderForm(overrides)
++  await waitFor(() => expect(screen.getByRole('button', { name: 'Utwórz szkic' })).toHaveProperty('disabled', false))
++  return result
++}
++
+ function enterValidBasicFields() {
+   fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
+   fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
+@@ -109,8 +115,38 @@ afterEach(() => {
+ })
+ 
+ describe('formularz tworzenia surowca RAW', () => {
+-  it('dołącza wyłącznie czysty staged upload podczas zapisu nowej rewizji', async () => {
++  it('blokuje zapis do czasu pobrania słownika jednostek', async () => {
++    let resolveUnits!: (value: Awaited<ReturnType<typeof fetchRawMaterialUnits>>) => void
++    vi.mocked(fetchRawMaterialUnits).mockReturnValue(new Promise((resolve) => { resolveUnits = resolve }))
+     renderForm()
++    expect(screen.getByRole('button', { name: 'Utwórz szkic' })).toHaveProperty('disabled', true)
++    fireEvent.submit(screen.getByRole('button', { name: 'Utwórz szkic' }).closest('form')!)
++    expect(reserveMock).not.toHaveBeenCalled()
++    await act(async () => resolveUnits([]))
++  })
++
++  it('wybiera dostępną jednostkę ceny, gdy domyślny kilogram jest archiwalny', async () => {
++    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
++      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
++      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
++    ])
++    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
++    fireEvent.click(screen.getByRole('button', { name: 'Zamknij formularz dodawania surowca' }))
++    expect(window.confirm).not.toHaveBeenCalled()
++    cleanup()
++    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
++    enterValidBasicFields()
++    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
++    fireEvent.change(screen.getByLabelText('Średnia cena netto za g nominalne (PLN)'), { target: { value: '10' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
++    await screen.findByRole('heading', { name: 'Surowiec utworzony' })
++    expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
++      pricing: { basis: 'NOMINAL_UNIT', amount: '10', unit_code: 'g' },
++    }), reservationId)
++  })
++
++  it('dołącza wyłącznie czysty staged upload podczas zapisu nowej rewizji', async () => {
++    await renderReadyForm()
+     fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Mąka testowa' } })
+     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '10' } })
+     fireEvent.change(screen.getByLabelText(/Kategoria/), { target: { value: categoryId } })
+@@ -130,11 +166,11 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('pokazuje i serializuje cenę wyłącznie przy przyznanym uprawnieniu', async () => {
+-    renderForm()
++    await renderReadyForm()
+     expect(screen.queryByRole('heading', { name: /Cena zakupu/ })).toBeNull()
+     cleanup()
+ 
+-    renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
++    await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+     expect(screen.getByRole('heading', { name: /Cena zakupu/ })).toBeTruthy()
+     enterValidBasicFields()
+     fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'NOMINAL_UNIT' } })
+@@ -150,7 +186,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('pokazuje obliczenie backendu dla obu podstaw i ukrywa koszt bez FOODCOST_VIEW', async () => {
+-    const { rerender, props } = renderForm({
++    const { rerender, props } = await renderReadyForm({
+       canManageReferencePrice: true, canViewReferencePrice: true, canViewUsableCost: true,
+     })
+     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+@@ -178,7 +214,7 @@ describe('formularz tworzenia surowca RAW', () => {
+     vi.mocked(previewRawMaterialPricing)
+       .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+       .mockResolvedValueOnce({ netPlnPerPackage: '30.00000000000000' })
+-    const { rerender, props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
++    const { rerender, props } = await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+     fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
+     await waitFor(() => expect(previewRawMaterialPricing).toHaveBeenCalledTimes(1))
+@@ -193,7 +229,7 @@ describe('formularz tworzenia surowca RAW', () => {
+ 
+   it('jawnie zgłasza błąd podglądu i odmawia dostępu po odpowiedzi 403', async () => {
+     vi.mocked(previewRawMaterialPricing).mockRejectedValueOnce(new Error('Błąd połączenia.'))
+-    const { props } = renderForm({ canManageReferencePrice: true, canViewReferencePrice: true })
++    const { props } = await renderReadyForm({ canManageReferencePrice: true, canViewReferencePrice: true })
+     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '2800' } })
+     fireEvent.change(screen.getByLabelText('Średnia cena netto opakowania (PLN)'), { target: { value: '28' } })
+     expect(await screen.findByText(/Podgląd ceny niedostępny: Błąd połączenia/)).toBeTruthy()
+@@ -204,7 +240,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('zachowuje dane w zakładkach i zatwierdza kompletny surowiec jednym żądaniem', async () => {
+-    renderForm({ canManageAllergens: true, canCreateApproved: true })
++    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('tab', { name: 'Dodatkowe informacje' }))
+     fireEvent.change(screen.getByLabelText(/Opis/), { target: { value: 'Opis testowy' } })
+@@ -226,7 +262,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('kieruje do błędnej zakładki i nie rezerwuje SKU bez deklaracji', async () => {
+-    renderForm({ canManageAllergens: true, canCreateApproved: true })
++    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Dodaj i zatwierdź surowiec' }))
+     expect(await screen.findByText('Wybierz deklarację alergenów.')).toBeTruthy()
+@@ -237,7 +273,7 @@ describe('formularz tworzenia surowca RAW', () => {
+ 
+   it('ponawia niepewne zatwierdzenie z tym samym payloadem i rezerwacją', async () => {
+     createApprovedMock.mockRejectedValueOnce(new Error('Brak odpowiedzi.'))
+-    renderForm({ canManageAllergens: true, canCreateApproved: true })
++    await renderReadyForm({ canManageAllergens: true, canCreateApproved: true })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('tab', { name: 'Alergeny' }))
+     await waitFor(() => expect(screen.getByLabelText<HTMLSelectElement>('Status deklaracji').disabled).toBe(false))
+@@ -258,7 +294,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('pokazuje wymagane pola, a rezerwację SKU wykonuje dopiero po poprawnym submit', async () => {
+-    renderForm()
++    await renderReadyForm()
+     expect(screen.getByRole('dialog', { name: 'Dodaj surowiec' })).toBeTruthy()
+     expect(screen.getByLabelText(/Kategoria/)).toHaveProperty('required', true)
+     expect(screen.getByLabelText(/Nazwa surowca/)).toHaveProperty('required', true)
+@@ -276,7 +312,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   })
+ 
+   it('wysyła mapowany payload i używa serwerowej rezerwacji SKU/idempotencji', async () => {
+-    renderForm()
++    await renderReadyForm()
+     enterValidBasicFields()
+     fireEvent.change(screen.getByLabelText(/Nominalna/), { target: { value: '12,5' } })
+     fireEvent.change(screen.getByLabelText('Użytkowa'), { target: { value: '10,25' } })
+@@ -329,7 +365,7 @@ describe('formularz tworzenia surowca RAW', () => {
+     reserveMock.mockImplementation(() => new Promise((resolve) => {
+       resolveReservation = resolve
+     }))
+-    renderForm()
++    await renderReadyForm()
+     enterValidBasicFields()
+     const submit = screen.getByRole('button', { name: 'Utwórz szkic' })
+     fireEvent.click(submit)
+@@ -342,9 +378,9 @@ describe('formularz tworzenia surowca RAW', () => {
+     expect(createMock).toHaveBeenCalledTimes(1)
+   })
+ 
+-  it('ostrzega przy odrzucaniu zmian i respektuje anulowanie potwierdzenia', () => {
++  it('ostrzega przy odrzucaniu zmian i respektuje anulowanie potwierdzenia', async () => {
+     const onClose = vi.fn()
+-    renderForm({ onClose })
++    await renderReadyForm({ onClose })
+     fireEvent.change(screen.getByLabelText(/Nazwa surowca/), { target: { value: 'Nazwa tymczasowa' } })
+     vi.mocked(window.confirm).mockReturnValueOnce(false)
+     fireEvent.click(screen.getByRole('button', { name: 'Anuluj' }))
+@@ -358,7 +394,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   it.each([401, 419])('blokuje zapis po wygaśnięciu sesji HTTP %s', async (status) => {
+     const onSessionExpired = vi.fn()
+     reserveMock.mockRejectedValue(new ApiError(status, 'Sesja wygasła.'))
+-    renderForm({ onSessionExpired })
++    await renderReadyForm({ onSessionExpired })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -370,7 +406,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   it('zamyka ścieżkę zapisu i zgłasza odmowę HTTP 403', async () => {
+     const onAuthorizationDenied = vi.fn()
+     reserveMock.mockRejectedValue(new ApiError(403, 'Brak uprawnień.'))
+-    renderForm({ onAuthorizationDenied })
++    await renderReadyForm({ onAuthorizationDenied })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -383,7 +419,7 @@ describe('formularz tworzenia surowca RAW', () => {
+     createMock.mockRejectedValue(new ApiError(422, 'Sprawdź dane.', null, {
+       name: ['Nazwa jest już używana.'],
+     }))
+-    renderForm()
++    await renderReadyForm()
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -394,7 +430,7 @@ describe('formularz tworzenia surowca RAW', () => {
+ 
+   it('nie ponawia konfliktu HTTP 409 innym payloadem', async () => {
+     createMock.mockRejectedValue(new ApiError(409, 'Konflikt.', 'RAW_SKU_RESERVATION_CONFLICT'))
+-    renderForm()
++    await renderReadyForm()
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -406,7 +442,7 @@ describe('formularz tworzenia surowca RAW', () => {
+   it('blokuje formularz po HTTP 503 i przekazuje stan niedostępności', async () => {
+     const onModuleUnavailable = vi.fn()
+     reserveMock.mockRejectedValue(new ApiError(503, 'Moduł niedostępny.', 'RAW_MATERIALS_MODULE_UNAVAILABLE'))
+-    renderForm({ onModuleUnavailable })
++    await renderReadyForm({ onModuleUnavailable })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -417,7 +453,7 @@ describe('formularz tworzenia surowca RAW', () => {
+ 
+   it('po niejednoznacznym wyniku ponawia dokładnie tę samą rezerwację i zapis', async () => {
+     createMock.mockRejectedValueOnce(new Error('Przekroczono czas oczekiwania na odpowiedź backendu.'))
+-    renderForm()
++    await renderReadyForm()
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+ 
+@@ -435,7 +471,7 @@ describe('formularz tworzenia surowca RAW', () => {
+     reserveMock.mockImplementation(() => new Promise((resolve) => {
+       resolveReservation = resolve
+     }))
+-    const { unmount } = renderForm()
++    const { unmount } = await renderReadyForm()
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+     await waitFor(() => expect(reserveMock).toHaveBeenCalledTimes(1))
+@@ -447,7 +483,7 @@ describe('formularz tworzenia surowca RAW', () => {
+ 
+   it('przekazuje serwerowy identyfikator do istniejącego widoku szczegółów', async () => {
+     const onOpenCreated = vi.fn()
+-    renderForm({ onOpenCreated })
++    await renderReadyForm({ onOpenCreated })
+     enterValidBasicFields()
+     fireEvent.click(screen.getByRole('button', { name: 'Utwórz szkic' }))
+     await screen.findByRole('heading', { name: 'Surowiec utworzony' })
+diff --git a/frontend/src/rawMaterials/RawMaterialCreateForm.tsx b/frontend/src/rawMaterials/RawMaterialCreateForm.tsx
+index 5d15efe..4c4181c 100644
+--- a/frontend/src/rawMaterials/RawMaterialCreateForm.tsx
++++ b/frontend/src/rawMaterials/RawMaterialCreateForm.tsx
+@@ -139,12 +139,12 @@ export default function RawMaterialCreateForm({
+   const [documentUploadIds, setDocumentUploadIds] = useState<string[]>([])
+   const [documentsUploading, setDocumentsUploading] = useState(false)
+   const [unitOptions, setUnitOptions] = useState<RawMaterialUnitOption[]>(RAW_UNIT_OPTIONS_BASELINE)
+-  const [unitsLoading, setUnitsLoading] = useState(false)
++  const [unitsLoading, setUnitsLoading] = useState(true)
+   const [unitsError, setUnitsError] = useState<string | null>(null)
+   const [attempted, setAttempted] = useState(false)
+   const [approving, setApproving] = useState(false)
+   const dialogRef = useRef<HTMLElement>(null)
+-  const [initialValues] = useState(emptyRawMaterialCreateValues)
++  const [initialValues, setInitialValues] = useState(emptyRawMaterialCreateValues)
+   const active = useRef(true)
+   const reservationKey = useRef<string | null>(null)
+   const reservation = useRef<RawMaterialSkuReservation | null>(null)
+@@ -173,6 +173,14 @@ export default function RawMaterialCreateForm({
+     void fetchRawMaterialUnits(controller.signal).then((result) => {
+       if (!active.current) return
+       setUnitOptions(result)
++      const alignPricingUnit = (current: RawMaterialCreateValues) => {
++        const base = result.find((unit) => unit.code === current.baseUnitCode && unit.archivedAt === null)
++        const pricing = result.find((unit) => unit.code === current.pricingUnitCode && unit.archivedAt === null)
++        if (!base || pricing?.dimension === base.dimension) return current
++        return { ...current, pricingUnitCode: base.code }
++      }
++      setValues(alignPricingUnit)
++      setInitialValues(alignPricingUnit)
+       setUnitsError(null)
+     }).catch((cause: unknown) => {
+       if (!controller.signal.aborted && active.current) {
+@@ -435,7 +443,7 @@ export default function RawMaterialCreateForm({
+ 
+   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+     event.preventDefault()
+-    if (phase !== 'editing' || operationLocked.current || documentsUploading) return
++    if (phase !== 'editing' || operationLocked.current || documentsUploading || unitsLoading || unitsError) return
+     setAttempted(true)
+     setFormError(null)
+     setServerErrors({})
+diff --git a/frontend/src/rawMaterials/RawMaterialEditForm.test.tsx b/frontend/src/rawMaterials/RawMaterialEditForm.test.tsx
+index ef2c691..68b27b8 100644
+--- a/frontend/src/rawMaterials/RawMaterialEditForm.test.tsx
++++ b/frontend/src/rawMaterials/RawMaterialEditForm.test.tsx
+@@ -193,6 +193,101 @@ describe('formularz edycji surowca', () => {
+     expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('pricing')
+   })
+ 
++  it('nie wysyła niezmienionej ceny jednostkowej podczas edycji innych danych', async () => {
++    const editor = makeEditor()
++    editor.values.pricingBasis = 'NOMINAL_UNIT'
++    editor.values.pricingAmount = '20'
++    editor.values.pricingUnitCode = 'kg'
++    editorMock.mockResolvedValue(editor)
++    capabilitiesMock.mockResolvedValue({
++      ...makeCapabilities(),
++      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
++    })
++    renderForm()
++    fireEvent.change(await screen.findByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    await screen.findByText('Zapisano nową rewizję roboczą v5')
++    expect(reviseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty('pricing')
++  })
++
++  it('nie dodaje historycznej archiwalnej jednostki ani ceny przy zmianie nazwy', async () => {
++    const editor = makeEditor({ historicalPricingUnit: true })
++    editor.values.baseUnitCode = 'g'
++    editor.values.pricingBasis = 'NOMINAL_UNIT'
++    editor.values.pricingAmount = '10'
++    editor.values.pricingUnitCode = 'kg'
++    editor.values.conversions = []
++    editorMock.mockResolvedValue(editor)
++    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
++      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
++      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
++    ])
++    capabilitiesMock.mockResolvedValue({
++      ...makeCapabilities(),
++      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
++    })
++    renderForm()
++    fireEvent.change(await screen.findByLabelText(/^Nazwa/), { target: { value: 'Nowa nazwa' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    await screen.findByText('Zapisano nową rewizję roboczą v5')
++    const payload = reviseMock.mock.calls.at(-1)?.[1]
++    expect(payload).not.toHaveProperty('pricing')
++    expect(payload?.conversions).toEqual([])
++  })
++
++  it('wymaga jawnej nowej ceny przed zmianą ilości z historyczną jednostką', async () => {
++    const editor = makeEditor({ historicalPricingUnit: true })
++    editor.values.baseUnitCode = 'g'
++    editor.values.pricingBasis = 'NOMINAL_UNIT'
++    editor.values.pricingAmount = '10'
++    editor.values.pricingUnitCode = 'kg'
++    editor.values.conversions = []
++    editorMock.mockResolvedValue(editor)
++    capabilitiesMock.mockResolvedValue({
++      ...makeCapabilities(),
++      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
++    })
++    renderForm()
++    fireEvent.change(await screen.findByLabelText('Nominalna'), { target: { value: '20' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    expect(await screen.findByText(/Aby zmienić jednostkę lub ilości/)).toBeTruthy()
++    expect(reviseMock).not.toHaveBeenCalled()
++    fireEvent.change(screen.getByLabelText('Podstawa ceny'), { target: { value: 'PACKAGE' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    expect(await screen.findByText('Podaj nową cenę dla bieżącej rewizji.')).toBeTruthy()
++    expect(reviseMock).not.toHaveBeenCalled()
++    fireEvent.change(screen.getByLabelText(/^Średnia cena netto opakowania/), { target: { value: '10' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    await screen.findByText('Zapisano nową rewizję roboczą v5')
++    expect(reviseMock.mock.calls.at(-1)?.[1]).toMatchObject({
++      pricing: { basis: 'PACKAGE', amount: '10' },
++      conversions: [],
++    })
++  })
++
++  it('nie przypisuje archiwalnej jednostki historycznej jako nowej ceny', async () => {
++    const editor = makeEditor({ historicalPricingUnit: true })
++    editor.values.baseUnitCode = 'g'
++    editor.values.pricingBasis = 'NOMINAL_UNIT'
++    editor.values.pricingAmount = '10'
++    editor.values.pricingUnitCode = 'kg'
++    editor.values.conversions = []
++    editorMock.mockResolvedValue(editor)
++    vi.mocked(fetchRawMaterialUnits).mockResolvedValue([
++      { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1', archivedAt: null, isBase: true },
++      { code: 'kg', name: 'kilogram', symbol: 'kg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1000', archivedAt: '2026-01-01', isBase: false },
++    ])
++    capabilitiesMock.mockResolvedValue({
++      ...makeCapabilities(),
++      actions: { create: false, edit: true, viewReferencePrice: true, manageReferencePrice: true },
++    })
++    renderForm()
++    fireEvent.change(await screen.findByLabelText('Średnia cena netto za kg nominalne (PLN)'), { target: { value: '11' } })
++    fireEvent.click(screen.getByRole('button', { name: 'Zapisz nową rewizję roboczą' }))
++    expect(await screen.findByText(/aktywną jednostkę ceny dla bieżącej rewizji/)).toBeTruthy()
++    expect(reviseMock).not.toHaveBeenCalled()
++  })
++
+   it('nie wysyła zmienionej ceny po cofnięciu grantu w trakcie edycji', async () => {
+     const authorized = {
+       ...makeCapabilities(),
+diff --git a/frontend/src/rawMaterials/RawMaterialEditForm.tsx b/frontend/src/rawMaterials/RawMaterialEditForm.tsx
+index efb26a8..c560277 100644
+--- a/frontend/src/rawMaterials/RawMaterialEditForm.tsx
++++ b/frontend/src/rawMaterials/RawMaterialEditForm.tsx
+@@ -108,6 +108,8 @@ function buildEditPayload(
+   units: RawMaterialUnitOption[],
+   documentUploadIds: string[],
+   detachDocumentVersionIds: string[],
++  historicalPricingUnit: boolean,
++  historicalPriceConfirmed: boolean,
+ ): RawMaterialEditPayload {
+   const nominal = normalizeDecimalInput(values.nominalQuantity)
+   const usable = normalizeDecimalInput(values.usableQuantity)
+@@ -122,10 +124,11 @@ function buildEditPayload(
+       to_base_factor: normalizeDecimalInput(conversion.toBaseFactor),
+       basis: conversion.basis.trim(),
+     }
+-  }), values, includePricing)
++  }), values, includePricing && (!historicalPricingUnit || historicalPriceConfirmed))
+   const pricingChanged = values.pricingBasis !== initialValues.pricingBasis
+     || values.pricingAmount !== initialValues.pricingAmount
+     || (values.pricingBasis === 'NOMINAL_UNIT' && values.pricingUnitCode !== initialValues.pricingUnitCode)
++    || (historicalPricingUnit && historicalPriceConfirmed)
+ 
+   return {
+     category_id: values.categoryId,
+@@ -188,6 +191,7 @@ export default function RawMaterialEditForm({
+   const [allergenValidation, setAllergenValidation] = useState<string | null>(null)
+   const [focusError, setFocusError] = useState(0)
+   const [initialValues, setInitialValues] = useState<RawMaterialCreateValues | null>(null)
++  const [historicalPriceConfirmed, setHistoricalPriceConfirmed] = useState(false)
+   const [changeReason, setChangeReason] = useState('')
+   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+   const [serverErrors, setServerErrors] = useState<Record<string, string>>({})
+@@ -278,6 +282,7 @@ export default function RawMaterialEditForm({
+         const formattedValues = editableValues(editor.values)
+         setValues(formattedValues)
+         setInitialValues(formattedValues)
++        setHistoricalPriceConfirmed(false)
+         setCanEditAllergens(permitted)
+         setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
+         setCanViewUsableCost(capabilities.actions.viewUsableCost === true)
+@@ -539,6 +544,7 @@ export default function RawMaterialEditForm({
+       const formattedValues = editableValues(editor.values)
+       setValues(formattedValues)
+       setInitialValues(formattedValues)
++      setHistoricalPriceConfirmed(false)
+       setCanEditAllergens(permitted)
+       setCanManageReferencePrice(capabilities.actions.manageReferencePrice === true)
+       setCanViewReferencePrice(capabilities.actions.viewReferencePrice === true)
+@@ -619,6 +625,29 @@ export default function RawMaterialEditForm({
+       return
+     }
+     const errors = validateRawMaterialCreate(values, true, unitOptions)
++    if (snapshot.historicalPricingUnit && initialValues) {
++      if (!historicalPriceConfirmed) {
++        delete errors.pricingUnitCode
++        const canonical = (value: string) => {
++          const [integer, fraction = ''] = normalizeDecimalInput(value).split('.')
++          return `${integer.replace(/^0+(?=\d)/, '')}.${fraction.replace(/0+$/, '')}`
++        }
++        const effectiveUsable = (v: RawMaterialCreateValues) => v.usableQuantityExplicit ? v.usableQuantity : v.nominalQuantity
++        if (values.baseUnitCode !== initialValues.baseUnitCode
++          || canonical(values.nominalQuantity) !== canonical(initialValues.nominalQuantity)
++          || canonical(effectiveUsable(values)) !== canonical(effectiveUsable(initialValues))) {
++          errors.pricingAmount = 'Cena pochodzi z wcześniejszej rewizji. Aby zmienić jednostkę lub ilości, wybierz i podaj cenę świadomie.'
++        }
++      } else {
++        if (!normalizeDecimalInput(values.pricingAmount)) {
++          errors.pricingAmount = 'Podaj nową cenę dla bieżącej rewizji.'
++        }
++        if (values.pricingBasis === 'NOMINAL_UNIT'
++          && unitOptions.find((unit) => unit.code === values.pricingUnitCode)?.archivedAt !== null) {
++          errors.pricingAmount = 'Wybierz cenę opakowania lub aktywną jednostkę ceny dla bieżącej rewizji.'
++        }
++      }
++    }
+     const allergensChanged = JSON.stringify(allergens) !== JSON.stringify(initialAllergens)
+     const declarationError = allergensChanged ? allergenError(allergens, false) : null
+     setAllergenValidation(declarationError)
+@@ -641,6 +670,8 @@ export default function RawMaterialEditForm({
+       unitOptions,
+       documentUploadIds,
+       detachDocumentVersionIds,
++      snapshot.historicalPricingUnit === true,
++      historicalPriceConfirmed,
+     ),
+       ...(allergensChanged ? { allergen_declaration: allergens } : {}) }
+     operationLocked.current = true
+@@ -865,16 +896,25 @@ export default function RawMaterialEditForm({
+                     )}
+                     <span className="field-hint">Pozostaw ilość użytkową pustą, aby automatycznie użyć nominalnej. Maksymalnie 6 miejsc po przecinku.</span>
+                   </fieldset>
+-                  {canViewReferencePrice && (
++                  {canViewReferencePrice && (<>
++                    {snapshot.historicalPricingUnit && <p className="field-hint">
++                      Cena zachowuje jednostkę z wcześniejszej rewizji. Zmiana ilości lub jednostki wymaga świadomego podania ceny dla bieżącej rewizji.
++                    </p>}
+                     <RawMaterialPricingFields id="edit" values={values}
+                       disabled={phase !== 'editing' || !canManageReferencePrice || unitsLoading || Boolean(unitsError)}
+-                      canCalculate={canManageReferencePrice} canViewCost={canViewUsableCost}
++                      canCalculate={canManageReferencePrice && (!snapshot.historicalPricingUnit || historicalPriceConfirmed)} canViewCost={canViewUsableCost}
+                       error={getError('pricingAmount')} unitOptions={unitOptions}
+-                      onBasisChange={(value) => setField('pricingBasis', value)}
+-                      onAmountChange={(value) => setField('pricingAmount', value)}
++                      onBasisChange={(value) => {
++                        setHistoricalPriceConfirmed(true)
++                        if (snapshot.historicalPricingUnit && value !== values.pricingBasis) {
++                          setField('pricingAmount', '')
++                        }
++                        setField('pricingBasis', value)
++                      }}
++                      onAmountChange={(value) => { setHistoricalPriceConfirmed(true); setField('pricingAmount', value) }}
+                       onSessionExpired={onSessionExpired} onAuthorizationDenied={onAuthorizationDenied}
+                       onModuleUnavailable={onModuleUnavailable} />
+-                  )}
++                  </>)}
+                   {canManageSuppliers && (
+                     <label className="create-form-field create-form-field-wide" htmlFor="edit-suppliers">
+                       Dostawcy — powiązania informacyjne
+diff --git a/frontend/src/rawMaterials/RawMaterialPricingFields.tsx b/frontend/src/rawMaterials/RawMaterialPricingFields.tsx
+index e94756e..be2e308 100644
+--- a/frontend/src/rawMaterials/RawMaterialPricingFields.tsx
++++ b/frontend/src/rawMaterials/RawMaterialPricingFields.tsx
+@@ -40,7 +40,7 @@ export default function RawMaterialPricingFields({
+     values.baseUnitCode, values.nominalQuantity, values.usableQuantity,
+     values.usableQuantityExplicit, values.pricingBasis, amount, values.pricingUnitCode,
+   ])
+-  const valid = canCalculate && amount !== '' && !errors.nominalQuantity && !errors.usableQuantity
++  const valid = canCalculate && amount !== '' && !errors.baseUnitCode && !errors.nominalQuantity && !errors.usableQuantity
+     && !errors.pricingAmount && !errors.pricingUnitCode
+ 
+   useEffect(() => {
+diff --git a/frontend/src/rawMaterials/api.test.ts b/frontend/src/rawMaterials/api.test.ts
+index 4640eb7..8b783fc 100644
+--- a/frontend/src/rawMaterials/api.test.ts
++++ b/frontend/src/rawMaterials/api.test.ts
+@@ -351,6 +351,100 @@ describe('kontrakt edycji surowca', () => {
+     })
+   })
+ 
++  it.each([
++    ['mg', 'kg', 'MASS'],
++    ['g', 'kg', 'MASS'],
++    ['kg', 'kg', 'MASS'],
++    ['ml', 'ml', 'VOLUME'],
++    ['l', 'ml', 'VOLUME'],
++    ['pc', 'pc', 'COUNT'],
++    ['mg_custom', 'kg', 'MASS'],
++    ['a'.repeat(24), 'kg', 'MASS'],
++  ])('akceptuje cenę nominalną w jednostce %s', async (code, baseCode, dimension) => {
++    const base = { unit_code: baseCode, dimension, conversion_kind: 'BASE', to_base_factor: '1', basis: null }
++    const unit = { unit_code: code, dimension, conversion_kind: 'METRIC', to_base_factor: '0.001', basis: null }
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: {
++        ...editorData,
++        pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: code },
++        revision: { ...editorData.revision, base_unit_code: baseCode, base_unit_dimension: dimension,
++          units: code === baseCode ? [base] : [base, unit] },
++      },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
++      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: code },
++    })
++  })
++
++  it.each([
++    ['nieznany kod', 'missing', []],
++    ['nieprawidłowy kod', 'BAD', [{ unit_code: 'BAD', dimension: 'MASS', conversion_kind: 'METRIC' }]],
++    ['inny wymiar', 'ml', [{ unit_code: 'ml', dimension: 'VOLUME', conversion_kind: 'MATERIAL_SPECIFIC', to_base_factor: '1', basis: 'x' }]],
++    ['przeliczenie specyficzne', 'g', [{ unit_code: 'g', dimension: 'MASS', conversion_kind: 'MATERIAL_SPECIFIC' }]],
++  ])('odrzuca nieprawidłową jednostkę ceny: %s', async (_label, code, units) => {
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: {
++        ...editorData,
++        pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: code },
++        revision: { ...editorData.revision, units: [editorData.revision.units[0], ...units] },
++      },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
++  })
++
++  it('wczytuje historyczną cenę bazową jako cenę jednostkową bez zmiany jej wartości', async () => {
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'LEGACY_BASE_UNIT', amount: '12', unit_code: 'kg' } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
++      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: 'kg' },
++    })
++  })
++
++  it('wczytuje cenę z potwierdzoną jednostką wcześniejszej rewizji bez zmiany podstawy', async () => {
++    const source = { revision_id: '00000000-0000-4000-8000-000000000209',
++      unit_code: 'mg', dimension: 'MASS', conversion_kind: 'METRIC' }
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: 'mg', source_unit: source } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
++      historicalPricingUnit: true,
++      values: { pricingBasis: 'NOMINAL_UNIT', pricingAmount: '12', pricingUnitCode: 'mg' },
++    })
++  })
++
++  it.each([
++    { revision_id: revisionId, unit_code: 'mg', dimension: 'MASS', conversion_kind: 'METRIC' },
++    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'g', dimension: 'MASS', conversion_kind: 'METRIC' },
++    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'mg', dimension: 'MASS', conversion_kind: 'MATERIAL_SPECIFIC' },
++    { revision_id: '00000000-0000-4000-8000-000000000209', unit_code: 'mg', dimension: 'INVALID', conversion_kind: 'METRIC' },
++  ])('odrzuca nieprawidłowe pochodzenie jednostki ceny: %o', async (source) => {
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'NOMINAL_UNIT', amount: '12', unit_code: 'mg', source_unit: source } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
++  })
++
++  it('odrzuca historyczną cenę w jednostce innej niż podstawowa', async () => {
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'LEGACY_BASE_UNIT', amount: '12', unit_code: 'g' } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
++  })
++
++  it('odrzuca jednostkę ceny dołączoną do ceny za opakowanie', async () => {
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'PACKAGE', amount: '12', unit_code: null } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).resolves.toMatchObject({
++      values: { pricingBasis: 'PACKAGE', pricingAmount: '12' },
++    })
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
++      data: { ...editorData, pricing_input: { basis: 'PACKAGE', amount: '12', unit_code: 'kg' } },
++    }))))
++    await expect(fetchRawMaterialEditor(materialId)).rejects.toThrow('niepełne lub nieprawidłowe')
++  })
++
+   it('wysyła pełny payload PATCH i nieprzezroczysty token If-Match', async () => {
+     const revised = {
+       id: materialId,
+diff --git a/frontend/src/rawMaterials/api.ts b/frontend/src/rawMaterials/api.ts
+index 7645c86..a59c7c2 100644
+--- a/frontend/src/rawMaterials/api.ts
++++ b/frontend/src/rawMaterials/api.ts
+@@ -86,6 +86,7 @@ export type RawMaterialEditor = {
+   revisionId: string
+   revisionNo: number
+   version: string
++  historicalPricingUnit?: boolean
+   values: RawMaterialCreateValues
+ }
+ 
+@@ -323,11 +324,13 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
+   let pricingUnitCode: RawMaterialPricingUnit = baseUnitCode
+   if (value.pricing_input !== null && value.pricing_input !== undefined) {
+     if (!isRecord(value.pricing_input)
+-      || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT')
++      || (value.pricing_input.basis !== 'PACKAGE' && value.pricing_input.basis !== 'NOMINAL_UNIT'
++        && value.pricing_input.basis !== 'LEGACY_BASE_UNIT')
+       || typeof value.pricing_input.amount !== 'string' || !DECIMAL.test(value.pricing_input.amount)) {
+       throw invalid()
+     }
+-    pricingBasis = value.pricing_input.basis
++    if (value.pricing_input.basis === 'PACKAGE' && value.pricing_input.unit_code != null) throw invalid()
++    pricingBasis = value.pricing_input.basis === 'PACKAGE' ? 'PACKAGE' : 'NOMINAL_UNIT'
+     pricingAmount = value.pricing_input.amount
+     if (pricingBasis === 'NOMINAL_UNIT') {
+       if (typeof value.pricing_input.unit_code !== 'string'
+@@ -369,11 +372,25 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
+   })
+   const baseUnit = units.find((unit) => isRecord(unit) && unit.unit_code === baseUnitCode)
+   const pricingUnit = units.find((unit) => isRecord(unit) && unit.unit_code === pricingUnitCode)
++  const pricingInput = isRecord(value.pricing_input) ? value.pricing_input : null
++  const currentPricingUnitValid = isRecord(pricingUnit)
++    && pricingUnit.dimension === revision.base_unit_dimension
++    && ['BASE', 'METRIC'].includes(String(pricingUnit.conversion_kind))
++    && (pricingInput?.basis !== 'LEGACY_BASE_UNIT' || pricingUnitCode === baseUnitCode)
++  let historicalPricingUnit = false
++  if (pricingBasis === 'NOMINAL_UNIT' && !currentPricingUnitValid) {
++    const source = pricingInput?.source_unit
++    if (!isRecord(source) || typeof source.revision_id !== 'string' || !UUID.test(source.revision_id)
++      || source.revision_id === revision.id || source.unit_code !== pricingUnitCode
++      || typeof source.dimension !== 'string' || !RAW_DIMENSIONS.includes(source.dimension as typeof RAW_DIMENSIONS[number])
++      || !['BASE', 'METRIC'].includes(String(source.conversion_kind))
++      || (pricingInput?.basis === 'LEGACY_BASE_UNIT' && source.conversion_kind !== 'BASE')) throw invalid()
++    historicalPricingUnit = true
++  } else if (pricingInput?.source_unit !== undefined) {
++    throw invalid()
++  }
+   if (baseUnitCount !== 1 || !baseUnit || !isRecord(baseUnit)
+-    || baseUnit.dimension !== revision.base_unit_dimension || baseUnit.conversion_kind !== 'BASE'
+-    || pricingBasis === 'NOMINAL_UNIT' && (!pricingUnit || !isRecord(pricingUnit)
+-      || pricingUnit.dimension !== revision.base_unit_dimension
+-      || !['BASE', 'METRIC'].includes(String(pricingUnit.conversion_kind)))) throw invalid()
++    || baseUnit.dimension !== revision.base_unit_dimension || baseUnit.conversion_kind !== 'BASE') throw invalid()
+ 
+   return {
+     id: value.id,
+@@ -382,6 +399,7 @@ function parseRawMaterialEditor(value: unknown, expectedId: string): RawMaterial
+     revisionId: revision.id as string,
+     revisionNo: revision.revision_no as number,
+     version: value.version,
++    ...(historicalPricingUnit ? { historicalPricingUnit: true } : {}),
+     values: {
+       categoryId,
+       name,
+diff --git a/frontend/src/rawMaterials/create.test.ts b/frontend/src/rawMaterials/create.test.ts
+index 488b9db..3f15131 100644
+--- a/frontend/src/rawMaterials/create.test.ts
++++ b/frontend/src/rawMaterials/create.test.ts
+@@ -102,6 +102,21 @@ describe('walidacja formularza tworzenia surowca', () => {
+     expect(validateRawMaterialCreate({ ...packagePrice, pricingAmount: '1.123456789012345' }).pricingAmount).toBeTruthy()
+   })
+ 
++  it('odrzuca jednostki nieobecne w przekazanym słowniku, także gdy jest pusty', () => {
++    const values = {
++      ...validValues(),
++      baseUnitCode: 'unknown',
++      nominalQuantity: '10',
++      pricingBasis: 'NOMINAL_UNIT' as const,
++      pricingAmount: '10',
++      pricingUnitCode: 'unknown',
++    }
++    const errors = validateRawMaterialCreate(values, true, [])
++    expect(errors.baseUnitCode).toBeTruthy()
++    expect(errors.pricingUnitCode).toBeTruthy()
++    expect(validateRawMaterialCreate({ ...values, baseUnitCode: 'g', pricingUnitCode: 'kg' }, true, []).baseUnitCode).toBeTruthy()
++  })
++
+   it('wymaga liczb całkowitych dla jednostki pc', () => {
+     const values = {
+       ...validValues(),
+diff --git a/frontend/src/rawMaterials/create.ts b/frontend/src/rawMaterials/create.ts
+index f8d2aed..5bea2bd 100644
+--- a/frontend/src/rawMaterials/create.ts
++++ b/frontend/src/rawMaterials/create.ts
+@@ -221,7 +221,7 @@ function decimalGreaterThan(left: string, right: string): boolean {
+ export function validateRawMaterialCreate(
+   values: RawMaterialCreateValues,
+   requireNominal = false,
+-  units: RawMaterialUnitOption[] = [],
++  units: RawMaterialUnitOption[] = RAW_UNIT_OPTIONS_BASELINE,
+ ): Record<string, string> {
+   const errors: Record<string, string> = {}
+   const name = values.name.trim()
+@@ -231,6 +231,9 @@ export function validateRawMaterialCreate(
+   if (!name) errors.name = 'Podaj nazwę surowca.'
+   else if ([...name].length > 200) errors.name = 'Nazwa może mieć maksymalnie 200 znaków.'
+   if ([...description].length > 10000) errors.description = 'Opis może mieć maksymalnie 10 000 znaków.'
++  if (!units.some((unit) => unit.code === values.baseUnitCode)) {
++    errors.baseUnitCode = 'Wybierz prawidłową jednostkę podstawową.'
++  }
+ 
+   const nominal = normalizeDecimalInput(values.nominalQuantity)
+   const usable = normalizeDecimalInput(values.usableQuantity)
+@@ -258,7 +261,8 @@ export function validateRawMaterialCreate(
+   }
+   if (pricingAmount && !nominal) errors.nominalQuantity = 'Cena wymaga ilości nominalnej.'
+   if (values.pricingBasis === 'NOMINAL_UNIT'
+-    && unitDimension(values.pricingUnitCode, units) !== unitDimension(values.baseUnitCode, units)) {
++    && (!units.some((unit) => unit.code === values.pricingUnitCode)
++      || unitDimension(values.pricingUnitCode, units) !== unitDimension(values.baseUnitCode, units))) {
+     errors.pricingUnitCode = 'Jednostka ceny nie odpowiada jednostce surowca.'
+   }
+ 
+@@ -279,7 +283,7 @@ export function validateRawMaterialCreate(
+   const seenUnits = new Set<string>([values.baseUnitCode])
+   values.conversions.forEach((conversion, index) => {
+     if (!/^[a-z][a-z0-9_]{0,23}$/.test(conversion.unitCode)
+-      || (units.length > 0 && !units.some((unit) => unit.code === conversion.unitCode))) {
++      || !units.some((unit) => unit.code === conversion.unitCode)) {
+       errors[`conversions.${index}.unitCode`] = 'Wybierz prawidłową jednostkę.'
+       return
+     }
+diff --git a/backend/app/Domain/RawMaterials/RawMaterialService.php b/backend/app/Domain/RawMaterials/RawMaterialService.php
+index 1082312..df6c465 100644
+--- a/backend/app/Domain/RawMaterials/RawMaterialService.php
++++ b/backend/app/Domain/RawMaterials/RawMaterialService.php
+@@ -3458,15 +3459,53 @@ private function pricingInputForEditor(User $actor, object $revision): ?array
+             $amount = $event->net_pln_per_package;
+             $unitCode = null;
+         }
+-        if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT'], true)) {
++        if (! in_array($basis, ['PACKAGE', 'NOMINAL_UNIT', 'LEGACY_BASE_UNIT'], true)) {
+             return null;
+         }
+ 
+-        return [
++        $pricing = [
+             'basis' => $basis,
+             'amount' => (string) $amount,
+             'unit_code' => $unitCode,
+         ];
++        if ($basis !== 'PACKAGE') {
++            $currentUnit = DB::table('raw_material_revision_units')
++                ->where('organization_id', $actor->organization_id)
++                ->where('revision_id', $revision->id)
++                ->where('unit_code', $unitCode)->first();
++            $usableInRevision = $currentUnit
++                && $currentUnit->dimension === $revision->base_unit_dimension
++                && in_array($currentUnit->conversion_kind, ['BASE', 'METRIC'], true)
++                && ($basis !== 'LEGACY_BASE_UNIT' || $unitCode === $revision->base_unit_code);
++            if (! $usableInRevision) {
++                $sourceUnit = DB::table('raw_material_revision_units')
++                    ->join('raw_material_revisions', 'raw_material_revisions.id', '=', 'raw_material_revision_units.revision_id')
++                    ->where('raw_material_revision_units.organization_id', $actor->organization_id)
++                    ->where('raw_material_revision_units.revision_id', $event->pricing_revision_id)
++                    ->where('raw_material_revision_units.unit_code', $unitCode)
++                    ->first([
++                        'raw_material_revision_units.unit_code',
++                        'raw_material_revision_units.dimension',
++                        'raw_material_revision_units.conversion_kind',
++                        'raw_material_revisions.base_unit_code',
++                        'raw_material_revisions.base_unit_dimension',
++                    ]);
++                if (! $sourceUnit || $sourceUnit->dimension !== $sourceUnit->base_unit_dimension
++                    || ! in_array($sourceUnit->conversion_kind, ['BASE', 'METRIC'], true)
++                    || ($basis === 'LEGACY_BASE_UNIT'
++                        && ($sourceUnit->conversion_kind !== 'BASE' || $unitCode !== $sourceUnit->base_unit_code))) {
++                    throw new \LogicException('The reference price source unit cannot be verified.');
++                }
++                $pricing['source_unit'] = [
++                    'revision_id' => $event->pricing_revision_id,
++                    'unit_code' => $sourceUnit->unit_code,
++                    'dimension' => $sourceUnit->dimension,
++                    'conversion_kind' => $sourceUnit->conversion_kind,
++                ];
++            }
++        }
++
++        return $pricing;
+     }
+ 
+     private function presentCurrent(User $actor, string $materialId): array

@@ -28,7 +28,7 @@ describe('integracja z powłoką VELTRA', () => {
     render(<App />)
 
     expect((await screen.findByRole('link', { name: 'RAW' })).getAttribute('href')).toBe('/raw-materials')
-    expect(screen.getByRole('link', { name: 'Katalog surowców BOSS' }).getAttribute('href')).toBe('/boss/raw-materials')
+    expect(screen.queryByRole('link', { name: 'Katalog surowców BOSS' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Pulpit' }).getAttribute('href')).toBe('/')
     expect(screen.getByText('Organizacja').closest('[aria-disabled="true"]')).toBeTruthy()
     expect(screen.getByText('Zaloguj się, aby wybrać lokalizację')).toBeTruthy()
@@ -37,7 +37,7 @@ describe('integracja z powłoką VELTRA', () => {
     expect(screen.getByLabelText('Adres e-mail')).toBeTruthy()
   })
 
-  it('obsługuje bezpośrednią trasę BOSS bez założeń o roli po stronie klienta', async () => {
+  it('mapuje bezpośrednią trasę BOSS do wspólnej nawigacji RAW', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/health')) {
@@ -56,8 +56,9 @@ describe('integracja z powłoką VELTRA', () => {
 
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: 'Katalog surowców BOSS' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Katalog surowców BOSS' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.getByText('Zaloguj się i wybierz lokalizację, aby otworzyć katalog BOSS.')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Katalog surowców' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'RAW' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.queryByRole('link', { name: 'Katalog surowców BOSS' })).toBeNull()
+    expect(screen.getByText('Zaloguj się i wybierz lokalizację, aby otworzyć katalog.')).toBeTruthy()
   })
 })

@@ -7,6 +7,7 @@ type Props = {
   identityKey: string
   operatingLocationId: string
   onSessionExpired: () => void
+  onAccessDenied?: () => void
 }
 
 type CatalogStatus = 'ready' | 'forbidden' | 'unavailable' | 'error' | 'expired'
@@ -45,6 +46,7 @@ export default function BossRawMaterialsCatalogPage({
   identityKey,
   operatingLocationId,
   onSessionExpired,
+  onAccessDenied,
 }: Props) {
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
@@ -87,6 +89,7 @@ export default function BossRawMaterialsCatalogPage({
         if (failure) {
           setCatalogState({ key: requestKey, ...failure })
           if (failure.status === 'expired') onSessionExpired()
+          if (failure.status === 'forbidden') onAccessDenied?.()
         } else {
           setCatalogState({
             key: requestKey,
@@ -100,7 +103,7 @@ export default function BossRawMaterialsCatalogPage({
       active = false
       controller.abort()
     }
-  }, [onSessionExpired, operatingLocationId, identityKey, pageNumber, requestKey, retry, search])
+  }, [onAccessDenied, onSessionExpired, operatingLocationId, identityKey, pageNumber, requestKey, retry, search])
 
   useEffect(() => {
     if (!selectedId || !detailKey) return
@@ -120,6 +123,7 @@ export default function BossRawMaterialsCatalogPage({
           setSelected(null)
           setDetailState(null)
           if (failure.status === 'expired') onSessionExpired()
+          if (failure.status === 'forbidden') onAccessDenied?.()
           return
         }
         setDetailState({
@@ -133,7 +137,7 @@ export default function BossRawMaterialsCatalogPage({
       active = false
       controller.abort()
     }
-  }, [detailKey, onSessionExpired, requestKey, selectedId])
+  }, [detailKey, onAccessDenied, onSessionExpired, requestKey, selectedId])
 
   function applySearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

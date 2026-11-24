@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api'
+import { fetchBossRawMaterials, type BossRawMaterialsPage } from '../bossRawMaterials/api'
 import RawMaterialsCatalogPage from './RawMaterialsCatalogPage'
 import { emptyRawMaterialCreateValues } from './create'
 import {
@@ -48,6 +49,11 @@ vi.mock('./api', async (importOriginal) => ({
   renameCategory: vi.fn(),
   reviseRawMaterial: vi.fn(),
   changeRawMaterialLifecycle: vi.fn(),
+}))
+
+vi.mock('../bossRawMaterials/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../bossRawMaterials/api')>(),
+  fetchBossRawMaterials: vi.fn(),
 }))
 
 const materialA = '00000000-0000-4000-8000-000000000001'
@@ -164,6 +170,7 @@ function page(
 }
 
 const fetchCatalogMock = vi.mocked(fetchCatalog)
+const fetchBossRawMaterialsMock = vi.mocked(fetchBossRawMaterials)
 const fetchCategoriesMock = vi.mocked(fetchCategories)
 const fetchRawMaterialDetailMock = vi.mocked(fetchRawMaterialDetail)
 const fetchRawMaterialCompletionMock = vi.mocked(fetchRawMaterialCompletion)
@@ -182,6 +189,7 @@ const downloadCatalogExportMock = vi.mocked(downloadCatalogExport)
 let originalVisibilityDescriptor: PropertyDescriptor | undefined
 
 beforeEach(() => {
+  fetchBossRawMaterialsMock.mockRejectedValue(new ApiError(403, 'Brak dostępu.'))
   fetchRawMaterialUnitsMock.mockResolvedValue([
     { code: 'mg', name: 'miligram', symbol: 'mg', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '0.001000000000', archivedAt: null, isBase: false },
     { code: 'g', name: 'gram', symbol: 'g', dimension: 'MASS', baseUnitCode: 'g', toBaseFactor: '1.000000000000', archivedAt: null, isBase: true },
@@ -231,6 +239,64 @@ afterEach(() => {
 })
 
 describe('katalog surowców', () => {
+  it('udostępnia widok zatwierdzonego BOSS wyłącznie po potwierdzeniu dostępu w bieżącym kontekście', async () => {
+    const bossPage: BossRawMaterialsPage = {
+      data: [{
+        id: materialA,
+        code: 'RAW-000001',
+        name: 'Mąka BOSS',
+        category: { id: 'category-1', name: 'Mąki' },
+        base_unit_code: 'kg',
+        supplier_names: ['Dostawca BOSS'],
+      }],
+      meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 },
+    }
+    fetchBossRawMaterialsMock.mockResolvedValue(bossPage)
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Zatwierdzony BOSS' }))
+    expect(await screen.findByText('Mąka BOSS')).toBeTruthy()
+    expect(fetchBossRawMaterialsMock).toHaveBeenCalledWith('', 1, expect.any(AbortSignal))
+    expect(screen.queryByText('123,45 zł')).toBeNull()
+  })
+
+  it('nie pokazuje widoku BOSS po odmowie dostępu i zachowuje katalog RAW', async () => {
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    expect(await screen.findByText('Surowiec 1')).toBeTruthy()
+    expect(fetchBossRawMaterialsMock).toHaveBeenCalledWith('', 1, expect.any(AbortSignal))
+    expect(screen.queryByRole('tab', { name: 'Zatwierdzony BOSS' })).toBeNull()
+  })
+
+  it('cofa widok BOSS, jeśli backend odrzuci dostęp po wcześniejszym sprawdzeniu', async () => {
+    fetchBossRawMaterialsMock
+      .mockResolvedValueOnce({
+        data: [],
+        meta: { current_page: 1, per_page: 25, total: 0, last_page: 1 },
+      })
+      .mockRejectedValueOnce(new ApiError(403, 'Brak dostępu.'))
+    render(<RawMaterialsCatalogPage onSessionExpired={vi.fn()} operatingLocationId={locationA} />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Zatwierdzony BOSS' }))
+    await waitFor(() => expect(screen.queryByRole('tab', { name: 'Zatwierdzony BOSS' })).toBeNull())
+    expect(fetchBossRawMaterialsMock).toHaveBeenCalledTimes(2)
+    expect(await screen.findByText('Surowiec 1')).toBeTruthy()
+  })
+
+  it('otwiera starą trasę BOSS we wspólnym RAW, ale wraca do RAW przy odmowie', async () => {
+    render(
+      <RawMaterialsCatalogPage
+        onSessionExpired={vi.fn()}
+        operatingLocationId={locationA}
+        initialBossCatalogView
+      />,
+    )
+
+    expect(await screen.findByText('Surowiec 1')).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Zatwierdzony BOSS' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Katalog RAW' }).getAttribute('aria-selected')).toBe('true')
+  })
+
   it('odświeża szkice, szczegóły i zatwierdzony katalog po SUBMIT i APPROVE bez przeładowania aplikacji', async () => {
     let state: 'DRAFT' | 'VERIFICATION' | 'ACTIVE' = 'DRAFT'
     fetchCatalogMock.mockImplementation(async (query) => query.view === 'workbench'

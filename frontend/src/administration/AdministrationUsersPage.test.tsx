@@ -87,6 +87,40 @@ afterEach(() => {
 })
 
 describe('AdministrationUsersPage', () => {
+  it('replaces an existing role atomically across selected locations', async () => {
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> | null }> = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      const method = init.method ?? 'GET'
+      const body = typeof init.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null
+      calls.push({ url, method, body })
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: {
+        ...details,
+        roles: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'RESTAURANT_MANAGER',
+          location_id: restaurantId, location_name: 'Restauracja A', granted_at: '2026-11-01T10:00:00Z', revoked_at: null }],
+        memberships: [...details.memberships, { ...details.memberships[0], id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          location_id: secondRestaurantId, location_name: 'Restauracja B' }],
+      } }))
+      if (url.endsWith(`/security/users/${userId}/role`) && method === 'PUT') return Promise.resolve(json({ data: [] }))
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    }))
+
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    const drawer = await screen.findByRole('region', { name: 'Jan Test' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Role i lokalizacje' }))
+    fireEvent.click(within(drawer).getByRole('button', { name: '+ Przypisz rolę' }))
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: 'Restauracja A — Restauracja' }))
+    fireEvent.click(within(drawer).getByRole('checkbox', { name: 'Restauracja B — Restauracja' }))
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Zapisz rolę' }))
+    expect(await screen.findByText('Rola została zmieniona.')).toBeTruthy()
+    expect(calls.filter(({ url, method }) => url.endsWith(`/security/users/${userId}/role`) && method === 'PUT')
+      .map(({ body }) => body)).toEqual([{ role: 'EMPLOYEE', location_ids: [restaurantId, secondRestaurantId] }])
+    expect(calls.some(({ url, method }) => url.endsWith('/roles') && method === 'POST')).toBe(false)
+  })
+
   it('renders the user avatar editor and submits an administrator-scoped selection', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -461,6 +495,7 @@ describe('AdministrationUsersPage', () => {
   it('traps keyboard focus in the protected-action dialog and restores it on Escape', async () => {
     const roleDetails = {
       ...details,
+      email_verified_at: null,
       roles: [{
         id: '99999999-9999-4999-8999-999999999999',
         role: 'EMPLOYEE',
@@ -497,6 +532,53 @@ describe('AdministrationUsersPage', () => {
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
     expect(document.activeElement).toBe(revokeButton)
+  })
+
+  it('disables revoking the last effective role of an active verified user', async () => {
+    const roleDetails = {
+      ...details,
+      roles: [{
+        id: '99999999-9999-4999-8999-999999999999',
+        role: 'EMPLOYEE',
+        location_id: restaurantId,
+        location_name: 'Restauracja A',
+        granted_at: '2026-11-01T10:00:00Z',
+        revoked_at: null,
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: roleDetails }))
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Role i lokalizacje' }))
+    expect((screen.getByRole('button', { name: 'Cofnij rolę' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('allows an inactive account to receive an explicit role and membership before reactivation', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/administration/locations')) return Promise.resolve(json({ data: locations }))
+      if (url.includes('/administration/users?')) {
+        return Promise.resolve(json({ data: [user], meta: { current_page: 1, per_page: 25, total: 1, last_page: 1 } }))
+      }
+      if (url.endsWith(`/administration/users/${userId}`)) return Promise.resolve(json({ data: { ...details, is_active: false, roles: [], memberships: [] } }))
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+    render(<AdministrationUsersPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
+    await screen.findByRole('heading', { name: 'Jan Test' })
+    fireEvent.click(screen.getByRole('button', { name: 'Role i lokalizacje' }))
+    expect((screen.getByRole('button', { name: '+ Przypisz rolę' }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '+ Przypisz lokalizację' }))
+    expect((screen.getByRole('button', { name: 'Zapisz przypisanie' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('loads the requested user-directory page through pagination controls', async () => {
@@ -588,12 +670,13 @@ describe('AdministrationUsersPage', () => {
     fireEvent.change(screen.getByLabelText('Nazwisko'), { target: { value: 'Osoba' } })
     fireEvent.change(screen.getByLabelText('Adres e-mail'), { target: { value: 'nowa@example.test' } })
     fireEvent.change(screen.getByLabelText('Przypisz do lokalizacji'), { target: { value: restaurantId } })
+    fireEvent.change(screen.getByLabelText('Rola nowego użytkownika'), { target: { value: 'EMPLOYEE' } })
     fireEvent.click(screen.getByRole('button', { name: 'Utwórz konto i wyślij link' }))
     expect(await screen.findByText(/wysłaliśmy link aktywacyjny/)).toBeTruthy()
     expect(calls).toContainEqual({
       url: `/api/v1/security/locations/${restaurantId}/personnel`,
       method: 'POST',
-      body: { first_name: 'Nowa', last_name: 'Osoba', email: 'nowa@example.test' },
+      body: { first_name: 'Nowa', last_name: 'Osoba', email: 'nowa@example.test', role: 'EMPLOYEE' },
     })
 
     fireEvent.click(await screen.findByRole('button', { name: 'Jan Test' }))
@@ -669,7 +752,7 @@ describe('AdministrationUsersPage', () => {
           location_type: 'RESTAURANT', location_is_active: true, is_active: !membershipRemoved,
           assigned_at: '2026-11-01T10:00:00Z', deactivated_at: membershipRemoved ? '2026-11-02T10:00:00Z' : null,
         }] : []
-        return Promise.resolve(json({ data: { ...details, roles: roleAssignments, memberships: [...details.memberships, ...additionalMemberships] } }))
+        return Promise.resolve(json({ data: { ...details, email_verified_at: null, roles: roleAssignments, memberships: [...details.memberships, ...additionalMemberships] } }))
       }
       if (url.endsWith(`/security/users/${userId}/roles`) && method === 'POST') {
         roleGranted = true

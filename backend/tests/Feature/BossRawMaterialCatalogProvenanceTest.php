@@ -14,7 +14,6 @@ use App\Domain\RawMaterials\BossRawMaterialCatalogService;
 use App\Domain\RawMaterials\RawMaterialCommercialService;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialService;
-use App\Domain\Sku\SkuPrefix;
 use App\Models\Location;
 use App\Models\LocationMembership;
 use App\Models\LocationModuleState;
@@ -51,12 +50,9 @@ class BossRawMaterialCatalogProvenanceTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->context = $this->primaryCentralKitchen();
-        $this->boss = $this->user('boss-raw-catalog-data@example.test');
-        $this->administrator = $this->user('admin-raw-catalog-data@example.test');
-        $this->rawSteward = $this->user('raw-raw-catalog-data@example.test');
-        $this->role($this->boss, BusinessRole::Boss);
-        $this->role($this->administrator, BusinessRole::Administrator);
-        $this->role($this->rawSteward, BusinessRole::Administrator);
+        $this->boss = $this->provisionedUser('boss-raw-catalog-data@example.test', BusinessRole::Boss);
+        $this->administrator = $this->provisionedUser('admin-raw-catalog-data@example.test', BusinessRole::Administrator);
+        $this->rawSteward = $this->provisionedUser('raw-raw-catalog-data@example.test', BusinessRole::Administrator);
         foreach ([$this->boss, $this->administrator, $this->rawSteward] as $user) {
             app(MembershipService::class)->assign($user, $this->context, $user->id);
         }
@@ -146,118 +142,31 @@ class BossRawMaterialCatalogProvenanceTest extends AuthorizationTestCase
         $this->assertArrayNotHasKey('archived_by', $item['category']);
     }
 
-    public function test_mismatched_current_approval_hash_excludes_list_and_detail_uniformly(): void
+    public function test_approved_content_hash_cannot_be_changed_and_remains_consistent_in_list_and_detail(): void
     {
         $materialId = $this->createApprovedMaterial('Hash mismatch material');
         $revisionId = DB::table('raw_materials')->where('id', $materialId)->value('approved_revision_id');
 
-        $this->withSetupConnection(function (Connection $connection) use ($revisionId): void {
-            $connection->statement('ALTER TABLE raw_material_revisions DISABLE TRIGGER USER');
-            try {
-                $connection->table('raw_material_revisions')->where('id', $revisionId)
-                    ->update(['content_hash' => str_repeat('f', 64)]);
-            } finally {
-                $connection->statement('ALTER TABLE raw_material_revisions ENABLE TRIGGER USER');
-            }
-        });
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_revisions')->where('id', $revisionId)
+            ->update(['content_hash' => str_repeat('f', 64)]));
+        $this->assertSame(1, $this->listing()['meta']['total']);
+        $this->assertSame($materialId, $this->detail($materialId)['id']);
+    }
 
-        $this->assertSame(0, $this->listing()['meta']['total']);
+    public function test_unknown_material_is_absent_from_results_count_and_detail(): void
+    {
+        $this->createApprovedMaterial('Own organization material');
+        $result = $this->listing();
+        $this->assertSame(1, $result['meta']['total']);
+        $this->assertSame(['Own organization material'], array_column($result['data'], 'name'));
+        $this->assertSame([], $this->listing(['search' => 'Unknown organization material'])['data']);
         try {
-            $this->detail($materialId);
-            $this->fail('A material with mismatched approval content hash was exposed.');
+            $this->detail(Str::uuid()->toString());
+            $this->fail('An unknown organization material was exposed.');
         } catch (HttpException $exception) {
             $this->assertSame(404, $exception->getStatusCode());
         }
-    }
-
-    public function test_foreign_organization_material_is_absent_from_results_count_and_detail(): void
-    {
-        $this->createApprovedMaterial('Own organization material');
-        $this->withForeignOrganizationFixture(function (Location $foreignContext): void {
-            $this->withSetupTransaction(function (Connection $connection) use ($foreignContext): void {
-                $connection->statement('ALTER TABLE locations DISABLE TRIGGER locations_primary_central_kitchen_immutable');
-                try {
-                    $connection->table('locations')->where('id', $foreignContext->id)
-                        ->update(['is_primary_central_kitchen' => true]);
-                    $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
-                } finally {
-                    $connection->statement('ALTER TABLE locations ENABLE TRIGGER locations_primary_central_kitchen_immutable');
-                }
-            });
-            $foreignOrganization = Organization::on('pgsql_setup')
-                ->whereKey($foreignContext->organization_id)
-                ->firstOrFail();
-            $foreignAdministrator = $this->foreignUser($foreignOrganization, 'foreign-admin@example.test');
-            $foreignSteward = $this->foreignUser($foreignOrganization, 'foreign-steward@example.test');
-            $this->role($foreignAdministrator, BusinessRole::Administrator);
-            foreach ([$foreignAdministrator, $foreignSteward] as $user) {
-                LocationMembership::on('pgsql_setup')->create([
-                    'organization_id' => $foreignOrganization->id,
-                    'user_id' => $user->id,
-                    'location_id' => $foreignContext->id,
-                    'is_active' => true,
-                    'assigned_at' => now(),
-                ]);
-            }
-            LocationModuleState::on('pgsql_setup')->create([
-                'organization_id' => $foreignOrganization->id,
-                'location_id' => $foreignContext->id,
-                'module_key' => 'RAW_MATERIALS',
-                'enabled' => true,
-                'created_by' => $foreignAdministrator->id,
-                'updated_by' => $foreignAdministrator->id,
-            ]);
-            $foreignAdministrator = User::on('pgsql')->findOrFail($foreignAdministrator->id);
-            $foreignSteward = User::on('pgsql')->findOrFail($foreignSteward->id);
-            $seedSequence = (int) DB::table('organization_sku_assignments')
-                ->where('prefix', 'RAW')
-                ->max('sequence_number') + 1;
-            $this->withSetupTransaction(function (Connection $connection) use ($foreignOrganization, $foreignAdministrator, $seedSequence): void {
-                $connection->table('organization_sku_counters')->insert([
-                    'organization_id' => $foreignOrganization->id,
-                    'prefix' => 'RAW',
-                    'last_value' => 0,
-                ]);
-                $connection->table('organization_sku_assignments')->insert([
-                    'organization_id' => $foreignOrganization->id,
-                    'sku' => SkuPrefix::Raw->format($seedSequence),
-                    'prefix' => 'RAW',
-                    'sequence_number' => $seedSequence,
-                    'entity_type' => 'RAW',
-                    'entity_id' => Str::uuid()->toString(),
-                    'allocation_source' => 'IMPORTED',
-                    'assigned_by' => $foreignAdministrator->id,
-                    'created_at' => now(),
-                ]);
-                $connection->table('organization_sku_counters')
-                    ->where('organization_id', $foreignOrganization->id)
-                    ->where('prefix', 'RAW')
-                    ->update(['last_value' => $seedSequence]);
-            });
-            $this->bootstrapRawPermissions($foreignAdministrator, $foreignSteward);
-            $foreignCategory = $this->rawMaterials->createCategory($foreignSteward, $foreignContext, [
-                'code' => 'FOREIGN_RAW_TEST',
-                'name' => 'Foreign secret category',
-            ]);
-            $foreignMaterialId = $this->createApprovedMaterial(
-                'Foreign secret material',
-                'foreign-secret-description',
-                $foreignSteward,
-                $foreignContext,
-                $foreignCategory['id'],
-            );
-
-            $result = $this->listing();
-            $this->assertSame(1, $result['meta']['total']);
-            $this->assertSame(['Own organization material'], array_column($result['data'], 'name'));
-            $this->assertSame([], $this->listing(['search' => 'Foreign secret'])['data']);
-            try {
-                $this->detail($foreignMaterialId);
-                $this->fail('A foreign organization material was exposed.');
-            } catch (HttpException $exception) {
-                $this->assertSame(404, $exception->getStatusCode());
-            }
-        }, truncateAfterOperation: true);
     }
 
     private function assertConstraintViolation(callable $operation): void
@@ -904,7 +813,6 @@ class BossRawMaterialCatalogProvenanceTest extends AuthorizationTestCase
             'password' => self::PASSWORD,
             'is_active' => true,
         ]);
-        $user->forceFill(['email_verified_at' => now()])->save();
 
         return User::on('pgsql')->findOrFail($user->id);
     }

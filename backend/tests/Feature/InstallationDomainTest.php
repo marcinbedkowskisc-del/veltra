@@ -11,6 +11,7 @@ use App\Models\LocationManagementAssignment;
 use App\Models\LocationSupplyRelationship;
 use App\Models\Organization;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\InstallationTestCase;
@@ -54,15 +55,18 @@ class InstallationDomainTest extends InstallationTestCase
         $this->assertSame('Renamed', $restaurant->fresh()->name);
     }
 
-    public function test_first_central_kitchen_is_primary_and_later_kitchens_are_not(): void
+    public function test_first_central_kitchen_is_primary_and_later_kitchens_are_rejected(): void
     {
         $organization = $this->initialize();
         $first = $this->kitchen('ZZ');
-        $second = $this->kitchen('AA');
-
         $this->assertTrue($first->fresh()->is_primary_central_kitchen);
-        $this->assertFalse($second->fresh()->is_primary_central_kitchen);
         $this->assertSame($first->id, $organization->fresh()->primaryCentralKitchen->id);
+        try {
+            $this->kitchen('AA');
+            $this->fail('A second central kitchen was accepted.');
+        } catch (BusinessRuleViolation) {
+            $this->assertSame(1, Location::where('type', 'CENTRAL_KITCHEN')->count());
+        }
     }
 
     public function test_primary_central_kitchen_must_be_created_active(): void
@@ -91,23 +95,24 @@ class InstallationDomainTest extends InstallationTestCase
         $this->assertNull($organization->fresh()->primaryCentralKitchen);
     }
 
-    public function test_legacy_installation_without_verified_primary_stays_unresolved(): void
+    public function test_first_central_kitchen_resolves_primary_without_legacy_state(): void
     {
         $organization = $this->initialize();
-        $legacy = $this->createLegacyUndesignatedKitchen($organization);
-        $later = $this->kitchen('CK2');
+        $this->assertFalse((bool) $organization->primary_central_kitchen_unresolved);
+        $this->assertNull($organization->primaryCentralKitchen);
 
-        $this->assertTrue($organization->fresh()->primary_central_kitchen_unresolved);
-        $this->assertFalse($legacy->fresh()->is_primary_central_kitchen);
-        $this->assertFalse($later->fresh()->is_primary_central_kitchen);
-        $this->assertNull($organization->fresh()->primaryCentralKitchen);
+        $primary = $this->kitchen();
+        $organization->refresh();
+        $this->assertFalse((bool) $organization->primary_central_kitchen_unresolved);
+        $this->assertSame($primary->id, $organization->primaryCentralKitchen->id);
+        $this->assertTrue($primary->fresh()->is_primary_central_kitchen);
     }
 
     public function test_runtime_sql_and_database_owner_cannot_change_primary_identity(): void
     {
         $organization = $this->initialize();
         $primary = $this->kitchen();
-        $secondary = $this->kitchen('CK2');
+        $secondary = $this->restaurant('R2');
 
         $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('locations')
             ->where('id', $primary->id)->update(['is_primary_central_kitchen' => false]));
@@ -163,26 +168,28 @@ class InstallationDomainTest extends InstallationTestCase
         $this->assertTrue($restaurant->fresh()->is_active);
     }
 
-    public function test_assigning_and_changing_management_preserves_history_and_activation(): void
+    public function test_assigning_management_preserves_existing_history_and_activation(): void
     {
         $organization = $this->initialize();
         $restaurant = $this->restaurant();
-        $firstKitchen = $this->kitchen();
-        $secondKitchen = $this->kitchen('CK2');
-        $first = $this->service->assignManagingKitchen($restaurant, $firstKitchen);
+        $kitchen = $this->kitchen();
+        $first = LocationManagementAssignment::on('pgsql_setup')->create([
+            'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
+            'managing_kitchen_id' => $kitchen->id,
+            'effective_from' => '2025-01-01T00:00:00Z', 'effective_until' => '2025-02-01T00:00:00Z',
+        ]);
+        $second = $this->service->assignManagingKitchen($restaurant, $kitchen);
         $this->service->updateLocation($restaurant, ['is_active' => true]);
-        $second = $this->service->assignManagingKitchen($restaurant, $secondKitchen, replace: true);
         DB::statement('SET CONSTRAINTS ALL IMMEDIATE');
-        $first->refresh();
+        $first->setConnection('pgsql')->refresh();
         $this->assertNotNull($first->effective_until);
-        $this->assertTrue($first->effective_until->equalTo($second->effective_from));
-        $this->assertTrue($first->managingKitchen->is($firstKitchen));
+        $this->assertTrue($first->effective_until->lessThan($second->effective_from));
+        $this->assertTrue($first->managingKitchen->is($kitchen));
         $this->assertTrue($second->restaurant->is($restaurant));
         $this->assertTrue($second->organization->is($organization));
         $this->assertSame(2, $this->service->managementHistory($restaurant, 20)->total());
-        $this->assertTrue($this->service->currentManagingKitchen($restaurant)->is($secondKitchen));
-        $this->assertSame(0, $this->service->managedRestaurants($firstKitchen, 20)->total());
-        $this->assertSame(1, $this->service->managedRestaurants($secondKitchen, 20)->total());
+        $this->assertTrue($this->service->currentManagingKitchen($restaurant)->is($kitchen));
+        $this->assertSame(1, $this->service->managedRestaurants($kitchen, 20)->total());
         $this->assertTrue($restaurant->fresh()->is_active);
     }
 
@@ -190,21 +197,21 @@ class InstallationDomainTest extends InstallationTestCase
     {
         $this->initialize();
         $restaurant = $this->restaurant();
-        $this->service->assignManagingKitchen($restaurant, $this->kitchen());
-        $second = $this->kitchen('CK2');
+        $kitchen = $this->kitchen();
+        $this->service->assignManagingKitchen($restaurant, $kitchen);
         $this->expectException(BusinessRuleViolation::class);
-        $this->service->assignManagingKitchen($restaurant, $second);
+        $this->service->assignManagingKitchen($restaurant, $kitchen);
     }
 
     public function test_database_prevents_two_open_management_periods(): void
     {
         $this->initialize();
         $restaurant = $this->restaurant();
-        $first = $this->service->assignManagingKitchen($restaurant, $this->kitchen());
-        $second = $this->kitchen('CK2');
+        $kitchen = $this->kitchen();
+        $first = $this->service->assignManagingKitchen($restaurant, $kitchen);
         $this->assertDatabaseRejects('23P01', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
             'organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id,
-            'managing_kitchen_id' => $second->id, 'effective_from' => $first->effective_from->addSecond(),
+            'managing_kitchen_id' => $kitchen->id, 'effective_from' => $first->effective_from->addSecond(),
         ]));
     }
 
@@ -227,11 +234,15 @@ class InstallationDomainTest extends InstallationTestCase
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $first = $this->service->assignManagingKitchen($restaurant, $kitchen);
+        $first = LocationManagementAssignment::on('pgsql_setup')->create([
+            'organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id,
+            'managing_kitchen_id' => $kitchen->id,
+            'effective_from' => '2025-01-01T00:00:00Z', 'effective_until' => '2025-02-01T00:00:00Z',
+        ]);
+        $this->service->assignManagingKitchen($restaurant, $kitchen);
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->delete());
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->update(['effective_from' => now()->subDay()]));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->fresh()->update(['effective_until' => $first->effective_from]));
-        $this->service->assignManagingKitchen($restaurant, $this->kitchen('CK2'), replace: true);
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($first)->fresh()->update(['effective_until' => now()->addDay()]));
     }
 
@@ -260,30 +271,33 @@ class InstallationDomainTest extends InstallationTestCase
         $this->service->assignManagingKitchen($kitchen, $restaurant);
     }
 
-    public function test_multiple_suppliers_are_independent_from_management_and_can_be_disabled(): void
+    public function test_supply_is_independent_from_management_and_can_be_disabled(): void
     {
         $organization = $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $secondKitchen = $this->kitchen('CK2');
+        $secondRestaurant = $this->restaurant('R2');
         $first = $this->service->establishSupply($restaurant, $kitchen);
-        $second = $this->service->establishSupply($restaurant, $secondKitchen);
-        $this->assertSame(2, $this->service->authorizedSuppliers($restaurant, 20)->total());
+        $second = $this->service->establishSupply($secondRestaurant, $kitchen);
+        $this->assertSame(1, $this->service->authorizedSuppliers($restaurant, 20)->total());
+        $this->assertSame(1, $this->service->authorizedSuppliers($secondRestaurant, 20)->total());
         $this->assertSame(0, $restaurant->managementAssignments()->count());
         $this->assertNull($this->service->currentManagingKitchen($restaurant));
         $this->assertTrue($first->supplierKitchen->is($kitchen));
         $this->assertTrue($first->restaurant->is($restaurant));
         $this->assertTrue($first->organization->is($organization));
-        $assignment = $this->service->assignManagingKitchen($restaurant, $secondKitchen);
-        $this->service->disableSupply($second);
-        $this->service->disableSupply($second);
-        $this->assertSame(1, $this->service->authorizedSuppliers($restaurant, 20)->total());
-        $this->assertTrue($this->service->currentManagingKitchen($restaurant)->is($secondKitchen));
+        $assignment = $this->service->assignManagingKitchen($restaurant, $kitchen);
+        $this->service->disableSupply($first);
+        $this->service->disableSupply($first);
+        $this->assertSame(0, $this->service->authorizedSuppliers($restaurant, 20)->total());
+        $this->assertSame(1, $this->service->authorizedSuppliers($secondRestaurant, 20)->total());
+        $this->assertTrue($this->service->currentManagingKitchen($restaurant)->is($kitchen));
         $this->assertSame(1, $restaurant->managementAssignments()->count());
         $this->assertNull($assignment->fresh()->effective_until);
-        $renewed = $this->service->establishSupply($restaurant, $secondKitchen);
-        $this->assertNotSame($second->id, $renewed->id);
-        $this->assertSame(3, $this->service->supplyRelationships($restaurant, 20)->total());
+        $renewed = $this->service->establishSupply($restaurant, $kitchen);
+        $this->assertNotSame($first->id, $renewed->id);
+        $this->assertTrue($second->fresh()->is_active);
+        $this->assertSame(2, $this->service->supplyRelationships($restaurant, 20)->total());
     }
 
     public function test_duplicate_active_supply_is_rejected_by_service_and_database(): void
@@ -313,27 +327,30 @@ class InstallationDomainTest extends InstallationTestCase
         $this->service->establishSupply($restaurant, $restaurant);
     }
 
-    public function test_cross_organization_management_and_supply_are_rejected(): void
+    public function test_management_and_supply_reject_unknown_location_references(): void
     {
         $organization = $this->initialize();
         $restaurant = $this->restaurant();
-        $this->withForeignOrganizationFixture(function (Location $foreignKitchen) use ($organization, $restaurant): void {
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
-                'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
-                'managing_kitchen_id' => $foreignKitchen->id, 'effective_from' => now(),
-            ]));
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationSupplyRelationship::on('pgsql_setup')->create([
-                'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
-                'supplier_kitchen_id' => $foreignKitchen->id, 'is_active' => true,
-            ]));
-            foreach (['assignManagingKitchen', 'establishSupply'] as $method) {
-                try {
-                    $this->service->$method($restaurant, $foreignKitchen);
-                    $this->fail('Cross-organization relationship was accepted.');
-                } catch (BusinessRuleViolation $exception) {
-                    $this->assertSame(__('messages.location_must_belong_to_organization'), $exception->getMessage());
-                }
+        $unknownKitchenId = Str::uuid()->toString();
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => LocationManagementAssignment::on('pgsql_setup')->create([
+            'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
+            'managing_kitchen_id' => $unknownKitchenId, 'effective_from' => now(),
+        ]));
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => LocationSupplyRelationship::on('pgsql_setup')->create([
+            'organization_id' => $organization->id, 'restaurant_id' => $restaurant->id,
+            'supplier_kitchen_id' => $unknownKitchenId, 'is_active' => true,
+        ]));
+
+        $unknownKitchen = new Location;
+        $unknownKitchen->id = $unknownKitchenId;
+        $unknownKitchen->organization_id = Str::uuid()->toString();
+        foreach (['assignManagingKitchen', 'establishSupply'] as $method) {
+            try {
+                $this->service->$method($restaurant, $unknownKitchen);
+                $this->fail('An unknown location relationship was accepted.');
+            } catch (ModelNotFoundException) {
+                $this->assertTrue(true);
             }
-        });
+        }
     }
 }

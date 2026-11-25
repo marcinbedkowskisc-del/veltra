@@ -39,10 +39,10 @@ class SecurityConcurrencyTest extends TestCase
             $users = [];
             foreach ([BusinessRole::RestaurantManager, BusinessRole::Employee] as $i => $role) {
                 $user = User::on('pgsql_setup')->create(['organization_id' => $organization->id, 'first_name' => 'Fixture', 'last_name' => 'Person', 'email' => "fixture{$i}@example.test", 'password' => 'Test-Only-Password!42']);
-                $user->forceFill(['email_verified_at' => now()])->save();
                 $user = User::on('pgsql')->findOrFail($user->getKey());
                 $membership = app(MembershipService::class)->assign($user, $location);
                 RoleAssignment::on('pgsql_setup')->create(['organization_id' => $organization->id, 'user_id' => $user->id, 'role' => $role, 'location_id' => $location->id, 'membership_id' => $membership->id]);
+                $user = $this->updateFixture($user, ['email_verified_at' => now()]);
                 $users[] = $user;
             }
             [$actor, $target] = $users;

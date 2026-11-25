@@ -36,10 +36,9 @@ class BossRawMaterialCatalogConcurrencyTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->context = $this->primaryCentralKitchen();
-        $this->boss = $this->user('boss-raw-catalog-concurrency@example.test');
-        $this->administrator = $this->user('admin-raw-catalog-concurrency@example.test');
-        $this->bossRole = $this->role($this->boss, BusinessRole::Boss);
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->boss = $this->provisionedUser('boss-raw-catalog-concurrency@example.test', BusinessRole::Boss);
+        $this->administrator = $this->provisionedUser('admin-raw-catalog-concurrency@example.test', BusinessRole::Administrator);
+        $this->bossRole = RoleAssignment::where('user_id', $this->boss->id)->whereNull('revoked_at')->firstOrFail();
         $this->bossMembershipId = (string) app(MembershipService::class)
             ->assign($this->boss, $this->context, $this->administrator->id)->id;
         app(MembershipService::class)->assign($this->administrator, $this->context, $this->administrator->id);
@@ -188,13 +187,14 @@ class BossRawMaterialCatalogConcurrencyTest extends AuthorizationTestCase
 
     private function restoreBossRole(): int
     {
-        $this->bossRole = app(RoleAdministration::class)->grant(
+        $assignments = app(RoleAdministration::class)->replace(
             $this->administrator,
             $this->context,
             $this->boss,
             BusinessRole::Boss,
-            null,
+            [],
         );
+        $this->bossRole = $assignments[0];
 
         return 0;
     }

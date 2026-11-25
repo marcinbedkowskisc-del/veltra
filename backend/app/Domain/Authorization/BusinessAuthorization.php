@@ -20,7 +20,14 @@ class BusinessAuthorization
         return $actor && $context && $target && $actor->is_active && $actor->email_verified_at !== null
             && $actor->organization->is_active && $context->is_active && $target->is_active
             && $context->organization_id === $actor->organization_id && $target->organization_id === $actor->organization_id
-            && app(MembershipService::class)->available($actor)->where('location_id', $context->id)->exists();
+            && app(MembershipService::class)->available($actor)->where('location_id', $context->id)->exists()
+            && $this->hasSingleEffectiveRole($actor);
+    }
+
+    public function hasSingleEffectiveRole(User $user): bool
+    {
+        return RoleAssignment::effective()->where('user_id', $user->id)
+            ->where('organization_id', $user->organization_id)->distinct()->count('role') === 1;
     }
 
     public function hasRole(User $user, BusinessRole $role, ?Location $location = null): bool
@@ -66,10 +73,18 @@ class BusinessAuthorization
         if ($permission->module() !== null && ! app(ModuleAvailability::class)->enabled($target, $permission->module())) {
             return false;
         }
-        if ($this->hasRole($actor, BusinessRole::Boss)
-            && in_array($permission, [Permission::LocationView, Permission::ReportsView, Permission::ReportsExport], true)) {
-            $categories = in_array($permission, [Permission::ReportsView, Permission::ReportsExport], true)
-                ? [BossVisibilityCategory::ReportsAnalytics] : [];
+        if ($this->hasRole($actor, BusinessRole::Boss)) {
+            $categories = match ($permission) {
+                Permission::LocationView => [],
+                Permission::ReportsView, Permission::ReportsExport => [BossVisibilityCategory::ReportsAnalytics],
+                Permission::RecipesView, Permission::QuantityCalculate => [BossVisibilityCategory::ProductsRecipes],
+                Permission::FoodcostView => [BossVisibilityCategory::Foodcost],
+                Permission::PurchasePricesView => [BossVisibilityCategory::PurchaseFinancials],
+                default => null,
+            };
+            if ($categories === null) {
+                return false;
+            }
             $decision = app(BusinessVisibility::class)->decide($actor, $context, new BusinessVisibilitySurface(
                 'boss.location_or_report',
                 BusinessVisibilitySource::Boss,
@@ -80,9 +95,8 @@ class BusinessAuthorization
                 $target,
                 $permission->module(),
             ));
-            if ($decision->allowed) {
-                return true;
-            }
+
+            return $decision->allowed;
         }
 
         return $this->allowsIndependent($actor, $context, $target, $permission);
@@ -91,6 +105,9 @@ class BusinessAuthorization
     public function allowsIndependent(User $actor, Location $context, Location $target, Permission $permission): bool
     {
         if (! $this->eligible($actor, $context, $target)) {
+            return false;
+        }
+        if ($this->hasRole($actor, BusinessRole::Boss)) {
             return false;
         }
         if ($permission->module() !== null && ! app(ModuleAvailability::class)->enabled($target, $permission->module())) {

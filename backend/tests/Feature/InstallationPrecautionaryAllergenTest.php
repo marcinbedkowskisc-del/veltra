@@ -30,8 +30,7 @@ class InstallationPrecautionaryAllergenTest extends AuthorizationTestCase
     private function administratorContext(): array
     {
         $location = $this->activeRestaurant();
-        $admin = $this->user('precautionary-admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('precautionary-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 
@@ -67,7 +66,7 @@ class InstallationPrecautionaryAllergenTest extends AuthorizationTestCase
         $this->assertSame(1, DB::table('installation_precautionary_allergens')
             ->where('allergen_id', 'ALG_SOY')->count());
 
-        $secondLocation = $this->kitchen('CK2');
+        $secondLocation = $this->activeRestaurant('R2');
         app(MembershipService::class)->assign($admin, $secondLocation);
         $this->selectContext($admin, $secondLocation);
         $this->getJson('/api/v1/administration/allergens/maybe-contains')
@@ -96,8 +95,7 @@ class InstallationPrecautionaryAllergenTest extends AuthorizationTestCase
     {
         $this->getJson('/api/v1/administration/allergens/maybe-contains')->assertUnauthorized();
         [, $location] = $this->administratorContext();
-        $boss = $this->user('precautionary-boss@example.test');
-        $this->role($boss, BusinessRole::Boss);
+        $boss = $this->provisionedUser('precautionary-boss@example.test', BusinessRole::Boss);
         app(MembershipService::class)->assign($boss, $location);
         $this->selectContext($boss, $location);
 

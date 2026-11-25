@@ -38,9 +38,10 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
         $initial = app(IdentityService::class)->provisionInitial([
             'first_name' => 'Fixture', 'last_name' => 'Administrator', 'email' => 'provisioning@example.test',
         ], self::PASSWORD);
+        app(MembershipService::class)->assign($initial, $this->primary);
+        app(RoleAdministration::class)->bootstrapInitial($initial);
         $this->administrator = $this->updateFixture($initial, ['email_verified_at' => now()]);
-        app(MembershipService::class)->assign($this->administrator, $this->primary);
-        app(RoleAdministration::class)->bootstrapInitial($this->administrator);
+        $this->updateFixture($this->administrator->organization, ['authorization_initialized' => true]);
     }
 
     public function test_approved_execution_is_audited_atomic_and_idempotent(): void
@@ -190,8 +191,7 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
 
     public function test_recovery_grants_only_the_pinned_acceptance_permissions_and_is_not_replayed(): void
     {
-        $steward = $this->user('recovery-steward@example.test');
-        app(MembershipService::class)->assign($steward, $this->primary, $this->administrator->id);
+        $steward = $this->provisionedUser('recovery-steward@example.test', BusinessRole::CentralKitchenChef, $this->primary);
         app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $this->administrator->id, $steward->id,
             [RawMaterialPermission::PermissionDelegate->value], 'Opiekun testowy', self::PASSWORD,
@@ -255,7 +255,9 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
             'grant_id' => $grantId, 'event_type' => 'REVOKED', 'actor_user_id' => $this->administrator->id,
             'reason_code' => 'FIXTURE',
         ]));
-        $this->role($steward, BusinessRole::Administrator);
+        app(RoleAdministration::class)->replace(
+            $this->administrator, $this->primary, $steward, BusinessRole::Administrator, [], self::PASSWORD,
+        );
         $this->assertSame($operation, $this->executeApproved($manifest));
         $this->assertFalse(app(RawMaterialAuthorization::class)
             ->hasEffectiveGrant($this->administrator, RawMaterialPermission::Edit));
@@ -273,9 +275,8 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
 
     public function test_recovery_refuses_an_eligible_delegating_administrator(): void
     {
-        $other = $this->user('other-delegating-admin@example.test');
+        $other = $this->provisionedUser('other-delegating-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($other, $this->primary, $this->administrator->id);
-        $this->role($other, BusinessRole::Administrator);
         app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $this->administrator->id, $other->id,
             [RawMaterialPermission::PermissionDelegate->value], 'Delegacja testowa', self::PASSWORD,
@@ -325,7 +326,7 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
 
     public function test_wrong_administrator_and_invalid_permissions_are_rejected(): void
     {
-        $other = $this->user('not-administrator@example.test');
+        $other = $this->provisionedUser('not-administrator@example.test', BusinessRole::CentralKitchenChef, $this->primary);
         $manifest = $this->manifest(administrator: $other->id);
         try {
             $this->executeApproved($manifest);
@@ -339,23 +340,21 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
         $this->asMigrator(fn () => SystemPermissionProvisioningFixture::provisioner($invalid)->releaseDigest($invalid->id, $invalid->version));
     }
 
-    public function test_cross_organization_location_is_rejected(): void
+    public function test_unknown_location_is_rejected_without_granting_permissions(): void
     {
-        $this->withForeignOrganizationFixture(function (Location $foreign): void {
-            $base = $this->manifest();
-            $manifest = new SystemPermissionManifest(
-                id: $base->id, version: $base->version, module: $base->module, permissions: $base->permissions,
-                eligibleRole: $base->eligibleRole, grantScope: $base->grantScope, applicability: $base->applicability,
-                databaseName: $base->databaseName, organizationId: $base->organizationId,
-                administratorId: $base->administratorId, locationId: $foreign->id,
-            );
-            try {
-                $this->executeApproved($manifest);
-                $this->fail('A foreign organization location must be rejected.');
-            } catch (AuthorizationException) {
-                $this->assertSame(0, DB::table('organization_permission_grants')->count());
-            }
-        });
+        $base = $this->manifest();
+        $manifest = new SystemPermissionManifest(
+            id: $base->id, version: $base->version, module: $base->module, permissions: $base->permissions,
+            eligibleRole: $base->eligibleRole, grantScope: $base->grantScope, applicability: $base->applicability,
+            databaseName: $base->databaseName, organizationId: $base->organizationId,
+            administratorId: $base->administratorId, locationId: Str::uuid()->toString(),
+        );
+        try {
+            $this->executeApproved($manifest);
+            $this->fail('An unknown organization location must be rejected.');
+        } catch (SystemPermissionProvisioningException) {
+            $this->assertSame(0, DB::table('organization_permission_grants')->count());
+        }
     }
 
     public function test_concurrent_retries_serialize_to_one_operation(): void
@@ -414,7 +413,7 @@ class SystemPermissionProvisionerTest extends AuthorizationTestCase
 
     public function test_failed_second_grant_rolls_back_first_grant_operation_and_accepted_audit(): void
     {
-        $other = $this->user('grantor@example.test');
+        $other = $this->provisionedUser('grantor@example.test', BusinessRole::CentralKitchenChef, $this->primary);
         $this->asMigrator(function () use ($other): void {
             DB::transaction(function () use ($other): void {
                 $operation = (string) Str::uuid();

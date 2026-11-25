@@ -13,6 +13,7 @@ use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Tests\AuthorizationTestCase;
 
@@ -31,9 +32,10 @@ class SystemProvisioningRequestValidatorTest extends AuthorizationTestCase
         $initial = app(IdentityService::class)->provisionInitial([
             'first_name' => 'Initial', 'last_name' => 'Administrator', 'email' => 'initial@example.test',
         ], self::PASSWORD);
+        app(MembershipService::class)->assign($initial, $this->primary);
+        app(RoleAdministration::class)->bootstrapInitial($initial);
         $this->administrator = $this->updateFixture($initial, ['email_verified_at' => now()]);
-        app(MembershipService::class)->assign($this->administrator, $this->primary);
-        app(RoleAdministration::class)->bootstrapInitial($this->administrator);
+        $this->updateFixture($this->administrator->organization, ['authorization_initialized' => true]);
         $this->organization = $this->administrator->organization->fresh();
     }
 
@@ -82,9 +84,8 @@ class SystemProvisioningRequestValidatorTest extends AuthorizationTestCase
 
     public function test_unassigned_location_and_non_administrator_are_rejected(): void
     {
-        $otherLocation = $this->kitchen('SECONDARY');
-        $otherUser = $this->user('other@example.test');
-        app(MembershipService::class)->assign($otherUser, $this->primary, $this->administrator->id);
+        $otherLocation = $this->activeRestaurant('SECONDARY');
+        $otherUser = $this->provisionedUser('other@example.test', BusinessRole::CentralKitchenChef, $this->primary);
 
         foreach ([[$this->administrator, $otherLocation], [$otherUser, $this->primary]] as [$user, $location]) {
             try {
@@ -98,27 +99,36 @@ class SystemProvisioningRequestValidatorTest extends AuthorizationTestCase
         }
     }
 
-    public function test_cross_organization_location_is_rejected(): void
+    public function test_unknown_location_and_organization_targets_are_rejected(): void
     {
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            foreach ([[$this->organization, $foreignLocation], [$foreignLocation->organization, $this->primary]] as [$organization, $location]) {
-                try {
-                    app(SystemProvisioningRequestValidator::class)->validate(
-                        $organization, $this->administrator, $location, 'RAW_MATERIALS', ['RAW_MATERIALS_VIEW'],
-                    );
-                    $this->fail('A cross-organization target was accepted.');
-                } catch (AuthorizationException) {
-                    $this->assertTrue(true);
-                }
-            }
-        });
+        $unknownLocation = new Location;
+        $unknownLocation->id = Str::uuid()->toString();
+        $unknownLocation->organization_id = Str::uuid()->toString();
+        try {
+            app(SystemProvisioningRequestValidator::class)->validate(
+                $this->organization, $this->administrator, $unknownLocation, 'RAW_MATERIALS', ['RAW_MATERIALS_VIEW'],
+            );
+            $this->fail('An unknown location target was accepted.');
+        } catch (AuthorizationException) {
+            $this->assertTrue(true);
+        }
+
+        $unknownOrganization = new Organization;
+        $unknownOrganization->id = Str::uuid()->toString();
+        try {
+            app(SystemProvisioningRequestValidator::class)->validate(
+                $unknownOrganization, $this->administrator, $this->primary, 'RAW_MATERIALS', ['RAW_MATERIALS_VIEW'],
+            );
+            $this->fail('An unknown organization target was accepted.');
+        } catch (AuthorizationException) {
+            $this->assertTrue(true);
+        }
     }
 
     public function test_inactive_or_unverified_administrator_is_rejected(): void
     {
-        $other = $this->user('other-admin@example.test');
+        $other = $this->provisionedUser('other-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($other, $this->primary, $this->administrator->id);
-        $this->role($other, BusinessRole::Administrator);
 
         foreach ([['is_active' => false], ['is_active' => true, 'email_verified_at' => null]] as $changes) {
             $other = $this->updateFixture($other, $changes);
@@ -135,7 +145,7 @@ class SystemProvisioningRequestValidatorTest extends AuthorizationTestCase
 
     public function test_create_requires_the_primary_catalog_context_even_with_membership(): void
     {
-        $secondary = $this->kitchen('SECONDARY');
+        $secondary = $this->activeRestaurant('SECONDARY');
         app(MembershipService::class)->assign($this->administrator, $secondary, $this->administrator->id);
 
         $this->expectException(AuthorizationException::class);

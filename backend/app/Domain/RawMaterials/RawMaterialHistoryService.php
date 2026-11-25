@@ -2,6 +2,8 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Query\Builder;
@@ -43,7 +45,7 @@ final class RawMaterialHistoryService
 
     public function metadata(User $actor, Location $context, object $material): array
     {
-        $canAudit = $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::AuditView);
+        $canAudit = $this->authorization->canRead($actor, $context, RawMaterialPermission::AuditView);
         $event = $this->visibleEvents($actor, $context, $material)
             ->where('events.event_code', '<>', 'REFERENCE_PRICE_UNCHANGED')
             ->orderByDesc('events.occurred_at')->orderByDesc('events.id')->first();
@@ -59,8 +61,9 @@ final class RawMaterialHistoryService
 
     private function visibleEvents(User $actor, Location $context, object $material): Builder
     {
-        $canAudit = $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::AuditView);
-        $primary = $this->sharePolicy->isPrimaryContext($context);
+        $canAudit = $this->authorization->canRead($actor, $context, RawMaterialPermission::AuditView);
+        $primary = $this->sharePolicy->isPrimaryContext($context)
+            || app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Boss);
         $canSeeWorking = $primary && ($canAudit || $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::Edit));
         $events = DB::table('raw_material_audit_events')
             ->where('organization_id', $actor->organization_id)
@@ -82,7 +85,7 @@ final class RawMaterialHistoryService
         }
         $columns = ['id', 'actor_user_id', 'event_code', 'occurred_at'];
         $events->select($columns);
-        if ($primary && $canAudit && $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView)) {
+        if ($primary && $canAudit && $this->authorization->canRead($actor, $context, RawMaterialPermission::ReferencePriceView)) {
             $prices = DB::table('raw_materials_commercial_audit_events')
                 ->where('organization_id', $actor->organization_id)->where('outcome', 'ACCEPTED')
                 ->where('subject_type', 'RAW_MATERIAL_REFERENCE_PRICE')

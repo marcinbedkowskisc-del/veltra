@@ -21,8 +21,7 @@ class SupplierDirectoryTest extends AuthorizationTestCase
     {
         parent::setUp();
         $this->location = $this->kitchen();
-        $this->administrator = $this->user('supplier-directory-admin@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('supplier-directory-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location);
         $this->selectContext($this->administrator);
     }
@@ -164,8 +163,7 @@ class SupplierDirectoryTest extends AuthorizationTestCase
 
     public function test_non_administrator_cannot_view_supplier_directory(): void
     {
-        $user = $this->user('supplier-directory-user@example.test');
-        $this->role($user, BusinessRole::CentralKitchenChef, $this->location);
+        $user = $this->provisionedUser('supplier-directory-user@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->selectContext($user);
 
         $this->getJson('/api/v1/administration/suppliers')->assertForbidden();

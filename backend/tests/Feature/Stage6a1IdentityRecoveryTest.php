@@ -195,28 +195,12 @@ class Stage6a1IdentityRecoveryTest extends AuthorizationTestCase
         Mail::assertNothingSent();
     }
 
-    public function test_additional_accounts_and_multiple_initial_identities_are_rejected(): void
+    public function test_additional_accounts_are_rejected_and_initial_identity_is_immutable(): void
     {
-        $extra = $this->user('extra@example.test');
+        $extra = $this->pendingUser('extra@example.test');
         $this->assertSame(1, $this->execute()->getStatusCode());
-        $this->withSetupTransaction(function (Connection $connection) use ($extra): void {
-            $connection->statement('DROP INDEX users_single_initial_identity');
-            $connection->statement('ALTER TABLE users DISABLE TRIGGER users_preserve_identity');
-            $connection->table('users')->where('id', $extra->id)->update(['is_initial_identity' => true]);
-            $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
-            $connection->statement('ALTER TABLE users ENABLE TRIGGER users_preserve_identity');
-        });
-        try {
-            $this->assertSame(1, $this->execute()->getStatusCode());
-        } finally {
-            $this->withSetupTransaction(function (Connection $connection) use ($extra): void {
-                $connection->statement('ALTER TABLE users DISABLE TRIGGER users_preserve_identity');
-                $connection->table('users')->where('id', $extra->id)->update(['is_initial_identity' => false]);
-                $connection->statement('SET CONSTRAINTS ALL IMMEDIATE');
-                $connection->statement('ALTER TABLE users ENABLE TRIGGER users_preserve_identity');
-                $connection->statement('CREATE UNIQUE INDEX users_single_initial_identity ON users (is_initial_identity) WHERE is_initial_identity');
-            });
-        }
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('users')->where('id', $extra->id)->update(['is_initial_identity' => true]));
         Mail::assertNothingSent();
     }
 
@@ -251,7 +235,7 @@ class Stage6a1IdentityRecoveryTest extends AuthorizationTestCase
         $this->initial = $this->updateFixture($this->initial, ['is_active' => false]);
         $this->assertSame(1, $this->execute()->getStatusCode());
         $this->initial = $this->updateFixture($this->initial, ['is_active' => true]);
-        $this->kitchen('EXTRA');
+        $this->restaurant('EXTRA');
         $this->assertSame(1, $this->execute()->getStatusCode());
         Mail::assertNothingSent();
     }

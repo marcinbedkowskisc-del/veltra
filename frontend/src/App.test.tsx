@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -37,7 +37,7 @@ describe('integracja z powłoką VELTRA', () => {
     expect(screen.getByLabelText('Adres e-mail')).toBeTruthy()
   })
 
-  it('mapuje bezpośrednią trasę BOSS do wspólnej nawigacji RAW', async () => {
+  it('przekierowuje starą trasę BOSS do wspólnej nawigacji RAW', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/health')) {
@@ -57,6 +57,7 @@ describe('integracja z powłoką VELTRA', () => {
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: 'Katalog surowców' })).toBeTruthy()
+    await waitFor(() => expect(window.location.pathname).toBe('/raw-materials'))
     expect(screen.getByRole('link', { name: 'RAW' }).getAttribute('aria-current')).toBe('page')
     expect(screen.queryByRole('link', { name: 'Katalog surowców BOSS' })).toBeNull()
     expect(screen.getByText('Zaloguj się i wybierz lokalizację, aby otworzyć katalog.')).toBeTruthy()

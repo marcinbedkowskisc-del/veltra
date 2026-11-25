@@ -16,6 +16,12 @@ class SecurityRequest extends InstallationRequest
                 'current_password' => ['nullable', 'string', 'max:256'],
             ],
             'revokeRole' => ['current_password' => ['nullable', 'string', 'max:256']],
+            'replaceRole' => [
+                'role' => ['required', Rule::enum(BusinessRole::class)],
+                'location_ids' => ['present', 'array'],
+                'location_ids.*' => ['required', 'uuid', 'distinct'],
+                'current_password' => ['nullable', 'string', 'max:256'],
+            ],
             'accountStatus' => ['is_active' => ['required', 'boolean']],
             'changeEmail' => ['email' => ['required', 'email:rfc', 'max:254']],
             'updateMyProfile' => [
@@ -27,6 +33,8 @@ class SecurityRequest extends InstallationRequest
             'personnel' => [
                 'first_name' => ['required', 'string', 'max:100'], 'last_name' => ['required', 'string', 'max:100'],
                 'email' => ['required', 'email:rfc', 'max:254'],
+                'role' => ['required', Rule::enum(BusinessRole::class)],
+                'current_password' => ['nullable', 'string', 'max:256'],
             ],
             'decide' => ['approve' => ['required', 'boolean']],
             'grantPermission' => [

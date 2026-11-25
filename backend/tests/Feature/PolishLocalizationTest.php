@@ -2,12 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
-use Tests\IdentityTestCase;
+use Tests\AuthorizationTestCase;
 
-class PolishLocalizationTest extends IdentityTestCase
+class PolishLocalizationTest extends AuthorizationTestCase
 {
     public function test_polish_is_the_default_and_fallback_locale(): void
     {
@@ -34,7 +35,7 @@ class PolishLocalizationTest extends IdentityTestCase
 
     public function test_authentication_failure_remains_generic_and_is_polish(): void
     {
-        $this->user();
+        $this->provisionedUser('person@example.test', BusinessRole::Boss);
         $first = $this->postJson('/api/v1/auth/login', [
             'email' => 'person@example.test',
             'password' => 'wrong-password',
@@ -50,7 +51,7 @@ class PolishLocalizationTest extends IdentityTestCase
 
     public function test_authorization_exception_response_is_polish(): void
     {
-        $user = $this->user();
+        $user = $this->provisionedUser('person@example.test', BusinessRole::Boss);
         $location = $this->kitchen();
         app(MembershipService::class)->assign($user, $location);
         $this->actingAs($user, 'web')

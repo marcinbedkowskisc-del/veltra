@@ -18,14 +18,12 @@ use Tests\AuthorizationTestCase;
 
 class ReportAuthorizationTest extends AuthorizationTestCase
 {
-    public function test_explicit_report_share_is_not_access_to_central_source_data_and_default_catalog_denies(): void
+    public function test_report_share_is_still_required_with_access_to_central_location(): void
     {
         $restaurant = $this->activeRestaurant();
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $chef = $this->user('chef@example.test');
-        $this->role($chef, BusinessRole::CentralKitchenChef, $kitchen);
-        $boss = $this->user();
-        $this->role($boss, BusinessRole::Boss);
+        $chef = $this->provisionedUser('chef@example.test', BusinessRole::CentralKitchenChef, $kitchen);
+        $boss = $this->provisionedUser('person@example.test', BusinessRole::Boss);
         app(MembershipService::class)->assign($boss, $restaurant);
         $report = Str::uuid()->toString();
         $this->assertFalse(app(ReportAuthorization::class)->canViewShared($boss, $restaurant, $report));
@@ -42,10 +40,9 @@ class ReportAuthorizationTest extends AuthorizationTestCase
         $share = $service->share($chef, $kitchen, $boss, $report);
         $this->assertTrue($service->canViewShared($boss, $restaurant, $report));
         $this->assertFalse($service->canViewShared($boss, $restaurant, Str::uuid()->toString()));
-        $this->assertFalse(app(BusinessAuthorization::class)->allows($boss, $restaurant, $kitchen, Permission::LocationView));
+        $this->assertTrue(app(BusinessAuthorization::class)->allows($boss, $restaurant, $kitchen, Permission::LocationView));
 
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $restaurant);
         $restrictions = app(BossLocationRestrictions::class);
         $restrictions->replace(
@@ -66,6 +63,9 @@ class ReportAuthorizationTest extends AuthorizationTestCase
         $this->assertFalse($service->canViewShared($boss, $restaurant, $report));
         $this->assertDatabaseRejects('23514', fn (Connection $connection) => $this->setupModel($share)->fresh()->delete());
         $service->authorizeExport($boss, $restaurant, $restaurant, Permission::LocationView);
+        $restrictions->replace(
+            $admin, $restaurant, $boss->id, 4, [], [BossVisibilityCategory::PurchaseFinancials->value], [],
+        );
         $this->expectException(AuthorizationException::class);
         $service->authorizeExport($boss, $restaurant, $restaurant, Permission::PurchasePricesView);
     }

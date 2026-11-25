@@ -16,9 +16,9 @@ class MembershipService
 {
     public function __construct(private AuthorizationMutationContext $contexts) {}
 
-    public function assign(User $user, Location $location, ?string $actorId = null): LocationMembership
+    public function assign(User $user, Location $location, ?string $actorId = null, bool $allowInactiveUser = false): LocationMembership
     {
-        return $this->contexts->run(AuthorizationMutationScope::membershipAssign(), $actorId, fn (): LocationMembership => DB::transaction(function () use ($user, $location): LocationMembership {
+        return $this->contexts->run(AuthorizationMutationScope::membershipAssign(), $actorId, fn (): LocationMembership => DB::transaction(function () use ($user, $location, $allowInactiveUser): LocationMembership {
             $organization = Organization::lockForUpdate()->firstOrFail();
             $user = $user->fresh();
             $location = $location->fresh();
@@ -26,7 +26,7 @@ class MembershipService
                 || $location->organization_id !== $organization->id) {
                 throw new BusinessRuleViolation(__('messages.membership_must_belong_to_organization'));
             }
-            if (! $user->is_active || ! $location->is_active || ! $organization->is_active) {
+            if ((! $user->is_active && ! $allowInactiveUser) || ! $location->is_active || ! $organization->is_active) {
                 throw new BusinessRuleViolation(__('messages.membership_requires_active_entities'));
             }
             if ($user->memberships()->where('location_id', $location->id)->where('is_active', true)->exists()) {

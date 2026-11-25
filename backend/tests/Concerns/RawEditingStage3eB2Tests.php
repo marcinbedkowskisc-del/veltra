@@ -4,7 +4,6 @@ namespace Tests\Concerns;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
-use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
@@ -28,8 +27,7 @@ trait RawEditingStage3eB2Tests
     {
         [$material, $input] = $this->b2Draft();
         $version = $material['version'];
-        $second = $this->user('b2-second-editor@example.test');
-        app(MembershipService::class)->assign($second, $this->location);
+        $second = $this->restaurantEmployeeInCentralKitchen('b2-second-editor@example.test');
         $permissions = app(OrganizationRawMaterialPermissionAdministration::class);
         foreach ([RawMaterialPermission::View, RawMaterialPermission::Edit] as $permission) {
             $permissions->grant($this->steward, $this->location, $second, $permission, 'Drugi edytor');
@@ -219,11 +217,10 @@ trait RawEditingStage3eB2Tests
 
     public function test_stage3e_b2_audit_financial_events_require_their_own_grant(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Audyt finansowy B2', 'kg', '100');
         $this->stage3ePrice($material['id'], '0.123456', 'b2-financial-audit');
-        $reader = $this->user('b2-audit-reader@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('b2-audit-reader@example.test');
         $grants = app(OrganizationRawMaterialPermissionAdministration::class);
         foreach ([RawMaterialPermission::View, RawMaterialPermission::AuditView] as $permission) {
             $grants->grant($this->steward, $this->location, $reader, $permission, 'Test audytu');
@@ -253,7 +250,7 @@ trait RawEditingStage3eB2Tests
         $material = $this->stage3eMaterial('Widoczna rewizja B2', 'g', '100');
         $restaurant = $this->activeRestaurant('B2RECIPIENT');
         app(MembershipService::class)->assign($this->steward, $restaurant);
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         LocationModuleState::on('pgsql_setup')->create([
             'organization_id' => $this->steward->organization_id, 'location_id' => $restaurant->id,
             'module_key' => 'RAW_MATERIALS', 'enabled' => true,
@@ -281,8 +278,7 @@ trait RawEditingStage3eB2Tests
     public function test_stage3e_b2_unauthorized_identity_never_receives_conflict_or_history_details(): void
     {
         [$material, $input] = $this->b2Draft();
-        $reader = $this->user('b2-denied@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('b2-denied@example.test');
         $this->selectRawMaterialApiContext($reader);
         $url = '/api/v1/raw-materials/'.$material['id'];
         $this->patchJson($url.'/draft', $input, ['If-Match' => $material['version']])->assertForbidden()->assertJsonMissingPath('data');
@@ -365,8 +361,7 @@ trait RawEditingStage3eB2Tests
     public function test_stage3e_b2_editor_without_audit_sees_update_time_but_not_actor_or_history(): void
     {
         [$material, $input] = $this->b2Draft();
-        $reader = $this->user('b2-editor-no-audit@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('b2-editor-no-audit@example.test');
         $grants = app(OrganizationRawMaterialPermissionAdministration::class);
         foreach ([RawMaterialPermission::View, RawMaterialPermission::Edit] as $permission) {
             $grants->grant($this->steward, $this->location, $reader, $permission, 'Test wglądu bez audytu');

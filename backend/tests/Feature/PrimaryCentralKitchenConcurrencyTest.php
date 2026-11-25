@@ -59,10 +59,17 @@ class PrimaryCentralKitchenConcurrencyTest extends TestCase
             $commitFirst ? DB::commit() : DB::rollBack();
             $process->wait();
             $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
-
-            $second = Location::where('code', 'CK2')->firstOrFail();
-            $this->assertSame($commitFirst, (bool) $first->fresh()?->is_primary_central_kitchen);
-            $this->assertSame(! $commitFirst, $second->is_primary_central_kitchen);
+            if ($commitFirst) {
+                $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+                $this->assertSame('rejected', $result['outcome']);
+                $this->assertSame('Organizacja może mieć tylko jedną kuchnię centralną.', $result['message']);
+                $this->assertTrue($first->fresh()->is_primary_central_kitchen);
+                $this->assertNull(Location::where('code', 'CK2')->first());
+            } else {
+                $this->assertTrue(Location::where('code', 'CK2')->firstOrFail()->is_primary_central_kitchen);
+                $this->assertNull($first->fresh());
+            }
+            $this->assertSame(1, Location::where('type', 'CENTRAL_KITCHEN')->count());
             $this->assertSame(1, Location::where('is_primary_central_kitchen', true)->count());
         } finally {
             while (DB::transactionLevel() > 0) {

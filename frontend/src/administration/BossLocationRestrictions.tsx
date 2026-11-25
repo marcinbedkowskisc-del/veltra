@@ -112,7 +112,7 @@ export default function BossLocationRestrictions({
   }
 
   return <div className="admin-user-inline-form">
-    <p>Ograniczenia zmniejszają zakres widoczny przez rolę BOSS. Niezależne uprawnienia z innych ról i organizacyjne uprawnienia RAW pozostają odrębne.</p>
+    <p>Zaznaczenie ogranicza dostęp BOSS, także gdy istnieje dodatkowe uprawnienie. Ceny zakupu i koszty receptur można ograniczać niezależnie.</p>
     {!canManage && snapshot && <p role="status">Zapisane ograniczenia są zachowane. Zadziałają ponownie, jeśli administrator nada tej osobie rolę BOSS.</p>}
     <section aria-label="Rodzaje informacji">
       <h4>Rodzaje informacji</h4>
@@ -129,7 +129,7 @@ export default function BossLocationRestrictions({
                 : current.filter((value) => value !== category.key))
             }} />
           {' '}<label htmlFor={id}>{category.label}</label>
-          <small>{checked ? 'Ograniczenie zapisane; nie ma podłączonej powierzchni danych.' : 'Brak dostępnej powierzchni danych.'}</small>
+          <small>{checked ? 'Ograniczenie wybrane.' : 'Bez ograniczenia tej kategorii.'}</small>
         </li>
       })}</ul>
     </section>

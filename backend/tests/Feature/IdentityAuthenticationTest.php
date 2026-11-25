@@ -2,24 +2,34 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\IdentityService;
 use App\Domain\Identity\MembershipService;
+use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use Tests\IdentityTestCase;
+use Tests\AuthorizationTestCase;
 
-class IdentityAuthenticationTest extends IdentityTestCase
+class IdentityAuthenticationTest extends AuthorizationTestCase
 {
+    protected function user(string $email = 'person@example.test'): User
+    {
+        return $this->provisionedUser($email, BusinessRole::Boss);
+    }
+
     public function test_email_normalization_is_shared_for_unicode_provisioning_login_and_uniqueness(): void
     {
         $user = app(IdentityService::class)->provisionInitial([
             'first_name' => 'Unicode', 'last_name' => 'Fixture', 'email' => ' ŻÓŁĆ@EXAMPLE.TEST ',
         ], self::PASSWORD);
         $this->assertSame('żółć@example.test', $user->email);
+        app(RoleAdministration::class)->bootstrapInitial($user);
         $user = $this->updateFixture($user, ['email_verified_at' => now()]);
         $this->postJson('/api/v1/auth/login', ['email' => ' ŻÓŁĆ@EXAMPLE.TEST ', 'password' => self::PASSWORD])
             ->assertOk()->assertJsonPath('data.email', 'żółć@example.test');
@@ -78,8 +88,27 @@ class IdentityAuthenticationTest extends IdentityTestCase
     public function test_disabled_account_loses_access_on_the_next_protected_request(): void
     {
         $user = $this->user();
+        $otherEmail = Str::uuid().'@example.test';
+        $this->withSetupConnection(function (Connection $connection) use ($user, $otherEmail): void {
+            foreach (['activation_tokens', 'password_reset_tokens'] as $table) {
+                $connection->table($table)->insert([
+                    ['email' => $user->email, 'token' => 'test-token', 'created_at' => now()],
+                    ['email' => $otherEmail, 'token' => 'other-token', 'created_at' => now()],
+                ]);
+            }
+        });
         $this->actingAs($user, 'web')->getJson('/api/v1/auth/me')->assertOk();
         app(IdentityService::class)->disable($user);
+        foreach (['activation_tokens', 'password_reset_tokens'] as $table) {
+            $this->assertSame(0, DB::table($table)->where('email', $user->email)->count());
+            $this->assertSame(1, DB::table($table)->where('email', $otherEmail)->count());
+        }
+        $this->withSetupConnection(function (Connection $connection) use ($otherEmail): void {
+            foreach (['activation_tokens', 'password_reset_tokens'] as $table) {
+                $connection->table($table)->where('email', $otherEmail)->delete();
+            }
+        });
+        $this->assertGreaterThan($user->auth_version, $user->fresh()->auth_version);
         $this->getJson('/api/v1/auth/locations')->assertUnauthorized();
         $this->assertGuest('web');
         $this->assertNull(session('operating_membership_id'));

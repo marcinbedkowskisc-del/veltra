@@ -225,7 +225,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             $createdAfterConfiguration = app(InstallationService::class)->createLocation([
                 'name' => 'Created After Configuration',
                 'code' => 'CK3',
-                'type' => 'CENTRAL_KITCHEN',
+                'type' => 'RESTAURANT',
             ]);
             $this->assertSame(0, DB::table('location_module_states')
                 ->where('location_id', $createdAfterConfiguration->id)->count());
@@ -276,7 +276,6 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             'email' => 'module-admin@example.test',
             'password' => 'Test-Only-Password!42',
         ]);
-        $actor->forceFill(['email_verified_at' => now()])->save();
         $actor = User::on('pgsql')->findOrFail($actor->getKey());
         app(MembershipService::class)->assign($actor, $kitchen);
         RoleAssignment::on('pgsql_setup')->create([
@@ -286,6 +285,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             'location_id' => null,
             'membership_id' => null,
         ]);
+        $actor = $this->updateFixture($actor, ['email_verified_at' => now()]);
 
         return [$organization, $kitchen, $restaurants, $actor];
     }
@@ -352,6 +352,9 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             $applicationName,
             'immediate',
             $commit ? 'true' : 'false',
+            '',
+            '',
+            'RESTAURANT',
         ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
         $process->setTimeout(30);
         $process->start();
@@ -378,6 +381,7 @@ class ModuleConfigurationConcurrencyTest extends TestCase
             $commit ? 'true' : 'false',
             $readyFile,
             $releaseFile,
+            'RESTAURANT',
         ], base_path(), ['APP_ENV' => 'testing', 'DB_DATABASE' => 'veltra_testing']);
         $process->setTimeout(30);
         $process->start();

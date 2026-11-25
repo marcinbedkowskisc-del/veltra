@@ -91,6 +91,23 @@ class AuthorizationMutationBoundaryTest extends TestCase
         $this->assertRuntimeDenied(fn () => $connection->statement('ALTER TABLE public.role_assignments DISABLE TRIGGER ALL'));
         $this->assertRuntimeDenied(fn () => $connection->statement('SET ROLE veltra_migrator'));
         $this->assertRuntimeDenied(fn () => $connection->select('SELECT veltra_private.enforce_authorization_mutation()'));
+        foreach (['activation_tokens', 'password_reset_tokens'] as $table) {
+            app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::accountIssue(),
+                null,
+                fn () => $connection->table($table)->insert(['email' => 'scope-test@example.test', 'token' => 'original']),
+            );
+            $this->assertRuntimeDenied(fn () => app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::identityDisable(),
+                null,
+                fn () => $connection->table($table)->insert(['email' => 'forged@example.test', 'token' => 'forged']),
+            ), '42501');
+            $this->assertRuntimeDenied(fn () => app(AuthorizationMutationContext::class)->run(
+                AuthorizationMutationScope::identityDisable(),
+                null,
+                fn () => $connection->table($table)->where('email', 'scope-test@example.test')->update(['token' => 'forged']),
+            ), '42501');
+        }
 
         $connection->statement('CREATE TEMP TABLE role_assignments (id uuid)');
         $connection->statement('SET LOCAL search_path = pg_temp, public');
@@ -142,6 +159,8 @@ class AuthorizationMutationBoundaryTest extends TestCase
                 'first_name' => 'Admin',
                 'last_name' => 'Drugi',
                 'email' => 'admin-two@example.test',
+                'role' => BusinessRole::Administrator->value,
+                'current_password' => self::password(),
             ],
         );
         $this->assertNotNull($secondAdministrator);
@@ -151,15 +170,6 @@ class AuthorizationMutationBoundaryTest extends TestCase
                 'password' => Hash::make(self::password()),
             ])->save();
         });
-        $roles->grant(
-            $administrator,
-            $location,
-            $secondAdministrator,
-            BusinessRole::Administrator,
-            null,
-            self::password(),
-        );
-
         $bootstrap = app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $administrator->id,
             $secondAdministrator->id,
@@ -175,6 +185,7 @@ class AuthorizationMutationBoundaryTest extends TestCase
                 'first_name' => 'Pracownik',
                 'last_name' => 'Testowy',
                 'email' => 'upgrade-recipient@example.test',
+                'role' => BusinessRole::CentralKitchenChef->value,
             ],
         );
         $this->assertNotNull($upgradeRecipient);

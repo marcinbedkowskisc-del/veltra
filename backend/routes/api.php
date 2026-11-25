@@ -117,6 +117,7 @@ Route::prefix('v1/security')->middleware([RequireSpaSession::class, 'auth:sanctu
     Route::post('/modules/configuration', [ModuleConfigurationController::class, 'configure']);
     Route::get('/locations/{location}/modules/history', [ModuleConfigurationController::class, 'history'])->whereUuid('location');
     Route::post('/users/{user}/roles', [SecurityController::class, 'grantRole'])->whereUuid('user');
+    Route::put('/users/{user}/role', [SecurityController::class, 'replaceRole'])->whereUuid('user');
     Route::patch('/me/profile', [SecurityController::class, 'updateMyProfile']);
     Route::delete('/roles/{assignment}', [SecurityController::class, 'revokeRole'])->whereUuid('assignment');
     Route::patch('/users/{user}/status', [SecurityController::class, 'accountStatus'])->whereUuid('user');

@@ -26,8 +26,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
     public function test_active_administrator_can_access_pa_independently_of_raw(): void
     {
         $location = $this->kitchen();
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 
@@ -59,8 +58,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
     public function test_administrator_can_manage_shared_units_and_reject_invalid_factors(): void
     {
         $location = $this->kitchen();
-        $admin = $this->user('unit-admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('unit-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 
@@ -119,8 +117,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         foreach ([BusinessRole::Employee, BusinessRole::RestaurantManager, BusinessRole::Boss] as $role) {
-            $user = $this->user(strtolower($role->value).'@example.test');
-            $this->role($user, $role, $role->organizationWide() ? null : $location);
+            $user = $this->provisionedUser(strtolower($role->value).'@example.test', $role, $role->organizationWide() ? null : $location);
             if ($role->organizationWide()) {
                 app(MembershipService::class)->assign($user, $location);
             }
@@ -141,8 +138,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
         $this->getJson('/api/v1/administration/categories')->assertUnauthorized();
         $this->getJson('/api/v1/administration/units')->assertUnauthorized();
         $this->getJson('/api/v1/administration/allergens/dictionaries')->assertUnauthorized();
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         $this->actingAs($admin, 'web')->getJson('/api/v1/administration/access')->assertForbidden();
         $this->getJson('/api/v1/administration/categories')->assertForbidden();
         $this->getJson('/api/v1/administration/units')->assertForbidden();
@@ -152,8 +148,7 @@ class AdministrationAccessTest extends AuthorizationTestCase
     public function test_category_hierarchy_archive_restore_and_raw_references_are_preserved(): void
     {
         $location = $this->kitchen();
-        $admin = $this->user('category-admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('category-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 
@@ -213,22 +208,19 @@ class AdministrationAccessTest extends AuthorizationTestCase
     public function test_revoked_role_and_disabled_account_are_rejected_on_the_next_request(): void
     {
         $location = $this->kitchen();
-        $actor = $this->user('actor@example.test');
-        $target = $this->user('target@example.test');
-        $this->role($actor, BusinessRole::Administrator);
-        $assignment = $this->role($target, BusinessRole::Administrator);
+        $actor = $this->provisionedUser('actor@example.test', BusinessRole::Administrator);
+        $target = $this->provisionedUser('target@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($actor, $location);
         app(MembershipService::class)->assign($target, $location);
 
         $this->selectContext($target, $location);
         $this->getJson('/api/v1/administration/access')->assertOk();
         $this->getJson('/api/v1/administration/categories')->assertOk();
-        app(RoleAdministration::class)->revoke($actor, $location, $assignment, self::PASSWORD);
+        app(RoleAdministration::class)->replace($actor, $location, $target, BusinessRole::Boss, [], self::PASSWORD);
         $this->getJson('/api/v1/administration/access')->assertForbidden();
         $this->getJson('/api/v1/administration/categories')->assertForbidden();
 
-        $disabled = $this->user('disabled@example.test');
-        $this->role($disabled, BusinessRole::Administrator);
+        $disabled = $this->provisionedUser('disabled@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($disabled, $location);
         $this->selectContext($disabled, $location);
         $this->getJson('/api/v1/administration/access')->assertOk();

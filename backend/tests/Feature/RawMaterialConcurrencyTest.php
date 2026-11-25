@@ -44,14 +44,9 @@ class RawMaterialConcurrencyTest extends TestCase
             ]);
             $installation->assignManagingKitchen($location, $kitchen);
             $location = $installation->updateLocation($location, ['is_active' => true]);
-            $administrator = $this->user($organization, 'concurrency-admin@example.test');
-            RoleAssignment::on('pgsql_setup')->create([
-                'organization_id' => $organization->id,
-                'user_id' => $administrator->id,
-                'role' => BusinessRole::Administrator,
-            ]);
+            $administrator = $this->user($organization, 'concurrency-admin@example.test', BusinessRole::Administrator);
             app(MembershipService::class)->assign($administrator, $kitchen, $administrator->id);
-            $steward = $this->user($organization, 'concurrency-steward@example.test');
+            $steward = $this->user($organization, 'concurrency-steward@example.test', BusinessRole::Employee, $location);
             app(MembershipService::class)->assign($steward, $kitchen);
             $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
@@ -117,15 +112,9 @@ class RawMaterialConcurrencyTest extends TestCase
                 'type' => 'CENTRAL_KITCHEN',
             ]);
             $location = $installation->updateLocation($location, ['is_active' => true]);
-            $administrator = $this->user($organization, 'catalog-concurrency-admin@example.test');
-            RoleAssignment::on('pgsql_setup')->create([
-                'organization_id' => $organization->id,
-                'user_id' => $administrator->id,
-                'role' => BusinessRole::Administrator,
-            ]);
+            $administrator = $this->user($organization, 'catalog-concurrency-admin@example.test', BusinessRole::Administrator);
             app(MembershipService::class)->assign($administrator, $location, $administrator->id);
-            $steward = $this->user($organization, 'catalog-concurrency-steward@example.test');
-            app(MembershipService::class)->assign($steward, $location);
+            $steward = $this->user($organization, 'catalog-concurrency-steward@example.test', BusinessRole::CentralKitchenChef, $location);
             $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
             LocationModuleState::on('pgsql_setup')->create([
@@ -227,17 +216,12 @@ class RawMaterialConcurrencyTest extends TestCase
             ]);
             $installation->assignManagingKitchen($location, $kitchen);
             $location = $installation->updateLocation($location, ['is_active' => true]);
-            $administrator = $this->user($organization, 'suspension-admin@example.test');
-            RoleAssignment::on('pgsql_setup')->create([
-                'organization_id' => $organization->id,
-                'user_id' => $administrator->id,
-                'role' => BusinessRole::Administrator,
-            ]);
+            $administrator = $this->user($organization, 'suspension-admin@example.test', BusinessRole::Administrator);
             app(MembershipService::class)->assign($administrator, $location, $administrator->id);
-            $steward = $this->user($organization, 'suspension-steward@example.test');
-            app(MembershipService::class)->assign($steward, $location);
-            $recipient = $this->user($organization, 'suspension-recipient@example.test');
-            $recipientMembership = app(MembershipService::class)->assign($recipient, $location);
+            $steward = $this->user($organization, 'suspension-steward@example.test', BusinessRole::Employee, $location);
+            $recipient = $this->user($organization, 'suspension-recipient@example.test', BusinessRole::Boss);
+            app(MembershipService::class)->assign($recipient, $location);
+            $recipientMembership = app(MembershipService::class)->available($recipient)->where('location_id', $location->id)->firstOrFail();
             $this->updateFixture($organization, ['authorization_initialized' => true]);
             $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
             LocationModuleState::on('pgsql_setup')->create([
@@ -364,7 +348,7 @@ class RawMaterialConcurrencyTest extends TestCase
         $this->assertSame(['completed' => true], json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR));
     }
 
-    private function user(Organization $organization, string $email): User
+    private function user(Organization $organization, string $email, BusinessRole $role, ?Location $location = null): User
     {
         $user = User::on('pgsql_setup')->create([
             'organization_id' => $organization->id,
@@ -374,9 +358,14 @@ class RawMaterialConcurrencyTest extends TestCase
             'password' => 'Test-Only-Password!42',
             'is_active' => true,
         ]);
-        $user->forceFill(['email_verified_at' => now()])->save();
+        $user = User::on('pgsql')->findOrFail($user->getKey());
+        $membership = $location ? app(MembershipService::class)->assign($user, $location) : null;
+        RoleAssignment::on('pgsql_setup')->create([
+            'organization_id' => $organization->id, 'user_id' => $user->id, 'role' => $role,
+            'location_id' => $location?->id, 'membership_id' => $membership?->id,
+        ]);
 
-        return User::on('pgsql')->findOrFail($user->getKey());
+        return $this->updateFixture($user, ['email_verified_at' => now()]);
     }
 
     private function bootstrapPermissions(User $actor, User $recipient): void

@@ -35,7 +35,7 @@ final class RawMaterialCapabilitiesController
         $moduleAvailable = $definition !== null && $availability->enabled($location, 'RAW_MATERIALS');
         $allergenManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::AllergenManage);
         $referencePriceManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceManage);
-        $referencePriceView = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView);
+        $referencePriceView = $authorization->canRead($actor, $location, RawMaterialPermission::ReferencePriceView);
         $usableCostView = app(RawMaterialCatalogValues::class)->canReadCost($actor, $location);
         $supplierManage = $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierManage)
             && $authorization->hasEffectiveGrant($actor, RawMaterialPermission::SupplierView);

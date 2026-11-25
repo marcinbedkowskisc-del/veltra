@@ -3,7 +3,7 @@
 namespace App\Domain\RawMaterials;
 
 use App\Domain\Authorization\BusinessAuthorization;
-use App\Domain\Authorization\Permission;
+use App\Domain\Authorization\BusinessRole;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Query\Builder;
@@ -14,15 +14,19 @@ final class RawMaterialCatalogValues
 {
     public function __construct(private RawMaterialAuthorization $authorization) {}
 
-    public function canReadPrice(User $actor): bool
+    public function canReadPrice(User $actor, Location $context): bool
     {
-        return $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView);
+        return $this->authorization->canRead($actor, $context, RawMaterialPermission::ReferencePriceView);
     }
 
     public function canReadCost(User $actor, Location $context): bool
     {
-        return $this->canReadPrice($actor)
-            && app(BusinessAuthorization::class)->allows($actor, $context, $context, Permission::FoodcostView);
+        $canReadSource = app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Boss)
+            ? $this->authorization->canRead($actor, $context, RawMaterialPermission::View)
+            : $this->canReadPrice($actor, $context);
+
+        return $canReadSource
+            && $this->authorization->canReadFoodcost($actor, $context);
     }
 
     public static function quantities(array $input): array
@@ -84,7 +88,7 @@ final class RawMaterialCatalogValues
     {
         $query->addSelect('revisions.nominal_quantity', 'revisions.usable_quantity')
             ->selectRaw('raw_materials_round_half_even_v1(revisions.usable_quantity * 100 / NULLIF(revisions.nominal_quantity, 0), 6)::text AS yield_percent');
-        if ($this->canReadPrice($actor)) {
+        if ($this->canReadPrice($actor, $context)) {
             $query->selectRaw('raw_materials_round_half_even_v1('.self::packageExpression().', 14)::text AS reference_net_price');
         }
         if ($this->canReadCost($actor, $context)) {

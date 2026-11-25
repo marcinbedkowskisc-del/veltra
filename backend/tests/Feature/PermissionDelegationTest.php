@@ -20,12 +20,8 @@ class PermissionDelegationTest extends AuthorizationTestCase
     {
         $restaurant = $this->activeRestaurant();
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $chef = $this->user('central@example.test');
-        $chef = $this->updateFixture($chef, ['email_verified_at' => now()]);
-        $this->role($chef, BusinessRole::CentralKitchenChef, $kitchen);
-        $target = $this->user();
-        $target = $this->updateFixture($target, ['email_verified_at' => now()]);
-        $this->role($target, BusinessRole::RestaurantChef, $restaurant);
+        $chef = $this->provisionedUser('central@example.test', BusinessRole::CentralKitchenChef, $kitchen);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::RestaurantChef, $restaurant);
         $service = app(PermissionAdministration::class);
         $authorization = app(BusinessAuthorization::class);
         $service->grant($chef, $kitchen, $target, $restaurant, Permission::FoodcostView);
@@ -42,12 +38,9 @@ class PermissionDelegationTest extends AuthorizationTestCase
     public function test_overlapping_scheduled_delegations_merge_and_revocation_includes_future_grants(): void
     {
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $target = $this->updateFixture($target, ['email_verified_at' => now()]);
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
+        $this->role($target, BusinessRole::Employee, $this->activeRestaurant('R2'));
         $this->app->bind(ModuleAvailability::class, fn () => new class implements ModuleAvailability
         {
             public function enabled(Location $location, string $module): bool
@@ -83,11 +76,8 @@ class PermissionDelegationTest extends AuthorizationTestCase
     public function test_manager_cannot_grant_financial_permissions_or_delegate_unavailable_modules(): void
     {
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $manager = $this->updateFixture($manager, ['email_verified_at' => now()]);
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
         foreach ([Permission::FoodcostView, Permission::PurchasePricesView, Permission::StructureManage, Permission::TemperatureRegister] as $permission) {
             try {
                 app(PermissionAdministration::class)->grant($manager, $location, $target, $location, $permission);

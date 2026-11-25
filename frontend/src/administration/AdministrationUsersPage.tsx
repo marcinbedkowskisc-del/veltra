@@ -21,6 +21,7 @@ import {
   grantUserPermission,
   grantUserRole,
   removeUserLocation,
+  replaceUserRole,
   revokeUserPermission,
   revokeUserRole,
   roleValues,
@@ -149,6 +150,7 @@ function historyLabel(action: string): string {
     'membership.request': 'Złożono prośbę o dostęp do lokalizacji',
     'membership.approve': 'Zatwierdzono prośbę o dostęp',
     'membership.reject': 'Odrzucono prośbę o dostęp',
+    'role.replace': 'Zmieniono rolę użytkownika',
     'email.request_unknown': 'Zarejestrowano prośbę o wysłanie wiadomości',
     'email.request_unavailable': 'Nie można było wysłać wiadomości dotyczącej konta',
   }
@@ -181,15 +183,16 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [createForm, setCreateForm] = useState({ firstName: '', lastName: '', email: '', locationId: '' })
+  const [createForm, setCreateForm] = useState({ firstName: '', lastName: '', email: '', locationId: '', role: '' as BusinessRole | '', password: '' })
   const [profileOpen, setProfileOpen] = useState(false)
   const [profileForm, setProfileForm] = useState({ firstName: '', lastName: '' })
   const [emailOpen, setEmailOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [roleOpen, setRoleOpen] = useState(false)
-  const [roleForm, setRoleForm] = useState<{ role: BusinessRole; locationId: string; password: string }>({
+  const [roleForm, setRoleForm] = useState<{ role: BusinessRole; locationId: string; locationIds: string[]; password: string }>({
     role: 'EMPLOYEE',
     locationId: '',
+    locationIds: [],
     password: '',
   })
   const [membershipOpen, setMembershipOpen] = useState(false)
@@ -344,17 +347,20 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!createForm.locationId) {
-      setActionError('Wybierz lokalizację, do której ma zostać przypisany nowy użytkownik.')
+    if (!createForm.locationId || !createForm.role) {
+      setActionError('Wybierz lokalizację i rolę nowego użytkownika.')
       return
     }
+    const role = createForm.role
     await perform(() => createUser(createForm.locationId, {
       first_name: createForm.firstName.trim(),
       last_name: createForm.lastName.trim(),
       email: createForm.email.trim(),
+      role,
+      ...(role === 'ADMINISTRATOR' ? { current_password: createForm.password } : {}),
     }), 'Jeśli adres jest nowy, wysłaliśmy link aktywacyjny. Istniejące konto nie zostało powielone.', () => {
       setCreateOpen(false)
-      setCreateForm((current) => ({ ...current, firstName: '', lastName: '', email: '' }))
+      setCreateForm((current) => ({ ...current, firstName: '', lastName: '', email: '', role: '', password: '' }))
     })
   }
 
@@ -377,16 +383,25 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
     event.preventDefault()
     if (!selectedId) return
     const globalRole = roleForm.role === 'ADMINISTRATOR' || roleForm.role === 'BOSS'
-    if (!globalRole && !roleForm.locationId) {
+    const activeRoles = details?.roles.filter((assignment) => assignment.revokedAt === null) ?? []
+    const replacing = activeRoles.length > 0 && activeRoles.some((assignment) => assignment.role !== roleForm.role)
+    if (!globalRole && (replacing ? roleForm.locationIds.length === 0 : !roleForm.locationId)) {
       setActionError('Wybierz lokalizację dla tej roli.')
       return
     }
-    await perform(() => grantUserRole(
+    const password = roleForm.role === 'ADMINISTRATOR' || activeRoles.some((assignment) => assignment.role === 'ADMINISTRATOR')
+      ? roleForm.password : undefined
+    await perform(() => replacing ? replaceUserRole(
+      selectedId,
+      roleForm.role,
+      globalRole ? [] : roleForm.locationIds,
+      password,
+    ) : grantUserRole(
       selectedId,
       roleForm.role,
       globalRole ? null : roleForm.locationId,
-      roleForm.role === 'ADMINISTRATOR' ? roleForm.password : undefined,
-    ), 'Rola została przypisana.', () => {
+      password,
+    ), replacing ? 'Rola została zmieniona.' : 'Rola została przypisana.', () => {
       setRoleOpen(false)
       setRoleForm((current) => ({ ...current, password: '' }))
     })
@@ -490,6 +505,9 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   ]
 
   const activeLocations = locations.filter((location) => location.isActive !== false)
+  const createLocation = activeLocations.find((location) => location.id === createForm.locationId)
+  const createRoles = roleValues.filter((role) => role === 'ADMINISTRATOR' || role === 'BOSS'
+    || (role === 'CENTRAL_KITCHEN_CHEF' ? createLocation?.type === 'CENTRAL_KITCHEN' : createLocation?.type === 'RESTAURANT'))
   const activeRestaurants = activeLocations.filter((location) => location.type === 'RESTAURANT')
   const assignedLocationIds = new Set(details?.memberships.filter((membership) => membership.isActive).map((membership) => membership.locationId) ?? [])
   const roleLocations = activeLocations.filter((location) => (
@@ -500,6 +518,9 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
   ))
   const availableMembershipLocations = activeLocations.filter((location) => !assignedLocationIds.has(location.id))
   const globalRole = roleForm.role === 'ADMINISTRATOR' || roleForm.role === 'BOSS'
+  const activeRoles = details?.roles.filter((assignment) => assignment.revokedAt === null) ?? []
+  const replacingRole = activeRoles.length > 0 && activeRoles.some((assignment) => assignment.role !== roleForm.role)
+  const roleRequiresPassword = roleForm.role === 'ADMINISTRATOR' || activeRoles.some((assignment) => assignment.role === 'ADMINISTRATOR')
   const rawTargetLimitation = details && !details.isActive
     ? 'Nie można nadawać RAW: konto odbiorcy jest nieaktywne.'
     : details && !details.emailVerifiedAt
@@ -541,11 +562,20 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
               <input required type="email" maxLength={254} value={createForm.email} onChange={(event) => setCreateForm({ ...createForm, email: event.target.value })} />
             </label>
             <label>Przypisz do lokalizacji
-              <select required value={createForm.locationId} onChange={(event) => setCreateForm({ ...createForm, locationId: event.target.value })}>
+              <select required value={createForm.locationId} onChange={(event) => setCreateForm({ ...createForm, locationId: event.target.value, role: '', password: '' })}>
                 <option value="">Wybierz lokalizację</option>
                 {activeLocations.map((location) => <option key={location.id} value={location.id}>{location.name} — {locationTypeLabel(location)}</option>)}
               </select>
             </label>
+            <label>Rola nowego użytkownika
+              <select required value={createForm.role} onChange={(event) => setCreateForm({ ...createForm, role: event.target.value as BusinessRole | '', password: '' })}>
+                <option value="">Wybierz rolę</option>
+                {createRoles.map((value) => <option key={value} value={value}>{roleLabels[value]}</option>)}
+              </select>
+            </label>
+            {createForm.role === 'ADMINISTRATOR' && <label>Potwierdź aktualnym hasłem
+              <input required type="password" autoComplete="current-password" value={createForm.password} onChange={(event) => setCreateForm({ ...createForm, password: event.target.value })} />
+            </label>}
           </div>
           <div className="admin-user-form-actions">
             <button type="submit" className="button button-primary" disabled={busy || locationsLoading || activeLocations.length === 0}>Utwórz konto i wyślij link</button>
@@ -713,8 +743,8 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
 
                 <VeltraDisclosure title="Role i lokalizacje">
                   <div className="admin-user-section-actions">
-                    <button type="button" className="button button-secondary" disabled={!details.isActive} onClick={() => setRoleOpen((open) => !open)}>+ Przypisz rolę</button>
-                    <button type="button" className="button button-secondary" disabled={!details.isActive} onClick={() => {
+                    <button type="button" className="button button-secondary" onClick={() => setRoleOpen((open) => !open)}>+ Przypisz rolę</button>
+                    <button type="button" className="button button-secondary" onClick={() => {
                       setMembershipLocationId(availableMembershipLocations[0]?.id ?? '')
                       setMembershipOpen((open) => !open)
                     }}>+ Przypisz lokalizację</button>
@@ -726,21 +756,35 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
                         <select value={roleForm.role} onChange={(event) => setRoleForm({
                           role: event.target.value as BusinessRole,
                           locationId: '',
+                          locationIds: [],
                           password: '',
                         })}>
                           {roleValues.map((value) => <option key={value} value={value}>{roleLabels[value]}</option>)}
                         </select>
                       </label>
-                      {!globalRole && <label>Lokalizacja
+                      {!globalRole && !replacingRole && <label>Lokalizacja
                         <select required value={roleForm.locationId} onChange={(event) => setRoleForm({ ...roleForm, locationId: event.target.value })}>
                           <option value="">Wybierz lokalizację</option>
                           {roleLocations.map((location) => <option key={location.id} value={location.id}>{location.name} — {locationTypeLabel(location)}</option>)}
                         </select>
                       </label>}
-                      {roleForm.role === 'ADMINISTRATOR' && <label>Potwierdź aktualnym hasłem
+                      {!globalRole && replacingRole && <fieldset>
+                        <legend>Lokalizacje nowej roli</legend>
+                        {roleLocations.map((location) => <label key={location.id}>
+                          <input type="checkbox" checked={roleForm.locationIds.includes(location.id)} onChange={(event) => {
+                            const checked = event.target.checked
+                            setRoleForm((current) => ({ ...current, locationIds: checked
+                              ? [...current.locationIds, location.id]
+                              : current.locationIds.filter((id) => id !== location.id) }))
+                          }} /> {location.name} — {locationTypeLabel(location)}
+                        </label>)}
+                        {roleLocations.length === 0 && <p>Najpierw przypisz użytkownika do właściwych lokalizacji.</p>}
+                      </fieldset>}
+                      {roleRequiresPassword && <label>Potwierdź aktualnym hasłem
                         <input required type="password" autoComplete="current-password" value={roleForm.password} onChange={(event) => setRoleForm({ ...roleForm, password: event.target.value })} />
                       </label>}
                     </div>
+                    {replacingRole && <p>Dotychczasowa rola zostanie zastąpiona atomowo nową rolą.</p>}
                     <button type="submit" className="button button-primary" disabled={busy}>Zapisz rolę</button>
                   </form>}
                   {membershipOpen && <form className="admin-user-inline-form" onSubmit={(event) => void submitMembership(event)}>
@@ -751,14 +795,16 @@ export default function AdministrationUsersPage({ onSessionExpired }: Props) {
                         {availableMembershipLocations.map((location) => <option key={location.id} value={location.id}>{location.name} — {locationTypeLabel(location)}</option>)}
                       </select>
                     </label>
-                    <button type="submit" className="button button-primary" disabled={busy || !details.isActive || availableMembershipLocations.length === 0}>Zapisz przypisanie</button>
+                    <button type="submit" className="button button-primary" disabled={busy || availableMembershipLocations.length === 0}>Zapisz przypisanie</button>
                   </form>}
                   <h4>Przypisane role</h4>
                   {details.roles.length === 0 ? <p>Brak przypisanych ról.</p> : (
                     <ul className="admin-user-record-list">
                       {details.roles.map((assignment) => <li key={assignment.id}>
                         <div><strong>{roleLabels[assignment.role]}</strong><span>{assignment.locationName ?? 'Cała instalacja'}</span><small>{assignment.revokedAt ? 'Rola cofnięta' : 'Rola aktywna'}</small></div>
-                        {!assignment.revokedAt && <button type="button" className="button button-quiet" onClick={() => openConfirmation({
+                        {!assignment.revokedAt && <button type="button" className="button button-quiet" disabled={details.isActive && details.emailVerifiedAt !== null
+                          && !details.roles.some((other) => other.id !== assignment.id && other.revokedAt === null
+                            && (other.locationId === null || details.memberships.some((membership) => membership.locationId === other.locationId && membership.isActive && membership.locationIsActive)))} onClick={() => openConfirmation({
                           kind: 'role',
                           id: assignment.id,
                           role: assignment.role,

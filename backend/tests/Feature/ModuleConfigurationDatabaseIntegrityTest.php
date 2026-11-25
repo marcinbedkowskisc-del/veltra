@@ -7,7 +7,6 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\Modules\ModuleConfigurationService;
 use App\Models\Location;
-use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
@@ -28,15 +27,8 @@ class ModuleConfigurationDatabaseIntegrityTest extends AuthorizationTestCase
         parent::setUp();
         $this->restaurant = $this->activeRestaurant();
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $this->administrator = $this->user('module-integrity@example.test');
+        $this->administrator = $this->provisionedUser('module-integrity@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->kitchen);
-        RoleAssignment::on('pgsql_setup')->create([
-            'organization_id' => $this->administrator->organization_id,
-            'user_id' => $this->administrator->id,
-            'role' => BusinessRole::Administrator,
-            'location_id' => null,
-            'membership_id' => null,
-        ]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
     }
 

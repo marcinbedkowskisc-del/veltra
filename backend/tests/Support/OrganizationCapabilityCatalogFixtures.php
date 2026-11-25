@@ -11,8 +11,20 @@ final class OrganizationCapabilityCatalogFixtures
 {
     public static function ready(): OrganizationCapabilityCatalog
     {
-        return new class implements OrganizationCapabilityCatalog
+        return self::catalog(true);
+    }
+
+    public static function notReady(): OrganizationCapabilityCatalog
+    {
+        return self::catalog(false);
+    }
+
+    private static function catalog(bool $ready): OrganizationCapabilityCatalog
+    {
+        return new class($ready) implements OrganizationCapabilityCatalog
         {
+            public function __construct(private bool $ready) {}
+
             public function find(string $key): ?OrganizationCapabilityDefinition
             {
                 return $key === CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ
@@ -30,7 +42,7 @@ final class OrganizationCapabilityCatalogFixtures
                 return new OrganizationCapabilityDefinition(
                     CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
                     'ORGANIZATION',
-                    ready: true,
+                    ready: $this->ready,
                     operatingContextTypes: [LocationType::CentralKitchen, LocationType::Restaurant],
                     operations: ['list', 'detail'],
                 );

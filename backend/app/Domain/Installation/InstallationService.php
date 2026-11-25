@@ -35,6 +35,10 @@ class InstallationService
         return $this->contexts->run(AuthorizationMutationScope::installationLocationCreate(), null, fn (): Location => DB::transaction(function () use ($attributes): Location {
             $organization = $this->lockOrganization();
             $attributes['is_active'] ??= $attributes['type'] === LocationType::CentralKitchen->value;
+            if ($attributes['type'] === LocationType::CentralKitchen->value
+                && $organization->locations()->where('type', LocationType::CentralKitchen->value)->exists()) {
+                throw new BusinessRuleViolation(__('messages.single_central_kitchen_required'));
+            }
             $willBePrimary = $attributes['type'] === LocationType::CentralKitchen->value
                 && ! $organization->primary_central_kitchen_unresolved
                 && ! $organization->primaryCentralKitchen()->exists();
@@ -74,6 +78,20 @@ class InstallationService
             if ($location->type === LocationType::CentralKitchen && ! $active
                 && $location->managedAssignments()->current()->whereHas('restaurant', fn (Builder $q) => $q->where('is_active', true))->exists()) {
                 throw new BusinessRuleViolation(__('messages.cannot_disable_kitchen'));
+            }
+            if ($location->is_active && ! $active && DB::table('role_assignments as r')
+                ->join('users as u', 'u.id', '=', 'r.user_id')
+                ->join('location_memberships as m', 'm.id', '=', 'r.membership_id')
+                ->where('r.location_id', $location->id)->whereNull('r.revoked_at')
+                ->where('m.is_active', true)->where('u.is_active', true)->whereNotNull('u.email_verified_at')
+                ->whereNotExists(fn ($q) => $q->selectRaw('1')->from('role_assignments as other')
+                    ->leftJoin('location_memberships as om', 'om.id', '=', 'other.membership_id')
+                    ->leftJoin('locations as ol', 'ol.id', '=', 'om.location_id')
+                    ->whereColumn('other.user_id', 'r.user_id')->whereNull('other.revoked_at')
+                    ->where(fn ($scope) => $scope->whereNull('other.membership_id')->orWhere(fn ($local) => $local
+                        ->where('om.is_active', true)->where('ol.is_active', true)->where('ol.id', '<>', $location->id)))
+                )->exists()) {
+                throw new BusinessRuleViolation(__('messages.business_role_must_remain'));
             }
             $location->update($attributes);
 

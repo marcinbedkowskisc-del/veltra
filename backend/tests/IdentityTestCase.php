@@ -3,8 +3,6 @@
 namespace Tests;
 
 use App\Models\Location;
-use App\Models\Organization;
-use App\Models\User;
 use Illuminate\Contracts\Auth\Authenticatable;
 
 abstract class IdentityTestCase extends InstallationTestCase
@@ -17,18 +15,6 @@ abstract class IdentityTestCase extends InstallationTestCase
         config(['cache.default' => 'array', 'session.driver' => 'array']);
         $this->withHeader('Origin', 'http://localhost:5173');
         $this->initialize();
-    }
-
-    protected function user(string $email = 'person@example.test'): User
-    {
-        $user = User::on('pgsql_setup')->create([
-            'organization_id' => Organization::firstOrFail()->id,
-            'first_name' => 'Test', 'last_name' => 'Person',
-            'email' => $email, 'password' => self::PASSWORD, 'is_active' => true,
-        ]);
-        $user->forceFill(['email_verified_at' => now()])->save();
-
-        return User::on('pgsql')->findOrFail($user->getKey());
     }
 
     public function actingAs(Authenticatable $user, $guard = null)

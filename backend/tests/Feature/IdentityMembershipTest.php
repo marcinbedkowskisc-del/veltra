@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Models\Location;
@@ -9,10 +10,15 @@ use App\Models\LocationMembership;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Str;
-use Tests\IdentityTestCase;
+use Tests\AuthorizationTestCase;
 
-class IdentityMembershipTest extends IdentityTestCase
+class IdentityMembershipTest extends AuthorizationTestCase
 {
+    protected function user(string $email = 'person@example.test'): User
+    {
+        return $this->provisionedUser($email, BusinessRole::Boss);
+    }
+
     public function test_email_is_normalized_unique_case_insensitively_and_user_cannot_be_deleted(): void
     {
         $user = $this->user(' PERSON@EXAMPLE.TEST ');
@@ -90,8 +96,7 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_inactive_location_invalidates_selected_context_and_is_not_listed(): void
     {
         $user = $this->user();
-        $this->kitchen('PRIMARY');
-        $location = $this->kitchen('SECONDARY');
+        $location = $this->activeRestaurant();
         app(MembershipService::class)->assign($user, $location);
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $location->id])->assertOk();
         $this->service->updateLocation($location, ['is_active' => false]);
@@ -125,8 +130,7 @@ class IdentityMembershipTest extends IdentityTestCase
     public function test_assignment_rejects_disabled_users_and_locations(): void
     {
         $user = $this->user();
-        $this->kitchen('PRIMARY');
-        $location = $this->kitchen('SECONDARY');
+        $location = $this->activeRestaurant();
         $location = $this->updateFixture($location, ['is_active' => false]);
         $this->expectException(BusinessRuleViolation::class);
         app(MembershipService::class)->assign($user, $location);
@@ -151,20 +155,25 @@ class IdentityMembershipTest extends IdentityTestCase
         $this->assertNull(session('operating_membership_id'));
     }
 
-    public function test_cross_organization_memberships_fail_at_database_and_service_boundaries(): void
+    public function test_memberships_for_unknown_organization_locations_fail_at_database_and_service_boundaries(): void
     {
         $user = $this->user();
-        $this->withForeignOrganizationFixture(function (Location $foreign) use ($user): void {
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationMembership::on('pgsql_setup')->create([
-                'organization_id' => $user->organization_id, 'user_id' => $user->id, 'location_id' => $foreign->id, 'is_active' => true,
-            ]));
-            try {
-                app(MembershipService::class)->assign($user, $foreign);
-                $this->fail('Cross-organization membership accepted.');
-            } catch (BusinessRuleViolation $exception) {
-                $this->assertSame(__('messages.membership_must_belong_to_organization'), $exception->getMessage());
-            }
-            $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $foreign->id])->assertForbidden();
-        });
+        $unknownLocationId = Str::uuid()->toString();
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => LocationMembership::on('pgsql_setup')->create([
+            'organization_id' => $user->organization_id, 'user_id' => $user->id,
+            'location_id' => $unknownLocationId, 'is_active' => true,
+        ]));
+        $unknownLocation = new Location;
+        $unknownLocation->id = $unknownLocationId;
+        $unknownLocation->organization_id = Str::uuid()->toString();
+        try {
+            app(MembershipService::class)->assign($user, $unknownLocation);
+            $this->fail('Membership for an unknown organization location was accepted.');
+        } catch (BusinessRuleViolation $exception) {
+            $this->assertSame(__('messages.membership_must_belong_to_organization'), $exception->getMessage());
+        }
+        $this->actingAs($user, 'web')->putJson('/api/v1/auth/operating-location', [
+            'location_id' => $unknownLocationId,
+        ])->assertForbidden();
     }
 }

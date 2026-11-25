@@ -343,7 +343,7 @@ export async function fetchUserDetails(id: string, signal?: AbortSignal): Promis
   }
 }
 
-export async function createUser(locationId: string, profile: { first_name: string; last_name: string; email: string }): Promise<void> {
+export async function createUser(locationId: string, profile: { first_name: string; last_name: string; email: string; role: BusinessRole; current_password?: string }): Promise<void> {
   await request(`${SECURITY}/locations/${encodeURIComponent(locationId)}/personnel`, 'POST', profile)
 }
 
@@ -367,6 +367,14 @@ export async function grantUserRole(id: string, role: BusinessRole, locationId: 
   await request(`${SECURITY}/users/${encodeURIComponent(id)}/roles`, 'POST', {
     role,
     location_id: locationId,
+    ...(currentPassword ? { current_password: currentPassword } : {}),
+  })
+}
+
+export async function replaceUserRole(id: string, role: BusinessRole, locationIds: string[], currentPassword?: string): Promise<void> {
+  await request(`${SECURITY}/users/${encodeURIComponent(id)}/role`, 'PUT', {
+    role,
+    location_ids: locationIds,
     ...(currentPassword ? { current_password: currentPassword } : {}),
   })
 }

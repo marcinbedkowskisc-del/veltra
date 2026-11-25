@@ -22,8 +22,7 @@ class OrganizationCapabilityConcurrencyTest extends AuthorizationTestCase
         $this->activeRestaurant();
         $organization = Organization::firstOrFail();
         $kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $actor = $this->user('capability-concurrency@example.test');
-        $this->role($actor, BusinessRole::Administrator);
+        $actor = $this->provisionedUser('capability-concurrency@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($actor, $kitchen, $actor->id);
 
         $processes = [];

@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BusinessRole;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Connection;
@@ -24,8 +25,8 @@ class SystemPermissionGrantOriginTest extends AuthorizationTestCase
     {
         parent::setUp();
         $this->location = $this->kitchen();
-        $this->actor = $this->user('origin-actor@example.test');
-        $this->recipient = $this->user('origin-recipient@example.test');
+        $this->actor = $this->provisionedUser('origin-actor@example.test', BusinessRole::Administrator);
+        $this->recipient = $this->provisionedUser('origin-recipient@example.test', BusinessRole::CentralKitchenChef, $this->location);
     }
 
     public function test_invalid_origin_and_mixed_user_origin_are_rejected(): void

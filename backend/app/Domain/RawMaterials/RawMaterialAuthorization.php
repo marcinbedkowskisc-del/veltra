@@ -2,10 +2,16 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\BossLocationRestrictions;
+use App\Domain\Authorization\BossVisibilityCategory;
 use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessDataProvenance;
 use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\ModuleAvailability;
+use App\Domain\Authorization\Permission;
 use App\Domain\Identity\MembershipService;
+use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
+use App\Domain\Modules\OrganizationCapabilityAccess;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -30,7 +36,9 @@ final class RawMaterialAuthorization
             );
         }
 
-        if (! $this->effectiveGrantIds($freshActor, $permission)) {
+        if ($permission->readOnly()
+            ? ! $this->canRead($freshActor, $freshContext, $permission)
+            : ! $this->effectiveGrantIds($freshActor, $permission)) {
             throw new AuthorizationException(__('messages.unauthorized'));
         }
         if ($permission === RawMaterialPermission::ReferencePriceManage
@@ -83,6 +91,71 @@ final class RawMaterialAuthorization
         return $this->effectiveGrantIds($user, $permission) !== [];
     }
 
+    public function canRead(User $actor, Location $context, RawMaterialPermission $permission): bool
+    {
+        if (! $permission->readOnly()) {
+            return false;
+        }
+        $business = app(BusinessAuthorization::class);
+        if (! $business->hasRole($actor, BusinessRole::Boss)) {
+            return $this->hasEffectiveGrant($actor, $permission);
+        }
+        if (! $business->eligible($actor, $context)
+            || ! app(OrganizationCapabilityAccess::class)->isEnabled(
+                $actor->organization_id,
+                CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+                'detail',
+                $context->type,
+            )) {
+            return false;
+        }
+        $categories = [BossVisibilityCategory::RawSuppliers];
+        if (in_array($permission, [
+            RawMaterialPermission::PurchasingCostsView,
+            RawMaterialPermission::ReferencePriceView,
+            RawMaterialPermission::ExchangeRateView,
+        ], true)) {
+            $categories[] = BossVisibilityCategory::PurchaseFinancials;
+        }
+
+        return $this->bossAllowsCategories($actor, $context, $categories);
+    }
+
+    public function canReadFoodcost(User $actor, Location $context): bool
+    {
+        $business = app(BusinessAuthorization::class);
+
+        return $business->allows($actor, $context, $context, Permission::FoodcostView)
+            && (! $business->hasRole($actor, BusinessRole::Boss)
+                || $this->bossAllowsCategories($actor, $context, [BossVisibilityCategory::Foodcost]));
+    }
+
+    private function bossAllowsCategories(User $actor, Location $context, array $categories): bool
+    {
+        $locationIds = [$context->id];
+        $primary = Location::where('organization_id', $actor->organization_id)
+            ->where('is_primary_central_kitchen', true)->where('is_active', true)->value('id');
+        if (is_string($primary) && $primary !== $context->id) {
+            $locationIds[] = $primary;
+        }
+
+        return ! app(BossLocationRestrictions::class)->denies(
+            $actor,
+            BusinessDataProvenance::derived($locationIds),
+            $categories,
+        );
+    }
+
+    public function assertDocumentReadAllowed(User $actor, Location $context): void
+    {
+        $business = app(BusinessAuthorization::class);
+        if ($business->hasRole($actor, BusinessRole::Boss)
+            && (! $this->canRead($actor, $context, RawMaterialPermission::ReferencePriceView)
+                || ! $this->canReadFoodcost($actor, $context))) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+    }
+
     /**
      * @return array{User, Location}
      */
@@ -106,6 +179,25 @@ final class RawMaterialAuthorization
      */
     public function effectiveGrantIds(User $user, RawMaterialPermission $permission): array
     {
+        $business = app(BusinessAuthorization::class);
+        if (! $business->hasSingleEffectiveRole($user)
+            || ($business->hasRole($user, BusinessRole::Boss) && ! $permission->readOnly())) {
+            return [];
+        }
+        if ($business->hasRole($user, BusinessRole::Boss)
+            && in_array($permission, [
+                RawMaterialPermission::PurchasingCostsView,
+                RawMaterialPermission::ReferencePriceView,
+                RawMaterialPermission::ExchangeRateView,
+            ], true)
+            && app(BossLocationRestrictions::class)->denies(
+                $user,
+                BusinessDataProvenance::organization(),
+                [BossVisibilityCategory::PurchaseFinancials],
+            )) {
+            return [];
+        }
+
         return array_map(
             fn (object $grant): string => $grant->id,
             DB::select(<<<'SQL'

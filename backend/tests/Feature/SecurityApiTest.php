@@ -22,10 +22,9 @@ class SecurityApiTest extends AuthorizationTestCase
     public function test_management_api_requires_identity_context_and_explicit_authorization_not_dev_token(): void
     {
         $location = $this->activeRestaurant();
-        $target = $this->user();
+        $target = $this->pendingUser();
         $this->postJson("/api/v1/security/users/{$target->id}/roles", ['role' => 'ADMINISTRATOR'])->assertUnauthorized();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
         $this->actingAs($manager, 'web')->postJson("/api/v1/security/users/{$target->id}/roles", ['role' => 'ADMINISTRATOR'])->assertForbidden();
         $this->selectContext($manager, $location);
         $this->postJson("/api/v1/security/users/{$target->id}/roles", ['role' => 'ADMINISTRATOR', 'current_password' => self::PASSWORD])->assertForbidden();
@@ -40,13 +39,12 @@ class SecurityApiTest extends AuthorizationTestCase
     {
         Mail::fake();
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $outside = $this->user('outside@example.test');
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $outside = $this->pendingUser('outside@example.test');
         $this->selectContext($manager, $location);
         $this->getJson("/api/v1/security/locations/{$location->id}/users")->assertOk()->assertJsonCount(1, 'data')
             ->assertJsonMissing(['email' => $outside->email]);
-        $profile = ['first_name' => 'New', 'last_name' => 'Staff', 'email' => 'new@example.test'];
+        $profile = ['first_name' => 'New', 'last_name' => 'Staff', 'email' => 'new@example.test', 'role' => 'EMPLOYEE'];
         $newResponse = $this->postJson("/api/v1/security/locations/{$location->id}/personnel", $profile)->assertAccepted();
         $existingResponse = $this->postJson("/api/v1/security/locations/{$location->id}/personnel", [...$profile, 'email' => $outside->email])->assertAccepted();
         $this->assertSame($newResponse->json(), $existingResponse->json());
@@ -55,9 +53,8 @@ class SecurityApiTest extends AuthorizationTestCase
         $pending = MembershipRequest::firstOrFail();
         $this->postJson("/api/v1/security/membership-requests/{$pending->id}/decision", ['approve' => true])->assertForbidden();
         $created = User::where('email', 'new@example.test')->firstOrFail();
-        $grant = $this->postJson("/api/v1/security/users/{$created->id}/roles", ['role' => 'RESTAURANT_CHEF', 'location_id' => $location->id])
-            ->assertCreated()->json('data.id');
-        $this->deleteJson("/api/v1/security/roles/{$grant}")->assertOk();
+        $this->putJson("/api/v1/security/users/{$created->id}/role", ['role' => 'RESTAURANT_CHEF', 'location_ids' => [$location->id]])
+            ->assertOk()->assertJsonPath('data.0.role', 'RESTAURANT_CHEF');
         $this->postJson("/api/v1/security/users/{$created->id}/locations/{$location->id}/permissions", ['permission' => 'FOODCOST_VIEW'])->assertForbidden();
         $this->getJson("/api/v1/security/users/{$created->id}/assignments")->assertOk()->assertJsonMissingPath('data.password');
     }
@@ -66,10 +63,8 @@ class SecurityApiTest extends AuthorizationTestCase
     {
         Mail::fake();
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
         $this->selectContext($manager, $location);
         $sent = $this->postJson("/api/v1/security/users/{$target->id}/links", ['kind' => 'reset'])->assertAccepted();
         $limited = $this->postJson("/api/v1/security/users/{$target->id}/links", ['kind' => 'reset'])->assertAccepted();
@@ -84,16 +79,14 @@ class SecurityApiTest extends AuthorizationTestCase
     {
         Mail::fake();
         $location = $this->kitchen();
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location, $admin->id);
         $this->updateFixture($admin->organization, ['authorization_initialized' => true]);
         $this->selectContext($admin, $location);
-        $this->postJson("/api/v1/security/locations/{$location->id}/personnel", ['first_name' => 'New', 'last_name' => 'Chef', 'email' => 'newchef@example.test'])->assertAccepted();
+        $this->postJson("/api/v1/security/locations/{$location->id}/personnel", ['first_name' => 'New', 'last_name' => 'Chef', 'email' => 'newchef@example.test', 'role' => 'CENTRAL_KITCHEN_CHEF'])->assertAccepted();
         $new = User::where('email', 'newchef@example.test')->firstOrFail();
-        $this->assertSame(0, RoleAssignment::where('user_id', $new->id)->count());
-        $this->postJson("/api/v1/security/users/{$new->id}/roles", ['role' => 'CENTRAL_KITCHEN_CHEF', 'location_id' => $location->id])->assertCreated();
-        $other = $this->user('old@example.test');
+        $this->assertSame(1, RoleAssignment::where('user_id', $new->id)->where('role', BusinessRole::CentralKitchenChef)->count());
+        $other = $this->pendingUser('old@example.test');
         $this->postJson("/api/v1/security/users/{$other->id}/locations/{$location->id}/membership")->assertCreated();
         $version = $other->auth_version;
         $this->patchJson("/api/v1/security/users/{$other->id}/email", ['email' => ' NEW@example.test '])->assertAccepted();
@@ -107,11 +100,10 @@ class SecurityApiTest extends AuthorizationTestCase
 
     public function test_role_mutations_use_real_csrf_and_validation_and_admin_confirmation_is_rate_limited(): void
     {
-        $actor = $this->user('admin@example.test');
         $location = $this->activeRestaurant();
-        $this->role($actor, BusinessRole::Administrator);
+        $actor = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($actor, $location, $actor->id);
-        $target = $this->user();
+        $target = $this->pendingUser();
         $this->selectContext($actor, $location);
         $this->app->detectEnvironment(fn () => 'local');
         $this->postJson("/api/v1/security/users/{$target->id}/roles", ['role' => 'BOSS'])->assertStatus(419);

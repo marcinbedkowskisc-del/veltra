@@ -181,6 +181,7 @@ final class RawMaterialDocumentService
 
     public function verifyVersion(User $actor, Location $context, string $versionId): array
     {
+        $this->authorization->assertDocumentReadAllowed($actor, $context);
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
 
         $isPrimary = $this->sharePolicy->isPrimaryContext($context);

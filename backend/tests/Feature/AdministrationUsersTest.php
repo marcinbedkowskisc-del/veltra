@@ -11,6 +11,7 @@ use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Domain\RawMaterials\RawMaterialPermissionBootstrap;
 use App\Models\Location;
+use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\Auth;
@@ -30,8 +31,7 @@ class AdministrationUsersTest extends AuthorizationTestCase
 
     private function administrator(Location $location): User
     {
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 
@@ -44,10 +44,9 @@ class AdministrationUsersTest extends AuthorizationTestCase
         $second = $this->activeRestaurant('R2');
         $this->administrator($first);
 
-        $target = $this->user('anna@example.test');
-        $this->role($target, BusinessRole::Employee, $first);
+        $target = $this->provisionedUser('anna@example.test', BusinessRole::RestaurantManager, $first);
         $this->role($target, BusinessRole::RestaurantManager, $second);
-        $inactive = $this->user('inactive@example.test');
+        $inactive = $this->provisionedUser('inactive@example.test', BusinessRole::Boss);
         $this->updateFixture($inactive, ['is_active' => false]);
 
         $this->getJson('/api/v1/administration/users?search=anna&status=all')
@@ -70,8 +69,8 @@ class AdministrationUsersTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         $admin = $this->administrator($location);
-        $target = $this->user('target@example.test');
-        $assignment = $this->role($target, BusinessRole::Employee, $location);
+        $target = $this->provisionedUser('target@example.test', BusinessRole::Employee, $location);
+        $assignment = RoleAssignment::where('user_id', $target->id)->firstOrFail();
         $this->withSetupConnection(fn (Connection $connection): bool => $connection->table('membership_requests')->insert([
             'id' => (string) Str::uuid(),
             'organization_id' => $target->organization_id,
@@ -93,22 +92,20 @@ class AdministrationUsersTest extends AuthorizationTestCase
             ->assertJsonMissingPath('data.token');
     }
 
-    public function test_user_details_include_organization_raw_grants_without_module_readiness_or_cross_organization_access(): void
+    public function test_user_details_include_organization_raw_grants_without_module_readiness_or_unknown_user_access(): void
     {
         $location = $this->activeRestaurant();
         $administrator = $this->updateFixture($this->administrator($location), [
             'first_name' => 'Adam',
             'last_name' => 'Administrator',
         ]);
-        $bootstrapper = $this->user('raw-bootstrapper@example.test');
+        $bootstrapper = $this->provisionedUser('raw-bootstrapper@example.test', BusinessRole::Administrator);
         $bootstrapper = $this->updateFixture($bootstrapper, ['first_name' => 'Ala', 'last_name' => 'Bootstrap']);
-        $this->role($bootstrapper, BusinessRole::Administrator);
         app(MembershipService::class)->assign($bootstrapper, $location);
-        $target = $this->updateFixture($this->user('raw-target@example.test'), [
+        $target = $this->updateFixture($this->provisionedUser('raw-target@example.test', BusinessRole::Employee, $location), [
             'first_name' => 'Anna',
             'last_name' => 'Raw',
         ]);
-        app(MembershipService::class)->assign($target, $location);
         $this->updateFixture($administrator->organization, ['authorization_initialized' => true]);
         app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $bootstrapper->id,
@@ -150,26 +147,14 @@ class AdministrationUsersTest extends AuthorizationTestCase
             ->assertJsonCount(2, 'data.raw_permissions.history')
             ->assertJsonMissingPath('data.raw_permissions.grants.0.operation_id');
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $foreignUser = User::on('pgsql_setup')->create([
-                'organization_id' => $foreignLocation->organization_id,
-                'first_name' => 'Foreign',
-                'last_name' => 'User',
-                'email' => 'foreign-user@example.test',
-                'password' => self::PASSWORD,
-                'is_active' => true,
-            ]);
-
-            $this->getJson("/api/v1/administration/users/{$foreignUser->id}")->assertNotFound();
-        }, truncateAfterOperation: true);
+        $this->getJson('/api/v1/administration/users/'.Str::uuid())->assertNotFound();
     }
 
     public function test_user_details_project_effective_permissions_through_stage_1d_authorization(): void
     {
         $location = $this->activeRestaurant();
         $this->administrator($location);
-        $target = $this->user('employee@example.test');
-        $this->role($target, BusinessRole::Employee, $location);
+        $target = $this->provisionedUser('employee@example.test', BusinessRole::Employee, $location);
 
         $this->getJson("/api/v1/administration/users/{$target->id}")
             ->assertOk()
@@ -182,7 +167,7 @@ class AdministrationUsersTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         $admin = $this->administrator($location);
-        $target = $this->user('target@example.test');
+        $target = $this->pendingUser('target@example.test');
 
         $this->patchJson("/api/v1/administration/users/{$target->id}/profile", [
             'first_name' => 'Anna',
@@ -201,8 +186,7 @@ class AdministrationUsersTest extends AuthorizationTestCase
     public function test_non_administrators_cannot_access_administration_user_endpoints(): void
     {
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
         $this->selectContext($manager, $location);
 
         $this->getJson('/api/v1/administration/users')->assertForbidden();

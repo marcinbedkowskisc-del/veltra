@@ -1269,13 +1269,16 @@ final class RawMaterialService
             ->leftJoin('raw_material_categories as categories', 'categories.id', '=', 'revisions.category_id')
             ->where('materials.organization_id', $actor->organization_id)
             ->whereNull('materials.deleted_at')
-            ->where('materials.lifecycle_state', '<>', 'ARCHIVED')
             ->select([
                 'materials.id', 'materials.code', 'materials.lifecycle_state',
                 'revisions.id as revision_id', 'revisions.revision_no', 'revisions.name', 'revisions.description',
                 'revisions.base_unit_code', 'revisions.allergen_state',
                 'categories.id as category_id', 'categories.name as category_name',
             ]);
+        if (($filters['lifecycle_state'] ?? null) !== 'ARCHIVED'
+            || ! app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Boss)) {
+            $query->where('materials.lifecycle_state', '<>', 'ARCHIVED');
+        }
         if ($includeSupplierNames) {
             $supplierNames = DB::table('raw_material_supplier_associations as associations')
                 ->join('organization_suppliers as suppliers', function ($join): void {
@@ -1356,7 +1359,7 @@ final class RawMaterialService
         ];
         $sortKey = $filters['sort'] ?? 'name';
         if (in_array($sortKey, ['reference_net_price', 'usable_unit_cost'], true)) {
-            if (($sortKey === 'reference_net_price' && ! $this->catalogValues->canReadPrice($actor))
+            if (($sortKey === 'reference_net_price' && ! $this->catalogValues->canReadPrice($actor, $context))
                 || ($sortKey === 'usable_unit_cost' && ! $this->catalogValues->canReadCost($actor, $context))) {
                 throw new AuthorizationException(__('messages.unauthorized'));
             }
@@ -1437,7 +1440,7 @@ final class RawMaterialService
         return $this->presentMaterial($material, $revision)
             + RawMaterialCatalogValues::present($quantities)
             + app(RawMaterialHistoryService::class)->metadata($actor, $context, $material) + [
-                'pricing_input' => $this->pricingInputForEditor($actor, $revision),
+                'pricing_input' => $this->pricingInputForEditor($actor, $context, $revision),
                 'supplier_ids' => $this->supplierIdsForEditor($actor, $material->id, $revisionId),
                 'supplier_names' => $this->supplierNamesForMaterial($actor->organization_id, $material->id),
                 'allergen_declaration' => $declaration,
@@ -3428,9 +3431,9 @@ final class RawMaterialService
         ];
     }
 
-    private function pricingInputForEditor(User $actor, object $revision): ?array
+    private function pricingInputForEditor(User $actor, Location $context, object $revision): ?array
     {
-        if (! $this->authorization->hasEffectiveGrant($actor, RawMaterialPermission::ReferencePriceView)) {
+        if (! $this->catalogValues->canReadPrice($actor, $context)) {
             return null;
         }
 

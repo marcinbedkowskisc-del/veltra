@@ -117,8 +117,7 @@ trait RawDocumentsStage3eB3Tests
         $this->b3Storage();
         [$material, $input] = $this->b2Draft();
         $upload = $this->b3Upload();
-        $other = $this->user('b3-other@example.test');
-        app(MembershipService::class)->assign($other, $this->location);
+        $other = $this->restaurantEmployeeInCentralKitchen('b3-other@example.test');
         foreach ([RawMaterialPermission::View, RawMaterialPermission::Edit] as $permission) {
             app(OrganizationRawMaterialPermissionAdministration::class)->grant($this->steward, $this->location, $other, $permission, 'Test B3');
         }
@@ -328,10 +327,9 @@ trait RawDocumentsStage3eB3Tests
     {
         Storage::fake('raw_material_csv_exports');
         $material = $this->stage3eMaterial('Ceny B3', 'g', '100');
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->stage3ePrice($material['id'], '0.12345678901234', 'b3-price');
-        $reader = $this->user('b3-reader@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('b3-reader@example.test');
         $grants = app(OrganizationRawMaterialPermissionAdministration::class);
         $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::View, 'Odczyt B3');
         $this->selectRawMaterialApiContext($reader);
@@ -370,12 +368,10 @@ trait RawDocumentsStage3eB3Tests
     {
         Storage::fake('raw_material_csv_exports');
         $restaurant = $this->b3Recipient();
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Koszt B3', 'g', '100', '80');
         $this->stage3ePrice($material['id'], '0.1', 'b3-cost-price');
-        $reader = $this->user('b3-cost-reader@example.test');
-        app(MembershipService::class)->assign($reader, $restaurant);
-        $this->role($reader, BusinessRole::Employee, $restaurant);
+        $reader = $this->provisionedUser('b3-cost-reader@example.test', BusinessRole::Employee, $restaurant);
         app(RawMaterialLocationShareAdministration::class)->share($this->steward, $this->location, $material['id'], $restaurant->id);
         $grants = app(OrganizationRawMaterialPermissionAdministration::class);
         $grants->grant($this->steward, $this->location, $reader, RawMaterialPermission::View, 'Odczyt B3');
@@ -654,7 +650,7 @@ trait RawDocumentsStage3eB3Tests
     public function test_stage3e_b31_bulk_archive_preserves_revision_document_and_commercial_history(): void
     {
         $this->b3Storage();
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Historia do zachowania', 'g', '100');
         $document = app(RawMaterialDocumentService::class)->create(
             $this->steward,

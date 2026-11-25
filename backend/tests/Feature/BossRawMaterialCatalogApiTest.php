@@ -43,12 +43,9 @@ class BossRawMaterialCatalogApiTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->context = $this->primaryCentralKitchen();
-        $this->boss = $this->user('boss-raw-catalog-api@example.test');
-        $this->administrator = $this->user('admin-raw-catalog-api@example.test');
-        $this->rawSteward = $this->user('raw-raw-catalog-api@example.test');
-        $this->role($this->boss, BusinessRole::Boss);
-        $this->role($this->administrator, BusinessRole::Administrator);
-        $this->role($this->rawSteward, BusinessRole::Administrator);
+        $this->boss = $this->provisionedUser('boss-raw-catalog-api@example.test', BusinessRole::Boss);
+        $this->administrator = $this->provisionedUser('admin-raw-catalog-api@example.test', BusinessRole::Administrator);
+        $this->rawSteward = $this->provisionedUser('raw-raw-catalog-api@example.test', BusinessRole::Administrator);
         foreach ([$this->boss, $this->administrator, $this->rawSteward] as $user) {
             app(MembershipService::class)->assign($user, $this->context, $user->id);
         }

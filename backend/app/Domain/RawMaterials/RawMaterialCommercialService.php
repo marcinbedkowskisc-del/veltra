@@ -982,8 +982,9 @@ final class RawMaterialCommercialService
         }
         $rows = $query->orderByDesc('prices.effective_from')->orderByDesc('prices.event_no')->get();
 
-        $canViewPurchasingCosts = $this->authorization->hasEffectiveGrant(
+        $canViewPurchasingCosts = $this->authorization->canRead(
             $actor,
+            $context,
             RawMaterialPermission::PurchasingCostsView,
         );
 

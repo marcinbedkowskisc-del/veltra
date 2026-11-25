@@ -2,7 +2,6 @@
 
 namespace App\Domain\Authorization;
 
-use App\Domain\Installation\LocationType;
 use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
 use App\Domain\Modules\OrganizationCapabilityAccess;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
@@ -36,28 +35,29 @@ final class BusinessVisibility
         }
 
         if (! $surface->permission instanceof Permission
-            || ! in_array($surface->permission, [Permission::LocationView, Permission::ReportsView, Permission::ReportsExport], true)
+            || ! in_array($surface->permission, [
+                Permission::LocationView, Permission::ReportsView, Permission::ReportsExport,
+                Permission::RecipesView, Permission::QuantityCalculate,
+                Permission::FoodcostView, Permission::PurchasePricesView,
+            ], true)
             || ! $this->authorization->eligible($actor, $context, $surface->target)
             || ! $this->authorization->hasRole($actor, BusinessRole::Boss)) {
             return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'BOSS_ACCESS_NOT_AUTHORIZED');
         }
 
-        if (in_array($surface->permission, [Permission::ReportsView, Permission::ReportsExport], true)
-            && ! in_array(BossVisibilityCategory::ReportsAnalytics, $surface->categories, true)) {
+        $requiredCategory = match ($surface->permission) {
+            Permission::ReportsView, Permission::ReportsExport => BossVisibilityCategory::ReportsAnalytics,
+            Permission::RecipesView, Permission::QuantityCalculate => BossVisibilityCategory::ProductsRecipes,
+            Permission::FoodcostView => BossVisibilityCategory::Foodcost,
+            Permission::PurchasePricesView => BossVisibilityCategory::PurchaseFinancials,
+            default => null,
+        };
+        if ($requiredCategory !== null && ! in_array($requiredCategory, $surface->categories, true)) {
             return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'SURFACE_CATEGORY_MISSING');
         }
-        if (in_array($surface->permission, [Permission::ReportsView, Permission::ReportsExport], true)
-            && $surface->target?->type !== LocationType::Restaurant
-            && ! ($surface->key === 'boss.report.shared' && $surface->target?->type === LocationType::CentralKitchen)) {
-            return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'REPORT_TARGET_NOT_AVAILABLE');
-        }
-        if ($surface->permission === Permission::LocationView) {
-            if ($surface->target === null && $surface->key !== 'boss.location_directory') {
-                return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'LOCATION_TARGET_REQUIRED');
-            }
-            if ($surface->target !== null && $surface->target->type !== LocationType::Restaurant) {
-                return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'LOCATION_TARGET_REQUIRED');
-            }
+        if ($surface->target === null
+            && ! ($surface->permission === Permission::LocationView && $surface->key === 'boss.location_directory')) {
+            return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'LOCATION_TARGET_REQUIRED');
         }
         if ($surface->module !== null && ! $this->modules->enabled($context, $surface->module)) {
             return BusinessVisibilityDecision::deny(BusinessVisibilitySource::Boss, 'OPERATING_CONTEXT_MODULE_UNAVAILABLE');

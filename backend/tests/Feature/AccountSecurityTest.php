@@ -54,7 +54,7 @@ class AccountSecurityTest extends AuthorizationTestCase
             'email' => 'primary@example.test',
         ], self::PASSWORD);
         $primary = $this->kitchen('ZZ');
-        $this->kitchen('AA');
+        $this->restaurant('AA');
         $command = app(BootstrapAuthorization::class);
         $command->setLaravel($this->app);
         $tester = new CommandTester($command);
@@ -68,7 +68,7 @@ class AccountSecurityTest extends AuthorizationTestCase
         app(AccountLinks::class)->consume('activation', $user->email, $this->sentToken(), 'New-Password!42');
     }
 
-    public function test_bootstrap_fails_closed_for_an_unresolved_legacy_kitchen(): void
+    public function test_bootstrap_uses_the_valid_primary_without_legacy_resolution_state(): void
     {
         Mail::fake();
         $user = app(IdentityService::class)->provisionInitial([
@@ -76,17 +76,17 @@ class AccountSecurityTest extends AuthorizationTestCase
             'last_name' => 'Admin',
             'email' => 'legacy-primary@example.test',
         ], self::PASSWORD);
-        $organization = $user->organization;
-        $this->createLegacyUndesignatedKitchen($organization);
+        $primary = $this->kitchen();
         $command = app(BootstrapAuthorization::class);
         $command->setLaravel($this->app);
         $tester = new CommandTester($command);
         $tester->setInputs([self::PASSWORD]);
 
-        $this->assertSame(1, $tester->execute([], ['interactive' => true]));
-        $this->assertStringContainsString(__('messages.primary_central_kitchen_unresolved'), $tester->getDisplay());
-        $this->assertSame(0, RoleAssignment::count());
-        $this->assertSame(0, $user->memberships()->count());
+        $this->assertSame(0, $tester->execute([], ['interactive' => true]));
+        $this->assertFalse($user->organization->fresh()->primary_central_kitchen_unresolved);
+        $this->assertSame($primary->id, $user->memberships()->where('is_active', true)->sole()->location_id);
+        $this->assertSame(1, RoleAssignment::where('user_id', $user->id)
+            ->where('role', BusinessRole::Administrator)->whereNull('revoked_at')->count());
     }
 
     private function sentToken(): string
@@ -165,10 +165,8 @@ class AccountSecurityTest extends AuthorizationTestCase
     {
         Mail::fake();
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
         $links = app(AccountLinks::class);
         $this->postJson('/api/v1/auth/login', ['email' => $target->email, 'password' => self::PASSWORD])->assertOk();
         $links->issue($target, 'reset', '127.0.0.1', $manager, $location);
@@ -195,12 +193,17 @@ class AccountSecurityTest extends AuthorizationTestCase
     {
         $location = $this->activeRestaurant();
         $other = $this->activeRestaurant('R2');
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
         $this->assertTrue(app(AccountLinks::class)->canSend($manager, $location, $target));
-        $this->role($target, BusinessRole::RestaurantManager, $other);
+        $otherMembership = app(MembershipService::class)->assign($target, $other);
+        $this->withSetupTransaction(function () use ($manager, $target, $other, $otherMembership): void {
+            RoleAssignment::on('pgsql_setup')->where('user_id', $target->id)->update(['revoked_at' => DB::raw('clock_timestamp()'), 'revoked_by' => $manager->id]);
+            RoleAssignment::on('pgsql_setup')->create([
+                'organization_id' => $target->organization_id, 'user_id' => $target->id,
+                'role' => BusinessRole::RestaurantManager, 'location_id' => $other->id, 'membership_id' => $otherMembership->id,
+            ]);
+        });
         $this->assertFalse(app(AccountLinks::class)->canSend($manager, $location, $target));
         $old = $target->auth_version;
         $target = $this->updateFixture($target, ['email' => 'changed@example.test']);
@@ -212,10 +215,8 @@ class AccountSecurityTest extends AuthorizationTestCase
     {
         Mail::fake();
         $restaurant = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $restaurant);
-        $target = $this->user();
-        $target = $this->updateFixture($target, ['email_verified_at' => null]);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $restaurant);
+        $target = $this->pendingUser();
         $this->role($target, BusinessRole::Employee, $restaurant);
         $links = app(AccountLinks::class);
         $links->issue($target, 'activation', '127.0.0.1', $manager, $restaurant);
@@ -237,10 +238,8 @@ class AccountSecurityTest extends AuthorizationTestCase
     {
         Mail::fake();
         $location = $this->activeRestaurant();
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
-        $target = $this->user();
-        $this->role($target, BusinessRole::Employee, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
+        $target = $this->provisionedUser('person@example.test', BusinessRole::Employee, $location);
         $this->updateFixture($target, ['email' => 'changed@example.test']);
         app(AccountLinks::class)->issue($target, 'activation', '127.0.0.1', $manager, $location);
         Mail::assertSent(IdentityLink::class, fn (IdentityLink $mail) => $mail->hasTo('changed@example.test') && ! $mail->hasTo($target->email));

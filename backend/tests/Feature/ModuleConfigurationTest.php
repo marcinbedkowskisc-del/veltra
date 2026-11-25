@@ -32,8 +32,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         parent::setUp();
         $this->restaurant = $this->activeRestaurant();
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $this->administrator = $this->user('administrator@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('administrator@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->kitchen, $this->administrator->id);
         $this->selectContext($this->administrator, $this->kitchen);
     }
@@ -56,13 +55,10 @@ class ModuleConfigurationTest extends AuthorizationTestCase
             }
         }
 
-        $newKitchen = $this->kitchen('CK2');
         $newRestaurant = $this->activeRestaurant('R2');
-        foreach ([$newKitchen, $newRestaurant] as $location) {
-            $states = $this->getJson("/api/v1/security/locations/{$location->id}/modules")->assertOk()->json('data');
-            foreach ($states as $state) {
-                $this->assertSame('DISABLED', $state['configured_state']);
-            }
+        $states = $this->getJson("/api/v1/security/locations/{$newRestaurant->id}/modules")->assertOk()->json('data');
+        foreach ($states as $state) {
+            $this->assertSame('DISABLED', $state['configured_state']);
         }
         $this->assertSame(0, DB::table('location_module_states')->count());
     }
@@ -107,11 +103,8 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         ];
 
         foreach ($roleContexts as [$role, $context, $assignmentLocation]) {
-            $user = $this->user('non-admin-'.strtolower($role->value).'@example.test');
-            if ($assignmentLocation) {
-                $this->role($user, $role, $assignmentLocation);
-            } else {
-                $this->role($user, $role);
+            $user = $this->provisionedUser('non-admin-'.strtolower($role->value).'@example.test', $role, $assignmentLocation);
+            if (! $assignmentLocation) {
                 app(MembershipService::class)->assign($user, $context);
             }
             $this->selectContext($user, $context);
@@ -215,8 +208,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::ready());
         $this->configure('TEMPERATURES', [$this->restaurant->id], true)->assertOk();
-        $employee = $this->user('employee@example.test');
-        $this->role($employee, BusinessRole::Employee, $this->restaurant);
+        $employee = $this->provisionedUser('employee@example.test', BusinessRole::Employee, $this->restaurant);
         $grant = app(PermissionAdministration::class)->grant(
             $this->administrator,
             $this->kitchen,
@@ -253,8 +245,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
         $url = "/api/v1/security/locations/{$this->restaurant->id}/modules/history";
         $this->getJson($url)->assertOk()->assertJsonPath('data.0.module_key', 'TEMPERATURES');
 
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $this->restaurant);
         $this->selectContext($manager, $this->restaurant);
         $this->getJson($url)->assertForbidden();
         $this->postJson($url, [])->assertStatus(405);
@@ -294,8 +285,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
 
     public function test_security_routes_reject_inactive_users(): void
     {
-        $replacement = $this->user('replacement-admin@example.test');
-        $this->role($replacement, BusinessRole::Administrator);
+        $replacement = $this->provisionedUser('replacement-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($replacement, $this->kitchen, $replacement->id);
         $this->administrator = $this->updateFixture($this->administrator, ['is_active' => false]);
 
@@ -319,8 +309,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
 
     public function test_history_access_is_denied_outside_the_actors_location_scope(): void
     {
-        $manager = $this->user('scoped-manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
+        $manager = $this->provisionedUser('scoped-manager@example.test', BusinessRole::RestaurantManager, $this->restaurant);
         $this->selectContext($manager, $this->restaurant);
 
         $this->getJson("/api/v1/security/locations/{$this->kitchen->id}/modules/history")->assertForbidden();
@@ -328,8 +317,7 @@ class ModuleConfigurationTest extends AuthorizationTestCase
 
     public function test_spoofed_administrator_fields_do_not_escalate_a_manager(): void
     {
-        $manager = $this->user('spoofed-manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $this->restaurant);
+        $manager = $this->provisionedUser('spoofed-manager@example.test', BusinessRole::RestaurantManager, $this->restaurant);
         $this->selectContext($manager, $this->restaurant);
 
         $this->postJson('/api/v1/security/modules/configuration', [

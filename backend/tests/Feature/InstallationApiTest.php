@@ -68,7 +68,11 @@ class InstallationApiTest extends InstallationTestCase
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $secondKitchen = $this->kitchen('CK2');
+        LocationManagementAssignment::on('pgsql_setup')->create([
+            'organization_id' => $restaurant->organization_id, 'restaurant_id' => $restaurant->id,
+            'managing_kitchen_id' => $kitchen->id,
+            'effective_from' => '2025-01-01T00:00:00Z', 'effective_until' => '2025-02-01T00:00:00Z',
+        ]);
         $base = "/api/v1/locations/{$restaurant->id}";
         $this->getJson("{$base}/managing-kitchen")->assertOk()->assertExactJson(['data' => null]);
         $this->postJson("{$base}/managing-kitchen", [])->assertUnprocessable()->assertJsonValidationErrors('managing_kitchen_id');
@@ -78,34 +82,36 @@ class InstallationApiTest extends InstallationTestCase
         $this->postJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $restaurant->id])->assertStatus(409);
         $this->postJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $kitchen->id])->assertCreated();
         $this->patchJson($base, ['is_active' => true])->assertOk()->assertJsonPath('data.is_active', true);
-        $this->postJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $secondKitchen->id])->assertStatus(409);
-        $this->putJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $secondKitchen->id])->assertOk();
-        $this->getJson("{$base}/managing-kitchen")->assertOk()->assertJsonPath('data.id', $secondKitchen->id);
+        $this->postJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $kitchen->id])->assertStatus(409);
+        $this->putJson("{$base}/managing-kitchen", ['managing_kitchen_id' => $kitchen->id])->assertStatus(409);
+        $this->getJson("{$base}/managing-kitchen")->assertOk()->assertJsonPath('data.id', $kitchen->id);
         $this->getJson("{$base}/management-assignments")->assertOk()->assertJsonPath('meta.total', 2);
-        $this->getJson("/api/v1/locations/{$secondKitchen->id}/managed-restaurants")->assertOk()->assertJsonPath('data.0.id', $restaurant->id);
+        $this->getJson("/api/v1/locations/{$kitchen->id}/managed-restaurants")->assertOk()->assertJsonPath('data.0.id', $restaurant->id);
         $this->getJson("{$base}/managed-restaurants")->assertStatus(409);
         $this->getJson("{$base}/management-assignments?per_page=0")->assertUnprocessable();
     }
 
-    public function test_supply_api_is_independent_and_supports_multiple_suppliers_and_disabling(): void
+    public function test_supply_api_is_independent_across_restaurants_and_supports_disabling(): void
     {
         $this->initialize();
         $restaurant = $this->restaurant();
         $kitchen = $this->kitchen();
-        $secondKitchen = $this->kitchen('CK2');
+        $secondRestaurant = $this->restaurant('R2');
         $base = "/api/v1/locations/{$restaurant->id}";
         $first = $this->postJson("{$base}/supply-relationships", ['supplier_kitchen_id' => $kitchen->id])
             ->assertCreated()->json('data.id');
-        $this->postJson("{$base}/supply-relationships", ['supplier_kitchen_id' => $secondKitchen->id])->assertCreated();
+        $this->postJson("/api/v1/locations/{$secondRestaurant->id}/supply-relationships", ['supplier_kitchen_id' => $kitchen->id])->assertCreated();
         $this->postJson("{$base}/supply-relationships", ['supplier_kitchen_id' => $kitchen->id])->assertStatus(409);
         $this->postJson("{$base}/supply-relationships", ['supplier_kitchen_id' => $restaurant->id])->assertStatus(409);
         $this->postJson("{$base}/supply-relationships", ['supplier_kitchen_id' => 'invalid'])->assertUnprocessable();
-        $this->getJson("{$base}/suppliers")->assertOk()->assertJsonPath('meta.total', 2);
+        $this->getJson("{$base}/suppliers")->assertOk()->assertJsonPath('meta.total', 1);
+        $this->getJson("/api/v1/locations/{$secondRestaurant->id}/suppliers")->assertOk()->assertJsonPath('meta.total', 1);
         $this->getJson("{$base}/managing-kitchen")->assertExactJson(['data' => null]);
         $this->assertSame(0, LocationManagementAssignment::count());
         $this->deleteJson("/api/v1/supply-relationships/{$first}")->assertOk()->assertJsonPath('data.is_active', false);
-        $this->getJson("{$base}/suppliers")->assertOk()->assertJsonPath('meta.total', 1);
-        $this->getJson("{$base}/supply-relationships")->assertOk()->assertJsonPath('meta.total', 2);
+        $this->getJson("{$base}/suppliers")->assertOk()->assertJsonPath('meta.total', 0);
+        $this->getJson("/api/v1/locations/{$secondRestaurant->id}/suppliers")->assertOk()->assertJsonPath('meta.total', 1);
+        $this->getJson("{$base}/supply-relationships")->assertOk()->assertJsonPath('meta.total', 1);
     }
 
     #[DataProvider('unavailableEnvironments')]

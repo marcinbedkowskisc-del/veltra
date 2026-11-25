@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { ApiError } from '../api'
-import BossRawMaterialsCatalogPage from '../bossRawMaterials/BossRawMaterialsCatalogPage'
-import { fetchBossRawMaterials } from '../bossRawMaterials/api'
 import CatalogFilters, { type SupplierFilterState } from './CatalogFilters'
 import CatalogTable from './CatalogTable'
 import Pagination from '../design-system/Pagination'
@@ -41,12 +39,9 @@ type Props = {
   previewDetailId?: string
   operatingLocationId?: string
   syntheticPreview?: boolean
-  initialBossCatalogView?: boolean
-  identityKey?: string
 }
 
 type CatalogState = 'loading' | 'ready' | 'forbidden' | 'unavailable' | 'error'
-type BossCatalogAccess = 'checking' | 'allowed' | 'denied' | 'error'
 
 type PreviousPage = {
   page: number
@@ -85,16 +80,8 @@ export default function RawMaterialsCatalogPage({
   previewDetailId,
   operatingLocationId,
   syntheticPreview = false,
-  initialBossCatalogView = false,
-  identityKey,
 }: Props) {
   const [view, setView] = useState('approved')
-  const [moduleView, setModuleView] = useState(initialBossCatalogView ? 'boss' : 'raw')
-  const [bossCatalogAccessResult, setBossCatalogAccessResult] = useState<{
-    locationId: string
-    status: BossCatalogAccess
-    error?: string
-  } | null>(null)
   const [filters, setFilters] = useState<FilterValues>(EMPTY_FILTERS)
   const [searchText, setSearchText] = useState('')
   const [sort, setSort] = useState<SortKey>('name')
@@ -159,53 +146,6 @@ export default function RawMaterialsCatalogPage({
   const previousOperatingLocation = useRef(operatingLocationId)
   const locationGeneration = useRef(0)
   const catalogRequestGeneration = useRef(0)
-  const bossCatalogAccess = operatingLocationId
-    ? bossCatalogAccessResult?.locationId === operatingLocationId
-      ? bossCatalogAccessResult.status
-      : 'checking'
-    : 'denied'
-  const bossCatalogAccessError = operatingLocationId !== undefined
-    && bossCatalogAccessResult?.locationId === operatingLocationId
-    ? bossCatalogAccessResult.error ?? null
-    : null
-
-  useEffect(() => {
-    if (!operatingLocationId) return
-
-    const controller = new AbortController()
-    const locationId = operatingLocationId
-    void fetchBossRawMaterials('', 1, controller.signal).then(() => {
-      if (!controller.signal.aborted) setBossCatalogAccessResult({ locationId, status: 'allowed' })
-    }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return
-      if (cause instanceof ApiError && (cause.status === 401 || cause.status === 419)) {
-        setBossCatalogAccessResult({ locationId, status: 'denied' })
-        setModuleView('raw')
-        onSessionExpired()
-        return
-      }
-      if (cause instanceof ApiError && (cause.status === 403 || cause.status === 503)) {
-        setBossCatalogAccessResult({ locationId, status: 'denied' })
-        setModuleView('raw')
-        return
-      }
-      setBossCatalogAccessResult({
-        locationId,
-        status: 'error',
-        error: cause instanceof Error
-          ? `Nie można potwierdzić dostępu do widoku BOSS: ${cause.message}`
-          : 'Nie można potwierdzić dostępu do widoku BOSS.',
-      })
-      setModuleView('raw')
-    })
-    return () => controller.abort()
-  }, [onSessionExpired, operatingLocationId])
-
-  const handleBossAccessDenied = useCallback(() => {
-    if (!operatingLocationId) return
-    setBossCatalogAccessResult({ locationId: operatingLocationId, status: 'denied' })
-    setModuleView('raw')
-  }, [operatingLocationId])
   useLayoutEffect(() => {
     operatingLocationRef.current = operatingLocationId
     if (previousOperatingLocation.current !== operatingLocationId) {
@@ -972,101 +912,72 @@ export default function RawMaterialsCatalogPage({
   }
 
   return (
-    <Tabs
-      label="Widoki modułu RAW"
-      value={moduleView}
-      onChange={setModuleView}
-      className="raw-module-tabs"
-      tabs={[
-        {
-          id: 'raw',
-          label: 'Katalog RAW',
-          content: (
-            <>
-              <section className="catalog-page" aria-labelledby="catalog-title" aria-busy={tableLoading}>
-                <Tabs
-                  label="Widok katalogu RAW"
-                  value={view}
-                  onChange={changeView}
-                  tabs={[
-                    { id: 'approved', label: 'Zatwierdzone', content: catalogContent },
-                    { id: 'workbench', label: 'Szkice i oczekujące', content: catalogContent },
-                  ]}
-                />
-                {currentSelectedDetail && (
-                  <RawMaterialDetailDrawer
-                    key={`${currentSelectedDetail.id}:${currentSelectedDetail.locationId ?? ''}`}
-                    materialId={currentSelectedDetail.id}
-                    operatingLocationId={currentSelectedDetail.locationId ?? ''}
-                    globalEditAllowed={globalEditAllowed}
-                    refreshKey={detailRefreshKey}
-                    categories={categories}
-                    unitOptions={unitOptions}
-                    returnFocus={currentSelectedDetail.trigger}
-                    canReadReferencePrice={canReadReferencePrice}
-                    syntheticPreview={syntheticPreview}
-                    onClose={() => setSelectedDetail(null)}
-                    onSessionExpired={handleDetailSessionExpired}
-                    onModuleUnavailable={markModuleUnavailable}
-                    onEditAuthorizationDenied={() => {
-                      setCapabilities(null)
-                      setCapabilitiesError('Nie można potwierdzić uprawnień do edycji. Akcja pozostaje ukryta.')
-                    }}
-                    onEditSaved={handleEdited}
-                    onWorkflowSaved={handleEdited}
-                    working={view === 'workbench'}
-                  />
-                )}
-                {createFormLocationId === operatingLocationId
-                  && capabilities?.locationId === operatingLocationId
-                  && capabilities.actions.create
-                  && catalogState === 'ready'
-                  && operatingLocationId && (
-                  <RawMaterialCreateForm
-                    categories={categories}
-                    canManageAllergens={capabilities.actions.editAllergens === true}
-                    canManageReferencePrice={capabilities.actions.manageReferencePrice === true}
-                    canViewReferencePrice={capabilities.actions.viewReferencePrice === true}
-                    canViewUsableCost={capabilities.actions.viewUsableCost === true}
-                    canManageSuppliers={capabilities.actions.manageSuppliers === true}
-                    canCreateApproved={capabilities.actions.createAndApprove === true}
-                    operatingLocationId={createFormLocationId}
-                    returnFocus={createReturnFocus}
-                    onClose={() => {
-                      setCreateFormLocationId(null)
-                    }}
-                    onCreated={handleCreated}
-                    onOpenCreated={(material) => {
-                      setCreateFormLocationId(null)
-                      changeView(material.lifecycleState === 'ACTIVE' ? 'approved' : 'workbench')
-                      setSelectedDetail({ id: material.id, trigger: null, locationId: operatingLocationId ?? null })
-                    }}
-                    onSessionExpired={handleCreateSessionExpired}
-                    onAuthorizationDenied={() => {
-                      setCapabilities(null)
-                      setCapabilitiesError('Uprawnienie do tworzenia wygasło lub zostało cofnięte.')
-                    }}
-                    onModuleUnavailable={markModuleUnavailable}
-                  />
-                )}
-              </section>
-              {bossCatalogAccessError && <p className="state-panel" role="status">{bossCatalogAccessError}</p>}
-            </>
-          ),
-        },
-        ...(bossCatalogAccess === 'allowed' && operatingLocationId ? [{
-          id: 'boss',
-          label: 'Zatwierdzony BOSS',
-          content: (
-            <BossRawMaterialsCatalogPage
-              identityKey={identityKey ?? operatingLocationId}
-              operatingLocationId={operatingLocationId}
-              onSessionExpired={onSessionExpired}
-              onAccessDenied={handleBossAccessDenied}
-            />
-          ),
-        }] : []),
-      ]}
-    />
+    <section className="catalog-page" aria-labelledby="catalog-title" aria-busy={tableLoading}>
+      <Tabs
+        label="Widok katalogu RAW"
+        value={view}
+        onChange={changeView}
+        tabs={[
+          { id: 'approved', label: 'Zatwierdzone', content: catalogContent },
+          { id: 'workbench', label: 'Szkice i oczekujące', content: catalogContent },
+        ]}
+      />
+      {currentSelectedDetail && (
+        <RawMaterialDetailDrawer
+          key={`${currentSelectedDetail.id}:${currentSelectedDetail.locationId ?? ''}`}
+          materialId={currentSelectedDetail.id}
+          operatingLocationId={currentSelectedDetail.locationId ?? ''}
+          globalEditAllowed={globalEditAllowed}
+          refreshKey={detailRefreshKey}
+          categories={categories}
+          unitOptions={unitOptions}
+          returnFocus={currentSelectedDetail.trigger}
+          canReadReferencePrice={canReadReferencePrice}
+          syntheticPreview={syntheticPreview}
+          onClose={() => setSelectedDetail(null)}
+          onSessionExpired={handleDetailSessionExpired}
+          onModuleUnavailable={markModuleUnavailable}
+          onEditAuthorizationDenied={() => {
+            setCapabilities(null)
+            setCapabilitiesError('Nie można potwierdzić uprawnień do edycji. Akcja pozostaje ukryta.')
+          }}
+          onEditSaved={handleEdited}
+          onWorkflowSaved={handleEdited}
+          working={view === 'workbench'}
+        />
+      )}
+      {createFormLocationId === operatingLocationId
+        && capabilities?.locationId === operatingLocationId
+        && capabilities.actions.create
+        && catalogState === 'ready'
+        && operatingLocationId && (
+        <RawMaterialCreateForm
+          categories={categories}
+          canManageAllergens={capabilities.actions.editAllergens === true}
+          canManageReferencePrice={capabilities.actions.manageReferencePrice === true}
+          canViewReferencePrice={capabilities.actions.viewReferencePrice === true}
+          canViewUsableCost={capabilities.actions.viewUsableCost === true}
+          canManageSuppliers={capabilities.actions.manageSuppliers === true}
+          canCreateApproved={capabilities.actions.createAndApprove === true}
+          operatingLocationId={createFormLocationId}
+          returnFocus={createReturnFocus}
+          onClose={() => {
+            setCreateFormLocationId(null)
+          }}
+          onCreated={handleCreated}
+          onOpenCreated={(material) => {
+            setCreateFormLocationId(null)
+            changeView(material.lifecycleState === 'ACTIVE' ? 'approved' : 'workbench')
+            setSelectedDetail({ id: material.id, trigger: null, locationId: operatingLocationId ?? null })
+          }}
+          onSessionExpired={handleCreateSessionExpired}
+          onAuthorizationDenied={() => {
+            setCapabilities(null)
+            setCapabilitiesError('Uprawnienie do tworzenia wygasło lub zostało cofnięte.')
+          }}
+          onModuleUnavailable={markModuleUnavailable}
+        />
+      )}
+    </section>
   )
 }

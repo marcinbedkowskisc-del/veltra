@@ -22,18 +22,17 @@ class ManagementConcurrencyTest extends TestCase
             $service->initializeOrganization(['name' => 'Concurrency Test', 'code' => 'CONCURRENCY']);
             $restaurant = $service->createLocation(['name' => 'Restaurant', 'code' => 'R1', 'type' => 'RESTAURANT']);
             $firstKitchen = $service->createLocation(['name' => 'Kitchen', 'code' => 'CK1', 'type' => 'CENTRAL_KITCHEN']);
-            $secondKitchen = $service->createLocation(['name' => 'Kitchen 2', 'code' => 'CK2', 'type' => 'CENTRAL_KITCHEN']);
             if ($change) {
-                $originalKitchen = $service->createLocation(['name' => 'Original Kitchen', 'code' => 'CK0', 'type' => 'CENTRAL_KITCHEN']);
-                $service->assignManagingKitchen($restaurant, $originalKitchen);
+                $service->assignManagingKitchen($restaurant, $firstKitchen);
                 $service->updateLocation($restaurant, ['is_active' => true]);
+                $otherRestaurant = $service->createLocation(['name' => 'Other restaurant', 'code' => 'R2', 'type' => 'RESTAURANT']);
             }
             DB::beginTransaction();
-            $service->assignManagingKitchen($restaurant, $firstKitchen, replace: $change);
+            $service->assignManagingKitchen($change ? $otherRestaurant : $restaurant, $firstKitchen);
 
             $applicationName = 'veltra-concurrency-'.bin2hex(random_bytes(6));
             $process = new Process(
-                [PHP_BINARY, base_path('tests/Support/concurrent_assignment.php'), $restaurant->id, $secondKitchen->id, $applicationName, $change ? 'change' : 'assign'],
+                [PHP_BINARY, base_path('tests/Support/concurrent_assignment.php'), $restaurant->id, $firstKitchen->id, $applicationName, $change ? 'change' : 'assign'],
                 base_path(),
                 ['DB_DATABASE' => 'veltra_testing', 'APP_ENV' => 'testing'],
             );
@@ -58,10 +57,10 @@ class ManagementConcurrencyTest extends TestCase
             $process->wait();
             $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
             $result = json_decode($process->getOutput(), true, flags: JSON_THROW_ON_ERROR);
-            $this->assertSame($commit && ! $change ? 'conflict' : 'assigned', $result['outcome']);
-            $this->assertSame(1, LocationManagementAssignment::current()->count());
-            $this->assertSame($commit && ! $change ? $firstKitchen->id : $secondKitchen->id, $service->currentManagingKitchen($restaurant)->id);
-            $this->assertSame($change ? ($commit ? 3 : 2) : 1, LocationManagementAssignment::count());
+            $this->assertSame($commit || $change ? 'conflict' : 'assigned', $result['outcome']);
+            $this->assertSame(1 + (int) ($commit && $change), LocationManagementAssignment::current()->count());
+            $this->assertSame($firstKitchen->id, $service->currentManagingKitchen($restaurant)->id);
+            $this->assertSame(1 + (int) ($commit && $change), LocationManagementAssignment::count());
         } finally {
             while (DB::transactionLevel() > 0) {
                 DB::rollBack();

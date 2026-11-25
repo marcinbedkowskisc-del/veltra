@@ -2,6 +2,7 @@
 
 use App\Domain\Authorization\BossLocationRestrictions;
 use App\Domain\Authorization\BossRawCatalogIntent;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
@@ -10,7 +11,6 @@ use App\Domain\Modules\OrganizationCapabilityService;
 use App\Domain\RawMaterials\BossRawMaterialCatalogService;
 use App\Models\Location;
 use App\Models\LocationMembership;
-use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Console\Kernel;
@@ -91,10 +91,12 @@ try {
     } else {
         switch ($action) {
             case 'role':
-                app(RoleAdministration::class)->revoke(
+                app(RoleAdministration::class)->replace(
                     $actor,
                     $context,
-                    RoleAssignment::findOrFail($assignmentId),
+                    User::findOrFail($bossId),
+                    BusinessRole::CentralKitchenChef,
+                    [$context->id],
                 );
                 break;
             case 'membership':

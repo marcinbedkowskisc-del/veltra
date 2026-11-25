@@ -2,8 +2,6 @@
 
 namespace Tests\Concerns;
 
-use App\Domain\Authorization\BusinessRole;
-use App\Domain\Identity\MembershipService;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialException;
 use App\Domain\RawMaterials\RawMaterialPermission;
@@ -336,15 +334,14 @@ trait RawDraftTombstoneTests
     public function test_stage3e_b41_permission_is_explicit_and_cannot_be_delegated(): void
     {
         [$material] = $this->b2Draft();
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $administrator = $this->bootstrapAdministrator;
         $this->selectRawMaterialApiContext($administrator);
         $this->deleteJson('/api/v1/raw-materials/'.$material['id'].'/draft', [], [
             'If-Match' => $material['version'],
         ])->assertForbidden();
 
-        $recipient = $this->user('b41-no-delete-grant@example.test');
-        app(MembershipService::class)->assign($recipient, $this->location);
+        $recipient = $this->restaurantEmployeeInCentralKitchen('b41-no-delete-grant@example.test');
         try {
             $this->rawMaterialService->deleteDraft(
                 $recipient,

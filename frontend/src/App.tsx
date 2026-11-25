@@ -47,12 +47,18 @@ function App() {
     message?: string
   } | null>(null)
   const [administrationAttempt, setAdministrationAttempt] = useState(0)
-  const isBossRawMaterialsRoute = window.location.pathname === '/boss/raw-materials'
-  const isRawMaterialsRoute = window.location.pathname === '/raw-materials' || isBossRawMaterialsRoute
+  const isLegacyBossRawMaterialsRoute = window.location.pathname === '/boss/raw-materials'
+  const isRawMaterialsRoute = window.location.pathname === '/raw-materials' || isLegacyBossRawMaterialsRoute
   const isAdministrationRoute = window.location.pathname === '/administration'
     || window.location.pathname.startsWith('/administration/')
   const isActivationRoute = window.location.pathname === '/activate'
     || window.location.pathname === '/reset-password'
+
+  useEffect(() => {
+    if (isLegacyBossRawMaterialsRoute) {
+      window.history.replaceState(window.history.state, '', '/raw-materials')
+    }
+  }, [isLegacyBossRawMaterialsRoute])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -238,9 +244,7 @@ function App() {
           authContext.location ? (
             <RawMaterialsCatalogPage
               key={`${authContext.user.id}:${authContext.location.id}`}
-              identityKey={authContext.user.id}
               operatingLocationId={authContext.location.id}
-              initialBossCatalogView={isBossRawMaterialsRoute}
               onSessionExpired={handleSessionExpired}
             />
           ) : (

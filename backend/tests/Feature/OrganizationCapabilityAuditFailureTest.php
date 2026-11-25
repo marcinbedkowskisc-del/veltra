@@ -29,8 +29,7 @@ class OrganizationCapabilityAuditFailureTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $this->administrator = $this->user('capability-audit-failure@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('capability-audit-failure@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->kitchen, $this->administrator->id);
         $this->selectContext($this->administrator);
     }
@@ -134,6 +133,7 @@ class OrganizationCapabilityAuditFailureTest extends AuthorizationTestCase
 
     public function test_rejected_attempt_audit_failure_is_explicit_and_preserves_the_original_rejection(): void
     {
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::notReady());
         $this->installFailureTrigger('true');
 
         try {

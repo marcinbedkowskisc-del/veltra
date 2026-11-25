@@ -8,12 +8,11 @@ use App\Domain\Identity\MembershipService;
 use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
 use App\Domain\Modules\OrganizationCapabilityCatalog;
 use App\Models\Location;
-use App\Models\LocationMembership;
-use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
 use Tests\Support\OrganizationCapabilityCatalogFixtures;
 
@@ -28,18 +27,17 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $this->administrator = $this->user('capability-admin@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('capability-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->kitchen, $this->administrator->id);
         $this->selectContext($this->administrator, $this->kitchen);
     }
 
-    public function test_status_is_organization_scoped_disabled_and_not_ready_without_granting_data_access(): void
+    public function test_status_is_organization_scoped_ready_but_disabled_without_granting_data_access(): void
     {
         $this->getJson($this->capabilityPath())->assertOk()
             ->assertJsonPath('data.capability', CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ)
             ->assertJsonPath('data.scope', 'ORGANIZATION')
-            ->assertJsonPath('data.readiness', 'NOT_READY')
+            ->assertJsonPath('data.readiness', 'READY')
             ->assertJsonPath('data.configured_state', 'DISABLED')
             ->assertJsonPath('data.available', false)
             ->assertJsonPath('data.state_version', 0)
@@ -57,6 +55,8 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
 
     public function test_not_ready_activation_is_rejected_and_audited_without_creating_state(): void
     {
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::notReady());
+
         $this->putJson($this->capabilityPath(), $this->body(true))->assertConflict()
             ->assertJsonPath('error.code', 'CAPABILITY_NOT_READY');
 
@@ -90,8 +90,6 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
 
     public function test_activation_deactivation_and_idempotent_retry_increment_only_real_transitions(): void
     {
-        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
-
         $this->putJson($this->capabilityPath(), $this->body(true, 0))->assertOk()
             ->assertJsonPath('data.changed', true)
             ->assertJsonPath('data.state_version', 1)
@@ -134,8 +132,7 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
 
     public function test_boss_without_administrator_authority_cannot_read_or_configure_capability(): void
     {
-        $boss = $this->user('capability-boss@example.test');
-        $this->role($boss, BusinessRole::Boss);
+        $boss = $this->provisionedUser('capability-boss@example.test', BusinessRole::Boss);
         app(MembershipService::class)->assign($boss, $this->kitchen, $boss->id);
         $this->selectContext($boss, $this->kitchen);
 
@@ -149,7 +146,7 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
         $this->assertSame($boss->id, $rejection->actor_id);
         $this->assertSame(0, DB::table('organization_capability_states')->count());
 
-        $this->role($boss, BusinessRole::Administrator);
+        app(RoleAdministration::class)->replace($this->administrator, $this->kitchen, $boss, BusinessRole::Administrator, [], self::PASSWORD);
         $this->selectContext($boss, $this->kitchen);
         $this->getJson($this->capabilityPath())->assertOk()
             ->assertJsonPath('data.configured_state', 'DISABLED');
@@ -162,13 +159,14 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
         $roleId = DB::table('role_assignments')->where('user_id', $this->administrator->id)
             ->where('role', BusinessRole::Administrator->value)->value('id');
         $this->assertNotNull($roleId);
-        $otherAdministrator = $this->user('capability-role-revoker@example.test');
-        $this->role($otherAdministrator, BusinessRole::Administrator);
+        $otherAdministrator = $this->provisionedUser('capability-role-revoker@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($otherAdministrator, $this->kitchen, $otherAdministrator->id);
-        app(RoleAdministration::class)->revoke(
+        app(RoleAdministration::class)->replace(
             $otherAdministrator,
             $this->kitchen,
-            RoleAssignment::findOrFail($roleId),
+            $this->administrator,
+            BusinessRole::Boss,
+            [],
             self::PASSWORD,
         );
 
@@ -200,8 +198,7 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
         $this->updateFixture($this->administrator, ['is_active' => false]);
         $this->getJson($this->capabilityPath())->assertUnauthorized();
 
-        $unverified = $this->user('capability-unverified@example.test');
-        $this->role($unverified, BusinessRole::Administrator);
+        $unverified = $this->provisionedUser('capability-unverified@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($unverified, $this->kitchen, $unverified->id);
         $this->selectContext($unverified, $this->kitchen);
         $this->updateFixture($unverified, ['email_verified_at' => null]);
@@ -214,7 +211,7 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
 
     public function test_inactive_operating_location_is_rejected_as_an_invalid_capability_context(): void
     {
-        $context = $this->kitchen('CAPABILITY_INACTIVE_CONTEXT');
+        $context = $this->activeRestaurant('CAPABILITY_INACTIVE_CONTEXT');
         app(MembershipService::class)->assign($this->administrator, $context, $this->administrator->id);
         $this->selectContext($this->administrator, $context);
         $this->updateFixture($context, ['is_active' => false]);
@@ -226,39 +223,22 @@ class OrganizationCapabilityTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('organization_capability_states')->count());
     }
 
-    public function test_capability_status_and_history_are_isolated_between_organizations(): void
+    public function test_capability_status_and_history_ignore_untrusted_organization_selection(): void
     {
         $this->putJson($this->capabilityPath(), $this->body(false))->assertOk();
         $this->assertSame(1, DB::table('organization_capability_events')->count());
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $foreignAdmin = User::on('pgsql_setup')->create([
-                'organization_id' => $foreignLocation->organization_id,
-                'first_name' => 'Foreign',
-                'last_name' => 'Administrator',
-                'email' => 'foreign-capability-admin@example.test',
-                'password' => self::PASSWORD,
-                'is_active' => true,
-            ]);
-            $foreignAdmin->forceFill(['email_verified_at' => now()])->save();
-            $foreignAdmin = User::on('pgsql')->findOrFail($foreignAdmin->id);
-            $this->role($foreignAdmin, BusinessRole::Administrator);
-            LocationMembership::on('pgsql_setup')->create([
-                'organization_id' => $foreignLocation->organization_id,
-                'user_id' => $foreignAdmin->id,
-                'location_id' => $foreignLocation->id,
-                'is_active' => true,
-                'assigned_at' => now(),
-            ]);
-
-            $this->selectContext($foreignAdmin, $foreignLocation);
-            $this->getJson($this->capabilityPath())->assertOk()
-                ->assertJsonPath('data.configured_state', 'DISABLED')
-                ->assertJsonPath('data.state_version', 0);
-            $this->getJson($this->capabilityPath().'/history')->assertOk()
-                ->assertJsonPath('meta.total', 0);
-            $this->assertSame(1, DB::table('organization_capability_events')->count());
-        }, truncateAfterOperation: true);
+        $unknownOrganizationId = Str::uuid()->toString();
+        $this->getJson($this->capabilityPath().'?organization_id='.$unknownOrganizationId)->assertOk()
+            ->assertJsonPath('data.configured_state', 'DISABLED')
+            ->assertJsonPath('data.state_version', 0);
+        $this->getJson($this->capabilityPath().'/history?organization_id='.$unknownOrganizationId)->assertUnprocessable();
+        $this->getJson($this->capabilityPath().'/history')->assertOk()
+            ->assertJsonPath('meta.total', 1);
+        $this->assertSame(
+            [$this->administrator->organization_id],
+            DB::table('organization_capability_events')->distinct()->pluck('organization_id')->all(),
+        );
     }
 
     public function test_status_history_are_admin_only_and_history_is_paged_with_only_capability_audit_fields(): void

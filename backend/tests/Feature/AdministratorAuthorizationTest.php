@@ -47,19 +47,20 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('organization_permission_grants')->where('user_id', $initialAdministrator->id)->count());
     }
 
-    public function test_legacy_unresolved_primary_kitchen_does_not_prevent_initial_administrator_bootstrap(): void
+    public function test_initial_administrator_bootstrap_uses_the_automatically_resolved_primary_kitchen(): void
     {
         $initial = app(IdentityService::class)->provisionInitial([
             'first_name' => 'Initial',
             'last_name' => 'Admin',
             'email' => 'legacy-initial@example.test',
         ], self::PASSWORD);
-        $this->createLegacyUndesignatedKitchen($initial->organization);
+        $primary = $this->kitchen();
         app(RoleAdministration::class)->bootstrapInitial($initial);
 
         $this->assertTrue($initial->fresh()->is_initial_identity);
         $this->assertTrue(RoleAssignment::where('user_id', $initial->id)->where('role', BusinessRole::Administrator)->exists());
-        $this->assertTrue($initial->organization->fresh()->primary_central_kitchen_unresolved);
+        $this->assertFalse($initial->organization->fresh()->primary_central_kitchen_unresolved);
+        $this->assertSame($primary->id, $initial->organization->fresh()->primaryCentralKitchen->id);
     }
 
     public function test_administrators_can_manage_other_administrators_and_ordinary_accounts(): void
@@ -69,10 +70,10 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
         $targetAdmin = $this->createAdministrator($initialAdministrator, $primary, 'target-admin@example.test');
         $restaurant = $this->activeRestaurant();
         app(PersonnelAdministration::class)->assignMembership($initialAdministrator, $primary, $targetAdmin, $restaurant);
-        $employee = $this->user('employee@example.test');
+        $employee = $this->pendingUser('employee@example.test');
         app(MembershipService::class)->assign($employee, $restaurant);
 
-        app(RoleAdministration::class)->grant($ordinaryAdmin, $primary, $targetAdmin, BusinessRole::Boss, null);
+        app(RoleAdministration::class)->replace($ordinaryAdmin, $primary, $targetAdmin, BusinessRole::Boss, [], self::PASSWORD);
         app(PermissionAdministration::class)->grant(
             $ordinaryAdmin, $primary, $targetAdmin, $restaurant, Permission::FoodcostView,
         );
@@ -85,6 +86,7 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
             ->where('target_id', $targetAdmin->id)->where('outcome', 'accepted')->count());
 
         app(RoleAdministration::class)->grant($ordinaryAdmin, $primary, $employee, BusinessRole::RestaurantChef, $restaurant);
+        $this->updateFixture($employee, ['email_verified_at' => now()]);
         $this->assertTrue(RoleAssignment::where('user_id', $employee->id)->where('role', BusinessRole::RestaurantChef)->whereNull('revoked_at')->exists());
     }
 
@@ -98,7 +100,7 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
             ->where('id', $initialAdministrator->id)->update(['is_active' => false]));
         $this->assertRuntimeDatabaseRejects('42501', fn (Connection $connection) => $connection->table('role_assignments')
             ->where('id', $initialRole->id)->update(['revoked_at' => now(), 'revoked_by' => $initialAdministrator->id]));
-        app(RoleAdministration::class)->revoke($ordinaryAdmin, $primary, $initialRole, self::PASSWORD);
+        app(RoleAdministration::class)->replace($ordinaryAdmin, $primary, $initialAdministrator, BusinessRole::Boss, [], self::PASSWORD);
         $this->assertNotNull($initialRole->fresh()->revoked_at);
         app(RoleAdministration::class)->setAccountActive($ordinaryAdmin, $primary, $initialAdministrator, false);
         $this->assertFalse($initialAdministrator->fresh()->is_active);
@@ -210,12 +212,12 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
         $this->assertSame('initial-admin@example.test', $administrator->fresh()->email);
     }
 
-    public function test_ordinary_administrator_cannot_deactivate_primary_but_can_deactivate_secondary_kitchen(): void
+    public function test_ordinary_administrator_cannot_deactivate_primary_but_can_deactivate_restaurant(): void
     {
         [$initialAdministrator, $primary] = $this->createInitialAdministrator();
         $ordinaryAdmin = $this->createAdministrator($initialAdministrator, $primary, 'primary-disable@example.test');
         $this->createAdministrator($initialAdministrator, $primary, 'primary-disable-second@example.test');
-        $secondaryKitchen = $this->kitchen('SECONDARY');
+        $secondaryKitchen = $this->activeRestaurant('SECONDARY');
         app(MembershipService::class)->assign($ordinaryAdmin, $secondaryKitchen, $initialAdministrator->id);
 
         $this->selectContext($ordinaryAdmin, $secondaryKitchen);
@@ -233,7 +235,7 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
     {
         [$initialAdministrator, $primary] = $this->createInitialAdministrator();
         $targetAdmin = $this->createAdministrator($initialAdministrator, $primary, 'primary-disable-target@example.test');
-        $secondaryKitchen = $this->kitchen('SECONDARY');
+        $secondaryKitchen = $this->activeRestaurant('SECONDARY');
         app(MembershipService::class)->assign($initialAdministrator, $secondaryKitchen, $initialAdministrator->id);
 
         $this->selectContext($initialAdministrator, $secondaryKitchen);
@@ -241,7 +243,7 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
 
         $this->assertTrue($primary->fresh()->is_active);
         $this->assertTrue(app(BusinessAuthorization::class)->hasRole($initialAdministrator, BusinessRole::Administrator));
-        app(RoleAdministration::class)->grant($initialAdministrator, $primary, $targetAdmin, BusinessRole::Boss, null);
+        app(RoleAdministration::class)->replace($initialAdministrator, $primary, $targetAdmin, BusinessRole::Boss, [], self::PASSWORD);
         $this->assertTrue(RoleAssignment::where('user_id', $targetAdmin->id)
             ->where('role', BusinessRole::Boss)->whereNull('revoked_at')->exists());
     }
@@ -249,9 +251,8 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
     public function test_non_administrator_cannot_deactivate_primary_central_kitchen(): void
     {
         [, $primary] = $this->createInitialAdministrator();
-        $secondaryKitchen = $this->kitchen('SECONDARY');
-        $nonAdministrator = $this->user('primary-disable-nonadmin@example.test');
-        $this->role($nonAdministrator, BusinessRole::CentralKitchenChef, $secondaryKitchen);
+        $secondaryKitchen = $this->activeRestaurant('SECONDARY');
+        $nonAdministrator = $this->provisionedUser('primary-disable-nonadmin@example.test', BusinessRole::Employee, $secondaryKitchen);
 
         $this->selectContext($nonAdministrator, $secondaryKitchen);
         $this->patchJson("/api/v1/security/locations/{$primary->id}", ['is_active' => false])->assertForbidden();
@@ -299,7 +300,7 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
         $process = null;
         DB::beginTransaction();
         try {
-            app(RoleAdministration::class)->grant($initialAdministrator, $primary, $target, BusinessRole::Boss, null);
+            app(RoleAdministration::class)->replace($initialAdministrator, $primary, $target, BusinessRole::Boss, [], self::PASSWORD);
             $name = 'veltra-administrator-'.bin2hex(random_bytes(6));
             $process = new Process([
                 PHP_BINARY,
@@ -350,18 +351,19 @@ class AdministratorAuthorizationTest extends AuthorizationTestCase
             'email' => 'initial-admin@example.test',
         ], self::PASSWORD);
         app(MembershipService::class)->assign($user, $primary);
-        $this->updateFixture($user, ['email_verified_at' => now()]);
-        $user = $user->fresh();
         app(RoleAdministration::class)->bootstrapInitial($user);
+        $this->updateFixture($user, ['email_verified_at' => now()]);
+        $this->updateFixture($user->organization, ['authorization_initialized' => true]);
 
         return [$user->fresh(), $primary];
     }
 
     private function createAdministrator(User $initialAdministrator, Location $primary, string $email): User
     {
-        $user = $this->user($email);
+        $user = $this->pendingUser($email);
         app(MembershipService::class)->assign($user, $primary, $initialAdministrator->id);
         app(RoleAdministration::class)->grant($initialAdministrator, $primary, $user, BusinessRole::Administrator, null, self::PASSWORD);
+        $this->updateFixture($user, ['email_verified_at' => now()]);
 
         return $user->fresh();
     }

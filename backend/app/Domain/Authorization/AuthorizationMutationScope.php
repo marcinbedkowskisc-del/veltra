@@ -164,6 +164,11 @@ final readonly class AuthorizationMutationScope
         return new self('role.revoke.'.$role->value);
     }
 
+    public static function roleReplace(): self
+    {
+        return new self('role.replace');
+    }
+
     public static function reportShare(): self
     {
         return new self('report.share');
@@ -272,6 +277,7 @@ final readonly class AuthorizationMutationScope
             'structure.create' => self::installationLocationCreate(...),
             'structure.update' => self::installationLocationUpdate(...),
             'structure.management' => self::installationManagementAssign(...),
+            'role.replace' => self::roleReplace(...),
         ];
         if (isset($fixed[$action])) {
             return $fixed[$action]();

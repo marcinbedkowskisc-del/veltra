@@ -32,7 +32,7 @@ trait RawFormWorkflowTests
             ->assertOk()->assertJsonPath('data.actions.create_and_approve', false);
         $this->postJson($url, $payload)->assertForbidden();
         $this->assertDatabaseMissing('raw_materials', ['id' => $reservation['reservation_id']]);
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->flushSession();
         $this->selectRawMaterialApiContext($this->steward->fresh());
         $this->getJson('/api/v1/security/raw-materials/capabilities')
@@ -79,7 +79,7 @@ trait RawFormWorkflowTests
     {
         $category = $this->category();
         $catalog = $this->publishedAllergenCatalogFixture();
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $required = [RawMaterialPermission::Create, RawMaterialPermission::AllergenManage, RawMaterialPermission::Submit, RawMaterialPermission::Approve];
         $payload = [
             'sku_reservation_id' => Str::uuid()->toString(),
@@ -90,7 +90,7 @@ trait RawFormWorkflowTests
         ];
         $before = DB::table('raw_materials')->count();
         foreach ($required as $missing) {
-            $recipient = $this->user('missing-'.strtolower($missing->name).'@example.test');
+            $recipient = $this->provisionedUser('missing-'.strtolower($missing->name).'@example.test', BusinessRole::Administrator);
             app(MembershipService::class)->assign($recipient, $this->location);
             foreach ($required as $permission) {
                 if ($permission !== $missing) {
@@ -99,7 +99,6 @@ trait RawFormWorkflowTests
                     );
                 }
             }
-            $this->role($recipient, BusinessRole::Administrator);
             $this->flushSession();
             $this->selectRawMaterialApiContext($recipient);
             $this->getJson('/api/v1/security/raw-materials/capabilities')
@@ -113,7 +112,7 @@ trait RawFormWorkflowTests
     {
         $category = $this->category();
         $catalog = $this->publishedAllergenCatalogFixture();
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->selectRawMaterialApiContext($this->steward);
         $reservation = $this->postJson('/api/v1/raw-materials/sku-reservations', [], [
             'Idempotency-Key' => 'stage6a5-forged-attestation',

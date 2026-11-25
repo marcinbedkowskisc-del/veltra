@@ -42,10 +42,9 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->location = $this->primaryCentralKitchen();
-        $this->administrator = $this->user('revision-data-admin@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('revision-data-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
-        $this->steward = $this->user('revision-data-steward@example.test');
+        $this->steward = $this->provisionedUser('revision-data-steward@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->steward, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
@@ -198,7 +197,6 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
 
     public function test_package_and_nominal_unit_prices_normalize_to_equivalent_usable_costs(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
         $catalogVersionId = $this->publishedCatalog([]);
         $materials = [];
         foreach ([
@@ -308,7 +306,6 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
 
     public function test_editor_preserves_inherited_price_when_its_unit_is_not_in_the_working_revision(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
         $catalogVersionId = $this->publishedCatalog([]);
         $material = $this->createMaterial('Cena z poprzedniej rewizji', [
             'conversions' => [['unit_code' => 'kg']],
@@ -381,7 +378,6 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
 
     public function test_editor_identifies_archived_price_unit_from_an_earlier_revision(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
         $unit = $this->rawMaterials->createAdministrationUnit($this->administrator, $this->location, [
             'code' => 'mg_old',
             'name' => 'Jednostka historyczna',
@@ -422,7 +418,6 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
 
     public function test_editor_exposes_pending_legacy_base_price_and_preserves_it_on_non_price_edits(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
         $catalogVersionId = $this->publishedCatalog([]);
         $material = $this->createMaterial('Historyczna cena', [
             'allergen_declaration' => [
@@ -503,7 +498,6 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
 
     public function test_approved_quantity_changes_recalculate_both_price_modes_and_supplier_links_do_not_change_price(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
         $catalogVersionId = $this->publishedCatalog([]);
         $supplier = app(RawMaterialCommercialService::class)->createSupplier(
             $this->steward,
@@ -609,7 +603,7 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
         ]));
     }
 
-    public function test_database_rejects_multiple_defaults_and_cross_organization_references(): void
+    public function test_database_rejects_multiple_defaults_and_unknown_organization_references(): void
     {
         $material = $this->createMaterial('Przechowywanie testowe', [
             'storage_variants' => [$this->storageVariant()],
@@ -623,14 +617,13 @@ class RawMaterialRevisionDataModelTest extends AuthorizationTestCase
             ...$this->storageVariant('SECOND_DEFAULT'),
         ]));
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($revisionId): void {
-            $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection->table('raw_material_revision_storage_variants')->insert([
+        $this->assertDatabaseRejects('23514', fn (Connection $connection) => $connection
+            ->table('raw_material_revision_storage_variants')->insert([
                 'id' => Str::uuid()->toString(),
-                'organization_id' => $foreignLocation->organization_id,
+                'organization_id' => Str::uuid()->toString(),
                 'revision_id' => $revisionId,
-                ...$this->storageVariant('CROSS_ORG', isDefault: false),
+                ...$this->storageVariant('UNKNOWN_ORG', isDefault: false),
             ]));
-        });
     }
 
     public function test_approved_revision_data_cannot_be_modified_or_extended(): void

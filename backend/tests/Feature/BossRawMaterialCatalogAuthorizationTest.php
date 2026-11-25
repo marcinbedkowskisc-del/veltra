@@ -11,6 +11,7 @@ use App\Domain\Authorization\BusinessRole;
 use App\Domain\Authorization\BusinessVisibility;
 use App\Domain\Authorization\BusinessVisibilitySource;
 use App\Domain\Authorization\BusinessVisibilitySurface;
+use App\Domain\Authorization\ModuleAvailability;
 use App\Domain\Authorization\Permission;
 use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\MembershipService;
@@ -19,16 +20,20 @@ use App\Domain\Modules\OrganizationCapabilityAccess;
 use App\Domain\Modules\OrganizationCapabilityCatalog;
 use App\Domain\Modules\OrganizationCapabilityService;
 use App\Domain\RawMaterials\BossRawMaterialCatalogService;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
+use App\Domain\RawMaterials\RawMaterialCatalogValues;
 use App\Domain\RawMaterials\RawMaterialPermission;
 use App\Models\Location;
 use App\Models\LocationMembership;
 use App\Models\RoleAssignment;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\AuthorizationTestCase;
 use Tests\Support\OrganizationCapabilityCatalogFixtures;
@@ -46,10 +51,8 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->context = $this->primaryCentralKitchen();
-        $this->boss = $this->user('boss-raw-catalog-auth@example.test');
-        $this->administrator = $this->user('admin-raw-catalog-auth@example.test');
-        $this->role($this->boss, BusinessRole::Boss);
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->boss = $this->provisionedUser('boss-raw-catalog-auth@example.test', BusinessRole::Boss);
+        $this->administrator = $this->provisionedUser('admin-raw-catalog-auth@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->boss, $this->context, $this->boss->id);
         app(MembershipService::class)->assign($this->administrator, $this->context, $this->administrator->id);
         $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
@@ -97,12 +100,15 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
             ->where('role', BusinessRole::Boss)
             ->whereNull('location_id')
             ->firstOrFail();
-        app(RoleAdministration::class)->revoke(
+        app(RoleAdministration::class)->replace(
             $this->administrator,
             $this->context,
-            $bossRole,
+            $this->boss,
+            BusinessRole::Administrator,
+            [],
             self::PASSWORD,
         );
+        $this->assertNotNull($bossRole->fresh()->revoked_at);
 
         $decision = app(BusinessVisibility::class)->decide(
             $this->boss,
@@ -117,8 +123,7 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
 
     public function test_raw_only_grant_does_not_authorize_catalog_list_or_detail(): void
     {
-        $rawOnly = $this->user('raw-only-boss-catalog@example.test');
-        app(MembershipService::class)->assign($rawOnly, $this->context, $rawOnly->id);
+        $rawOnly = $this->provisionedUser('raw-only-boss-catalog@example.test', BusinessRole::CentralKitchenChef, $this->context);
         $this->grantRawView($rawOnly);
 
         $this->assertTrue(app(RawMaterialAuthorization::class)
@@ -128,11 +133,111 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
         $this->assertCatalogDeniedForBothIntents($rawOnly, $this->context);
     }
 
+    public function test_boss_cannot_use_an_independent_raw_write_grant(): void
+    {
+        $this->grantRawView($this->boss, [RawMaterialPermission::View, RawMaterialPermission::Create]);
+        $this->app->bind(ModuleAvailability::class, fn () => new class implements ModuleAvailability
+        {
+            public function enabled(Location $location, string $module): bool
+            {
+                return true;
+            }
+        });
+        $authorization = app(RawMaterialAuthorization::class);
+        $this->assertTrue($authorization->hasEffectiveGrant($this->boss, RawMaterialPermission::View));
+        $this->assertFalse($authorization->hasEffectiveGrant($this->boss, RawMaterialPermission::Create));
+        $this->expectException(AuthorizationException::class);
+        $authorization->assertAllowed($this->boss, $this->context, RawMaterialPermission::Create);
+    }
+
+    public function test_role_replacement_permanently_revokes_raw_write_grants(): void
+    {
+        $user = $this->provisionedUser('raw-role-replacement@example.test', BusinessRole::CentralKitchenChef, $this->context);
+        $this->grantRawView($user, [RawMaterialPermission::View, RawMaterialPermission::Create]);
+        $authorization = app(RawMaterialAuthorization::class);
+        $this->assertTrue($authorization->hasEffectiveGrant($user, RawMaterialPermission::Create));
+        $roles = app(RoleAdministration::class);
+        $roles->replace($this->administrator, $this->context, $user, BusinessRole::Boss, []);
+        $this->assertFalse($authorization->hasEffectiveGrant($user, RawMaterialPermission::Create));
+        $this->assertTrue($authorization->hasEffectiveGrant($user, RawMaterialPermission::View));
+        $roles->replace($this->administrator, $this->context, $user, BusinessRole::CentralKitchenChef, [$this->context->id]);
+        $this->assertFalse($authorization->hasEffectiveGrant($user, RawMaterialPermission::Create));
+        $this->assertDatabaseHas('raw_material_audit_events', [
+            'event_code' => 'PERMISSION_REVOKED', 'reason_code' => 'ROLE_REPLACED_BOSS',
+        ]);
+    }
+
+    public function test_new_raw_write_grants_cannot_be_delegated_to_boss(): void
+    {
+        $steward = $this->provisionedUser('raw-delegation-steward@example.test', BusinessRole::CentralKitchenChef, $this->context);
+        $this->grantRawView($steward, [RawMaterialPermission::PermissionDelegate, RawMaterialPermission::Create]);
+        $this->app->bind(ModuleAvailability::class, fn () => new class implements ModuleAvailability
+        {
+            public function enabled(Location $location, string $module): bool
+            {
+                return true;
+            }
+        });
+        $this->expectException(AuthorizationException::class);
+        app(OrganizationRawMaterialPermissionAdministration::class)->grant(
+            $steward, $this->context, $this->boss, RawMaterialPermission::Create, 'Niedozwolony zapis BOSS',
+        );
+    }
+
+    #[DataProvider('rawFinancialConfigurations')]
+    public function test_boss_raw_financial_projection_obeys_individual_restrictions(bool $foodcost, bool $prices): void
+    {
+        $excluded = [];
+        if (! $foodcost) {
+            $excluded[] = BossVisibilityCategory::Foodcost->value;
+        }
+        if (! $prices) {
+            $excluded[] = BossVisibilityCategory::PurchaseFinancials->value;
+        }
+        $this->grantRawView($this->boss, [RawMaterialPermission::ReferencePriceView, RawMaterialPermission::PurchasingCostsView]);
+        app(BossLocationRestrictions::class)->replace(
+            $this->administrator, $this->context, $this->boss->id, 0, [], $excluded, [],
+        );
+        $authorization = app(RawMaterialAuthorization::class);
+        $values = app(RawMaterialCatalogValues::class);
+        $this->assertTrue($authorization->canRead($this->boss, $this->context, RawMaterialPermission::View));
+        $this->assertSame($prices, $authorization->canRead($this->boss, $this->context, RawMaterialPermission::PurchasingCostsView));
+        $this->assertSame($prices, $values->canReadPrice($this->boss, $this->context));
+        $this->assertSame($foodcost, $values->canReadCost($this->boss, $this->context));
+        if (! $foodcost || ! $prices) {
+            $this->expectException(AuthorizationException::class);
+        }
+        $authorization->assertDocumentReadAllowed($this->boss, $this->context);
+    }
+
+    public static function rawFinancialConfigurations(): array
+    {
+        return [
+            'both enabled' => [true, true],
+            'both disabled' => [false, false],
+            'only foodcost' => [true, false],
+            'only purchase prices' => [false, true],
+        ];
+    }
+
+    public function test_boss_raw_checks_central_kitchen_restrictions_from_restaurant_context(): void
+    {
+        $restaurant = $this->activeRestaurant('RAW-RESTAURANT');
+        app(MembershipService::class)->assign($this->boss, $restaurant);
+        app(BossLocationRestrictions::class)->replace($this->administrator, $this->context, $this->boss->id, 0, [], [], [[
+            'category' => BossVisibilityCategory::PurchaseFinancials->value,
+            'location_id' => $this->context->id,
+        ]]);
+        $values = app(RawMaterialCatalogValues::class);
+        $this->assertFalse($values->canReadPrice($this->boss, $restaurant));
+        $this->assertTrue($values->canReadCost($this->boss, $restaurant));
+        $this->assertTrue(app(RawMaterialAuthorization::class)->canRead($this->boss, $restaurant, RawMaterialPermission::View));
+    }
+
     public function test_stage1d_only_authority_does_not_authorize_catalog_list_or_detail(): void
     {
         $restaurant = $this->activeRestaurant('R-STAGE1D');
-        $stage1dOnly = $this->user('stage1d-only-boss-catalog@example.test');
-        $this->role($stage1dOnly, BusinessRole::Employee, $restaurant);
+        $stage1dOnly = $this->provisionedUser('stage1d-only-boss-catalog@example.test', BusinessRole::Employee, $restaurant);
 
         $this->assertTrue(app(BusinessAuthorization::class)->allows(
             $stage1dOnly,
@@ -214,7 +319,7 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
 
     public function test_code_readiness_and_explicit_organization_state_are_both_required(): void
     {
-        $this->app->instance(OrganizationCapabilityCatalog::class, app(CodeOrganizationCapabilityCatalog::class));
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::notReady());
         $decision = app(BusinessVisibility::class)->decide(
             $this->boss,
             $this->context,
@@ -378,11 +483,12 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
         }
     }
 
-    private function grantRawView(User $recipient): void
+    /** @param list<RawMaterialPermission> $permissions */
+    private function grantRawView(User $recipient, array $permissions = [RawMaterialPermission::View]): void
     {
         $this->updateFixture($recipient->organization, ['authorization_initialized' => true]);
         $operationId = Str::uuid()->toString();
-        $this->withSetupTransaction(function (Connection $connection) use ($recipient, $operationId): void {
+        $this->withSetupTransaction(function (Connection $connection) use ($recipient, $operationId, $permissions): void {
             $connection->table('raw_material_audit_events')->insert([
                 'id' => Str::uuid()->toString(),
                 'organization_id' => $recipient->organization_id,
@@ -395,19 +501,21 @@ class BossRawMaterialCatalogAuthorizationTest extends AuthorizationTestCase
                 'reason_code' => 'INITIAL_STEWARD',
                 'metadata' => json_encode([
                     'recipient_user_id' => $recipient->id,
-                    'permissions' => [RawMaterialPermission::View->value],
+                    'permissions' => array_map(fn (RawMaterialPermission $permission): string => $permission->value, $permissions),
                 ], JSON_THROW_ON_ERROR),
             ]);
-            $connection->table('organization_permission_grants')->insert([
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $recipient->organization_id,
-                'user_id' => $recipient->id,
-                'permission' => RawMaterialPermission::View->value,
-                'granted_by' => $this->administrator->id,
-                'valid_from' => now(),
-                'bootstrap_operation_id' => $operationId,
-                'reason_code' => 'INITIAL_STEWARD',
-            ]);
+            foreach ($permissions as $permission) {
+                $connection->table('organization_permission_grants')->insert([
+                    'id' => Str::uuid()->toString(),
+                    'organization_id' => $recipient->organization_id,
+                    'user_id' => $recipient->id,
+                    'permission' => $permission->value,
+                    'granted_by' => $this->administrator->id,
+                    'valid_from' => now(),
+                    'bootstrap_operation_id' => $operationId,
+                    'reason_code' => 'INITIAL_STEWARD',
+                ]);
+            }
         });
     }
 }

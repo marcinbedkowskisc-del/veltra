@@ -25,7 +25,7 @@ final class CodeOrganizationCapabilityCatalog implements OrganizationCapabilityC
         return new OrganizationCapabilityDefinition(
             self::BOSS_RAW_CATALOG_READ,
             'ORGANIZATION',
-            ready: false,
+            ready: true,
             operatingContextTypes: [LocationType::CentralKitchen, LocationType::Restaurant],
             operations: ['list', 'detail'],
         );

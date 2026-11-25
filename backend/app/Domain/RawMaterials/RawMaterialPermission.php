@@ -34,6 +34,18 @@ enum RawMaterialPermission: string
         return ! in_array($this, [self::PermissionDelegate, self::DeleteDraft], true);
     }
 
+    public function readOnly(): bool
+    {
+        return in_array($this, [
+            self::View,
+            self::SupplierView,
+            self::PurchasingCostsView,
+            self::ReferencePriceView,
+            self::ExchangeRateView,
+            self::AuditView,
+        ], true);
+    }
+
     public function requiresPrimaryCatalogContext(): bool
     {
         return in_array($this, [

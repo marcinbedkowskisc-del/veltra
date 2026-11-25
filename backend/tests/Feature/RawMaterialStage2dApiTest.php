@@ -46,11 +46,9 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
 
         $this->activeRestaurant();
         $this->location = $this->primaryCentralKitchen();
-        $this->administrator = $this->user('stage2d3-admin@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('stage2d3-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
-        $this->steward = $this->user('stage2d3-steward@example.test');
-        app(MembershipService::class)->assign($this->steward, $this->location);
+        $this->steward = $this->provisionedUser('stage2d3-steward@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
         LocationModuleState::on('pgsql_setup')->create([
@@ -325,8 +323,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
 
     public function test_retired_supplier_compatibility_permission_cannot_be_granted(): void
     {
-        $recipient = $this->user('retired-compatibility-permission@example.test');
-        app(MembershipService::class)->assign($recipient, $this->location);
+        $recipient = $this->provisionedUser('retired-compatibility-permission@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->selectContext($this->steward);
         $constraint = DB::table('pg_constraint')
             ->where('conname', 'organization_permission_grants_supplier_compatibility_retired_check')
@@ -346,8 +343,7 @@ class RawMaterialStage2dApiTest extends AuthorizationTestCase
     public function test_specialized_permissions_are_explicit_and_revision_reads_are_organization_scoped(): void
     {
         $material = $this->createMaterial('Materiał tylko do odczytu');
-        $viewer = $this->user('stage2d3-viewer@example.test');
-        app(MembershipService::class)->assign($viewer, $this->location);
+        $viewer = $this->provisionedUser('stage2d3-viewer@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $permissions = app(OrganizationRawMaterialPermissionAdministration::class);
         $permissions->grant(
             $this->steward,

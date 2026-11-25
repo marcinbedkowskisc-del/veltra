@@ -5,6 +5,7 @@ namespace App\Domain\RawMaterials;
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
 use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Domain\Identity\MembershipService;
 use App\Models\Location;
 use App\Models\Organization;
@@ -38,6 +39,7 @@ final class OrganizationRawMaterialPermissionAdministration
             || ! $recipient->is_active || $recipient->email_verified_at === null
             || ! app(BusinessAuthorization::class)->canManageAccount($actor, $recipient)
             || ! app(MembershipService::class)->available($recipient)->exists()
+            || (app(BusinessAuthorization::class)->hasRole($recipient, BusinessRole::Boss) && ! $permission->readOnly())
             || ! $permission->delegable()
             || ! $this->authorization->hasEffectiveGrant($actor, $permission)) {
             throw new AuthorizationException(__('messages.unauthorized'));
@@ -50,6 +52,7 @@ final class OrganizationRawMaterialPermissionAdministration
                 || ! $recipient->fresh()?->is_active || $recipient->fresh()?->email_verified_at === null
                 || ! app(BusinessAuthorization::class)->canManageAccount($actor, $recipient->fresh())
                 || ! app(MembershipService::class)->available($recipient->fresh())->exists()
+                || (app(BusinessAuthorization::class)->hasRole($recipient->fresh(), BusinessRole::Boss) && ! $permission->readOnly())
                 || ! $permission->delegable() || ! $this->authorization->hasEffectiveGrant($actor, $permission)) {
                 throw new AuthorizationException(__('messages.unauthorized'));
             }
@@ -192,5 +195,52 @@ final class OrganizationRawMaterialPermissionAdministration
                 ]);
             });
         });
+    }
+
+    public function revokeWritesForBossRoleReplacement(User $actor, Location $context, User $recipient): void
+    {
+        $business = app(BusinessAuthorization::class);
+        if (! DB::transactionLevel() || ! $business->eligible($actor, $context)
+            || ! $business->hasRole($actor, BusinessRole::Administrator)
+            || ! $business->hasRole($recipient, BusinessRole::Boss)
+            || $actor->organization_id !== $recipient->organization_id
+            || ! $business->canManageAccount($actor, $recipient)) {
+            throw new AuthorizationException(__('messages.unauthorized'));
+        }
+        $grants = DB::table('organization_permission_grants as grants')
+            ->where('grants.organization_id', $recipient->organization_id)
+            ->where('grants.user_id', $recipient->id)
+            ->whereNotExists(fn ($query) => $query->selectRaw('1')
+                ->from('organization_permission_grant_events as events')
+                ->whereColumn('events.grant_id', 'grants.id')->where('events.event_type', 'REVOKED'))
+            ->get(['grants.id', 'grants.permission']);
+        foreach ($grants as $grant) {
+            $permission = RawMaterialPermission::tryFrom($grant->permission);
+            if ($permission?->readOnly()) {
+                continue;
+            }
+            if ($permission === null && $grant->permission !== 'RAW_MATERIALS_SUPPLIER_COMPATIBILITY_APPROVE') {
+                throw new \UnexpectedValueException('Unknown RAW permission on role replacement.');
+            }
+            $scope = $permission
+                ? AuthorizationMutationScope::permissionRevoke($permission)
+                : AuthorizationMutationScope::legacySupplierCompatibilityPermissionRevoke();
+            $this->contexts->run($scope, $actor->id, function () use ($actor, $context, $recipient, $grant): void {
+                $operationId = Str::uuid()->toString();
+                DB::table('organization_permission_grant_events')->insert([
+                    'id' => Str::uuid()->toString(), 'organization_id' => $recipient->organization_id,
+                    'grant_id' => $grant->id, 'event_type' => 'REVOKED',
+                    'actor_user_id' => $actor->id, 'reason_code' => 'ROLE_REPLACED_BOSS',
+                ]);
+                DB::table('raw_material_audit_events')->insert([
+                    'id' => Str::uuid()->toString(), 'organization_id' => $recipient->organization_id,
+                    'operation_id' => $operationId, 'actor_user_id' => $actor->id,
+                    'actor_location_id' => $context->id, 'subject_type' => 'ORGANIZATION_PERMISSION_GRANT',
+                    'subject_id' => $grant->id, 'event_code' => 'PERMISSION_REVOKED',
+                    'outcome' => 'ACCEPTED', 'reason_code' => 'ROLE_REPLACED_BOSS',
+                    'metadata' => json_encode(['user_id' => $recipient->id, 'permission' => $grant->permission], JSON_THROW_ON_ERROR),
+                ]);
+            });
+        }
     }
 }

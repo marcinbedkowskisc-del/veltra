@@ -75,11 +75,9 @@ trait RawWorkbenchTests
     public function test_workbench_requires_view_and_draft_inspection_primary_membership_and_readiness(): void
     {
         [$material] = $this->b2Draft();
-        $reader = $this->user('workbench-viewer@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('workbench-viewer@example.test');
         $grants = app(OrganizationRawMaterialPermissionAdministration::class);
-        $editorOnly = $this->user('workbench-no-view@example.test');
-        app(MembershipService::class)->assign($editorOnly, $this->location);
+        $editorOnly = $this->restaurantEmployeeInCentralKitchen('workbench-no-view@example.test');
         $grants->grant($this->steward, $this->location, $editorOnly, RawMaterialPermission::Edit, 'Edycja bez odczytu');
         $editorOnly->refresh();
         $this->flushSession();
@@ -98,7 +96,7 @@ trait RawWorkbenchTests
         $this->postJson('/api/v1/raw-materials/'.$material['id'].'/submit', [], [
             'If-Match' => $material['version'],
         ])->assertForbidden();
-        $secondary = $this->kitchen('WORKBENCH_SECONDARY');
+        $secondary = $this->activeRestaurant('WORKBENCH_SECONDARY');
         app(MembershipService::class)->assign($reader, $secondary);
         LocationModuleState::on('pgsql_setup')->create([
             'organization_id' => $reader->organization_id, 'location_id' => $secondary->id,

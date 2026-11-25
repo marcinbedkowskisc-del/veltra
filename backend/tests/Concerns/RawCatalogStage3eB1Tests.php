@@ -122,7 +122,7 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_decimal_usable_cost_for_every_unit_and_rounding_boundary(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $category = $this->category();
         foreach ([
             ['g', '1000', '800', '0.01', '1.25000000000000', 'PLN/100g'],
@@ -147,11 +147,10 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_financial_fields_and_sorts_are_independently_authorized(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Finanse', 'g', '100', '80');
         $this->stage3ePrice($material['id'], '0.1', 'stage3e-finance');
-        $reader = $this->user('stage3e-reader@example.test');
-        app(MembershipService::class)->assign($reader, $this->location);
+        $reader = $this->restaurantEmployeeInCentralKitchen('stage3e-reader@example.test');
         $permissions = app(OrganizationRawMaterialPermissionAdministration::class);
         $permissions->grant($this->steward, $this->location, $reader, RawMaterialPermission::View, 'Odczyt testowy');
         $shown = $this->rawMaterialService->show($reader, $this->location, $material['id']);
@@ -210,7 +209,7 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_manual_unchanged_price_keeps_attempt_audit_without_history_duplicate(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Cena opakowania', 'g', '1000', '800');
         $this->selectRawMaterialApiContext($this->steward);
         $url = '/api/v1/raw-materials/'.$material['id'].'/reference-prices';
@@ -226,7 +225,7 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_package_price_remains_exact_with_recurring_base_conversion(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Cena dokładna', 'pc', '3');
         $service = app(RawMaterialCommercialService::class);
         $input = ['event_type' => 'PRICE_SET', 'effective_from' => now()->toDateString(), 'net_pln_per_package' => '1', 'expected_event_no' => 0, 'reason_code' => 'TEST'];
@@ -239,7 +238,7 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_package_price_withdrawal_preserves_legacy_history_and_clears_derived_values(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Cena wycofana', 'g', '100', '80');
         $this->stage3ePrice($material['id'], '0.1', 'stage3e-withdraw-first');
         $this->selectRawMaterialApiContext($this->steward);
@@ -255,13 +254,11 @@ trait RawCatalogStage3eB1Tests
 
     public function test_stage3e_b1_foodcost_grant_does_not_grant_reference_prices_or_purchase_prices(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->stage3eMaterial('Finanse odbiorcy', 'g', '100', '80');
         $this->stage3ePrice($material['id'], '0.1', 'stage3e-foodcost-price');
         $restaurant = $this->activeRestaurant('FOODCOST_R');
-        $reader = $this->user('stage3e-foodcost@example.test');
-        app(MembershipService::class)->assign($reader, $restaurant);
-        $this->role($reader, BusinessRole::Employee, $restaurant);
+        $reader = $this->provisionedUser('stage3e-foodcost@example.test', BusinessRole::Employee, $restaurant);
         LocationModuleState::on('pgsql_setup')->create([
             'organization_id' => $reader->organization_id, 'location_id' => $restaurant->id,
             'module_key' => 'RAW_MATERIALS', 'enabled' => true,
@@ -344,8 +341,7 @@ trait RawCatalogStage3eB1Tests
         } finally {
             $this->travelBack();
         }
-        $other = $this->user('stage3e-other@example.test');
-        app(MembershipService::class)->assign($other, $this->location);
+        $other = $this->restaurantEmployeeInCentralKitchen('stage3e-other@example.test');
         app(OrganizationRawMaterialPermissionAdministration::class)->grant($this->steward, $this->location, $other, RawMaterialPermission::Create, 'Test izolacji rezerwacji');
         try {
             $this->rawMaterialService->create($other, $this->location, $input);

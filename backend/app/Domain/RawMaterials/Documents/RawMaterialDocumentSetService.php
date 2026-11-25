@@ -61,6 +61,7 @@ final class RawMaterialDocumentSetService
 
     public function listing(User $actor, Location $context, string $materialId, bool $editing = false): array
     {
+        $this->authorization->assertDocumentReadAllowed($actor, $context);
         $service = app(RawMaterialService::class);
         $snapshot = $editing ? $service->editor($actor, $context, $materialId) : $service->show($actor, $context, $materialId);
         $revisionId = $snapshot['revision']['id'] ?? null;

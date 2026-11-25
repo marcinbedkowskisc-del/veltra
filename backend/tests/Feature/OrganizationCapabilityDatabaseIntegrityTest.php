@@ -32,8 +32,7 @@ class OrganizationCapabilityDatabaseIntegrityTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->kitchen = Location::where('code', 'CK1')->firstOrFail();
-        $this->administrator = $this->user('capability-integrity@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('capability-integrity@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->kitchen, $this->administrator->id);
         $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
     }
@@ -180,7 +179,7 @@ class OrganizationCapabilityDatabaseIntegrityTest extends AuthorizationTestCase
         });
     }
 
-    public function test_duplicate_events_and_cross_organization_attribution_are_rejected(): void
+    public function test_duplicate_events_and_unknown_location_attribution_are_rejected(): void
     {
         $attempt = $this->eventValues(
             Str::uuid()->toString(), 'activation_attempt', 'rejected', false, false, false, 0, 0, 0, false, 'operation_rejected',
@@ -192,48 +191,36 @@ class OrganizationCapabilityDatabaseIntegrityTest extends AuthorizationTestCase
             ]]);
         });
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $event = $this->eventValues(
-                Str::uuid()->toString(), 'activation_attempt', 'rejected', false, false, false, 0, 0, 0, false, 'operation_rejected',
-            );
-            $event['operating_location_id'] = $foreignLocation->id;
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
-                ->table('organization_capability_events')->insert($event));
-        });
+        $event = $this->eventValues(
+            Str::uuid()->toString(), 'activation_attempt', 'rejected', false, false, false, 0, 0, 0, false, 'operation_rejected',
+        );
+        $event['operating_location_id'] = Str::uuid()->toString();
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+            ->table('organization_capability_events')->insert($event));
     }
 
-    public function test_foreign_organization_actor_cannot_be_attributed_to_capability_events_or_state(): void
+    public function test_unknown_actor_cannot_be_attributed_to_capability_events_or_state(): void
     {
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $foreignActor = User::on('pgsql_setup')->create([
-                'organization_id' => $foreignLocation->organization_id,
-                'first_name' => 'Foreign',
-                'last_name' => 'Actor',
-                'email' => 'foreign-capability-actor@example.test',
-                'password' => self::PASSWORD,
-                'is_active' => true,
-            ]);
+        $unknownActorId = Str::uuid()->toString();
+        $event = $this->eventValues(
+            Str::uuid()->toString(), 'activation_attempt', 'rejected', false, false, false, 0, 0, 0, false, 'operation_rejected',
+        );
+        $event['actor_id'] = $unknownActorId;
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+            ->table('organization_capability_events')->insert($event));
 
-            $event = $this->eventValues(
-                Str::uuid()->toString(), 'activation_attempt', 'rejected', false, false, false, 0, 0, 0, false, 'operation_rejected',
-            );
-            $event['actor_id'] = $foreignActor->id;
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
-                ->table('organization_capability_events')->insert($event));
-
-            $state = [
-                'id' => Str::uuid()->toString(),
-                'organization_id' => $this->administrator->organization_id,
-                'capability_key' => 'BOSS_RAW_CATALOG_READ',
-                'enabled' => true,
-                'state_version' => 1,
-                'last_transition_event_id' => Str::uuid()->toString(),
-                'created_by' => $foreignActor->id,
-                'updated_by' => $foreignActor->id,
-            ];
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
-                ->table('organization_capability_states')->insert($state));
-        }, truncateAfterOperation: true);
+        $state = [
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $this->administrator->organization_id,
+            'capability_key' => 'BOSS_RAW_CATALOG_READ',
+            'enabled' => true,
+            'state_version' => 1,
+            'last_transition_event_id' => Str::uuid()->toString(),
+            'created_by' => $unknownActorId,
+            'updated_by' => $unknownActorId,
+        ];
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+            ->table('organization_capability_states')->insert($state));
     }
 
     public function test_signed_mutation_scope_matrix_keeps_capability_stage1e_rbac_and_raw_tables_separate(): void
@@ -302,8 +289,8 @@ class OrganizationCapabilityDatabaseIntegrityTest extends AuthorizationTestCase
         $roleAssignmentId = DB::table('role_assignments')->where('user_id', $this->administrator->id)->value('id');
         $moduleStateId = DB::table('location_module_states')->where('location_id', $this->kitchen->id)->value('id');
         $restaurant = Location::where('code', 'R1')->firstOrFail();
-        $permissionRecipient = $this->user('capability-scope-permission-recipient@example.test');
-        $membership = app(MembershipService::class)->assign($permissionRecipient, $restaurant, $this->administrator->id);
+        $permissionRecipient = $this->provisionedUser('capability-scope-permission-recipient@example.test', BusinessRole::Employee, $restaurant);
+        $membership = app(MembershipService::class)->available($permissionRecipient)->where('location_id', $restaurant->id)->firstOrFail();
         $state = DB::table('organization_capability_states')->where('id', $stateId)->firstOrFail();
         $eventValues = $this->eventValues(
             Str::uuid()->toString(),
@@ -473,8 +460,7 @@ class OrganizationCapabilityDatabaseIntegrityTest extends AuthorizationTestCase
     private function createRawMaterialScopeProbe(): string
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
-        $steward = $this->user('capability-scope-steward@example.test');
-        app(MembershipService::class)->assign($steward, $this->kitchen, $steward->id);
+        $steward = $this->provisionedUser('capability-scope-steward@example.test', BusinessRole::CentralKitchenChef, $this->kitchen);
         $operationId = Str::uuid()->toString();
         $categoryId = Str::uuid()->toString();
 

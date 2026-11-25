@@ -44,6 +44,22 @@ class SecurityController extends Controller
         return response()->json(['data' => null]);
     }
 
+    public function replaceRole(SecurityRequest $request, User $user, RoleAdministration $service): JsonResponse
+    {
+        $assignments = $service->replace(
+            $request->user(),
+            $request->attributes->get('operating_location'),
+            $user,
+            BusinessRole::from($request->validated('role')),
+            $request->validated('location_ids'),
+            $request->validated('current_password'),
+        );
+
+        return response()->json(['data' => array_map(fn (RoleAssignment $assignment): array => [
+            'id' => $assignment->id, 'role' => $assignment->role, 'location_id' => $assignment->location_id,
+        ], $assignments)]);
+    }
+
     public function accountStatus(SecurityRequest $request, User $user, RoleAdministration $service): JsonResponse
     {
         $service->setAccountActive($request->user(), $request->attributes->get('operating_location'), $user, $request->boolean('is_active'));

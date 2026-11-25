@@ -1,0 +1,13 @@
+services:
+  backend:
+    image: veltra-stage6a1-backend:stage7a0.1-20261125-e228f5e-wt1
+    build: !reset null
+  migrate:
+    image: veltra-stage6a1-backend:stage7a0.1-20261125-e228f5e-wt1
+    build: !reset null
+  queue:
+    image: veltra-stage6a1-backend:stage7a0.1-20261125-e228f5e-wt1
+    build: !reset null
+  frontend:
+    image: veltra-stage6a1-frontend:stage7a0.1-20261125-e228f5e-wt1
+    build: !reset null

@@ -22,7 +22,7 @@ class UserAvatarTest extends AuthorizationTestCase
 
     public function test_user_can_select_library_avatar_and_restore_initials_with_audited_persistence(): void
     {
-        $user = $this->user();
+        $user = $this->provisionedUser('person@example.test', BusinessRole::Boss);
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/avatar', [
             'type' => 'LIBRARY',
             'library_id' => 'portrait-040',
@@ -55,7 +55,7 @@ class UserAvatarTest extends AuthorizationTestCase
 
     public function test_uploads_are_reencoded_stored_privately_replaced_and_removed_safely(): void
     {
-        $user = $this->user();
+        $user = $this->provisionedUser('person@example.test', BusinessRole::Boss);
         $this->actingAs($user, 'web');
         $this->post('/api/v1/auth/avatar/photo', ['photo' => UploadedFile::fake()->image('photo.png', 64, 64)])
             ->assertOk();
@@ -87,7 +87,7 @@ class UserAvatarTest extends AuthorizationTestCase
 
     public function test_invalid_images_and_unapproved_library_ids_are_rejected_without_replacing_avatar(): void
     {
-        $user = $this->user();
+        $user = $this->provisionedUser('person@example.test', BusinessRole::Boss);
         $this->actingAs($user, 'web');
 
         $this->putJson('/api/v1/auth/avatar', ['type' => 'LIBRARY', 'library_id' => 'portrait-999'])
@@ -103,11 +103,10 @@ class UserAvatarTest extends AuthorizationTestCase
     public function test_administrator_can_manage_only_authorized_organization_users(): void
     {
         $location = $this->activeRestaurant();
-        $admin = $this->user('admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
-        $target = $this->user('target@example.test');
+        $target = $this->provisionedUser('target@example.test', BusinessRole::Employee, $location);
 
         $this->putJson("/api/v1/administration/users/{$target->id}/avatar", [
             'type' => 'LIBRARY',
@@ -127,8 +126,7 @@ class UserAvatarTest extends AuthorizationTestCase
         $this->get("/api/v1/administration/users/{$target->id}/avatar/photo")
             ->assertOk()->assertHeader('Content-Type', 'image/webp');
 
-        $manager = $this->user('manager@example.test');
-        $this->role($manager, BusinessRole::RestaurantManager, $location);
+        $manager = $this->provisionedUser('manager@example.test', BusinessRole::RestaurantManager, $location);
         Auth::forgetGuards();
         $this->flushSession();
         $this->actingAs($manager, 'web')->putJson('/api/v1/auth/operating-location', [
@@ -143,8 +141,8 @@ class UserAvatarTest extends AuthorizationTestCase
 
     public function test_self_service_never_uses_a_supplied_user_id_as_the_mutation_target(): void
     {
-        $user = $this->user();
-        $other = $this->user('other@example.test');
+        $user = $this->provisionedUser('person@example.test', BusinessRole::Boss);
+        $other = $this->provisionedUser('other@example.test', BusinessRole::Boss);
         $this->actingAs($user, 'web')->putJson('/api/v1/auth/avatar', [
             'type' => 'LIBRARY',
             'library_id' => 'portrait-001',

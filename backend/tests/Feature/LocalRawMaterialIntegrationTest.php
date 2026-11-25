@@ -203,8 +203,7 @@ class LocalRawMaterialIntegrationTest extends AuthorizationTestCase
             'location_id' => $this->location->id, 'module_key' => 'RAW_MATERIALS', 'enabled' => true,
         ]);
         $this->actingAs($this->administrator, 'web')->getJson('/api/v1/raw-materials')->assertForbidden();
-        $steward = $this->user('raw.steward@veltra.test');
-        app(MembershipService::class)->assign($steward, $this->location, $this->administrator->id);
+        $steward = $this->provisionedUser('raw.steward@veltra.test', BusinessRole::CentralKitchenChef, $this->location);
         app(RawMaterialPermissionBootstrap::class)->grantInitial(
             $this->administrator->id, $steward->id,
             [RawMaterialPermission::View->value, RawMaterialPermission::PermissionDelegate->value],

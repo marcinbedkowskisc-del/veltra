@@ -32,8 +32,7 @@ class AllergenDictionaryManagementTest extends AuthorizationTestCase
     private function administratorContext(): array
     {
         $location = $this->kitchen();
-        $admin = $this->user('allergen-admin@example.test');
-        $this->role($admin, BusinessRole::Administrator);
+        $admin = $this->provisionedUser('allergen-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($admin, $location);
         $this->selectContext($admin, $location);
 

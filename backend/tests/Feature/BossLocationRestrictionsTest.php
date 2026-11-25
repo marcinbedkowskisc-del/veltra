@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Domain\Authorization\BossLocationRestrictions;
 use App\Domain\Authorization\BossVisibilityCategory;
 use App\Domain\Authorization\BusinessAuthorization;
 use App\Domain\Authorization\BusinessDataProvenance;
@@ -36,18 +37,43 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
         ])->assertOk();
     }
 
+    public function test_boss_recipe_read_includes_central_and_future_restaurants_but_honors_category_restrictions(): void
+    {
+        $restaurant = $this->activeRestaurant();
+        $future = $this->activeRestaurant('R2');
+        $kitchen = $this->primaryCentralKitchen();
+        $boss = $this->provisionedUser('boss-recipes@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('boss-recipes-admin@example.test', BusinessRole::Administrator);
+        app(MembershipService::class)->assign($boss, $restaurant);
+        app(MembershipService::class)->assign($admin, $restaurant);
+        $authorization = app(BusinessAuthorization::class);
+        foreach ([$restaurant, $future, $kitchen] as $location) {
+            $this->assertTrue($authorization->allows($boss, $restaurant, $location, Permission::RecipesView));
+            $this->assertTrue($authorization->allows($boss, $restaurant, $location, Permission::QuantityCalculate));
+            $this->assertFalse($authorization->allows($boss, $restaurant, $location, Permission::PersonnelManage));
+        }
+        app(BossLocationRestrictions::class)->replace(
+            $admin, $restaurant, $boss->id, 0, [], [BossVisibilityCategory::ProductsRecipes->value], [],
+        );
+        foreach ([$restaurant, $future, $kitchen] as $location) {
+            $this->assertFalse($authorization->allows($boss, $restaurant, $location, Permission::RecipesView));
+            $this->assertFalse($authorization->allows($boss, $restaurant, $location, Permission::QuantityCalculate));
+            $this->assertTrue($authorization->allows($boss, $restaurant, $location, Permission::LocationView));
+        }
+    }
+
     public function test_boss_directory_applies_individual_restrictions_before_filtering_and_keeps_other_roles_local(): void
     {
         $restaurant = $this->activeRestaurant();
         $second = $this->activeRestaurant('R2');
         $kitchen = $this->primaryCentralKitchen();
-        $boss = $this->user('boss@example.test');
-        $admin = $this->user('admin@example.test');
-        $this->role($boss, BusinessRole::Boss);
-        $this->role($admin, BusinessRole::Administrator);
+        $boss = $this->provisionedUser('boss@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('admin@example.test', BusinessRole::Administrator);
         $this->selectContext($boss, $restaurant);
         $this->getJson('/api/v1/security/boss/locations')->assertOk()->assertJsonCount(3, 'data')
             ->assertJsonFragment(['id' => $kitchen->id])->assertJsonMissingPath('data.0.organization_id');
+        $this->getJson("/api/v1/security/access?location_id={$kitchen->id}&permission=LOCATION_VIEW")
+            ->assertOk()->assertJsonPath('data.allowed', true);
         $path = "/api/v1/administration/users/{$boss->id}/boss-location-restrictions";
         $this->getJson($path)->assertForbidden();
         $this->putJson($path, ['version' => 0, 'excluded_location_ids' => []])->assertForbidden();
@@ -73,14 +99,24 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
 
         $this->selectContext($boss, $restaurant);
         $this->getJson('/api/v1/security/boss/locations?type=CENTRAL_KITCHEN')->assertOk()->assertJsonCount(0, 'data');
+        $this->getJson("/api/v1/security/access?location_id={$kitchen->id}&permission=LOCATION_VIEW")
+            ->assertOk()->assertJsonPath('data.allowed', false);
         $this->getJson('/api/v1/security/boss/locations?type=RESTAURANT')
             ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.id', $second->id);
         $local = "/api/v1/security/access?location_id={$restaurant->id}&permission=LOCATION_VIEW";
         $this->getJson($local)->assertOk()->assertJsonPath('data.allowed', false);
-        $this->role($boss, BusinessRole::RestaurantManager, $restaurant);
-        $this->getJson($local)->assertOk()->assertJsonPath('data.allowed', true);
+        $membership = $boss->memberships()->where('location_id', $restaurant->id)->where('is_active', true)->firstOrFail();
+        $this->assertDatabaseRejects('23P01', fn (Connection $connection) => $connection->table('role_assignments')->insert([
+            'id' => Str::uuid()->toString(),
+            'organization_id' => $boss->organization_id,
+            'user_id' => $boss->id,
+            'role' => BusinessRole::RestaurantManager->value,
+            'location_id' => $restaurant->id,
+            'membership_id' => $membership->id,
+        ]));
+        $this->getJson($local)->assertOk()->assertJsonPath('data.allowed', false);
         $this->getJson("/api/v1/security/access?location_id={$second->id}&permission=PURCHASE_PRICES_VIEW")
-            ->assertOk()->assertJsonPath('data.allowed', false);
+            ->assertOk()->assertJsonPath('data.allowed', true);
         $this->getJson("/api/v1/security/access?location_id={$second->id}&permission=INVENTORY_COUNT_ENTRY")
             ->assertOk()->assertJsonPath('data.allowed', false);
 
@@ -95,10 +131,8 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
         $restaurant = $this->activeRestaurant();
         $second = $this->activeRestaurant('R2');
         $kitchen = $this->primaryCentralKitchen();
-        $boss = $this->user('boss-policy@example.test');
-        $admin = $this->user('admin-policy@example.test');
-        $this->role($boss, BusinessRole::Boss);
-        $this->role($admin, BusinessRole::Administrator);
+        $boss = $this->provisionedUser('boss-policy@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('admin-policy@example.test', BusinessRole::Administrator);
         $this->selectContext($admin, $restaurant);
         $path = "/api/v1/administration/users/{$boss->id}/boss-location-restrictions";
 
@@ -148,17 +182,15 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
             ->allows($boss, $restaurant, $restaurant, Permission::LocationView));
         $this->assertTrue(app(BusinessAuthorization::class)
             ->allows($boss, $restaurant, $second, Permission::LocationView));
-        $this->assertFalse(app(BusinessAuthorization::class)
+        $this->assertTrue(app(BusinessAuthorization::class)
             ->allows($boss, $restaurant, $kitchen, Permission::ReportsView));
     }
 
-    public function test_legacy_location_only_update_preserves_category_policy_and_foreign_locations_are_rejected(): void
+    public function test_legacy_location_only_update_preserves_category_policy_and_unknown_locations_are_rejected(): void
     {
         $restaurant = $this->activeRestaurant();
-        $boss = $this->user('boss-legacy-policy@example.test');
-        $admin = $this->user('admin-legacy-policy@example.test');
-        $this->role($boss, BusinessRole::Boss);
-        $this->role($admin, BusinessRole::Administrator);
+        $boss = $this->provisionedUser('boss-legacy-policy@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('admin-legacy-policy@example.test', BusinessRole::Administrator);
         $this->selectContext($admin, $restaurant);
         $path = "/api/v1/administration/users/{$boss->id}/boss-location-restrictions";
         $pair = [
@@ -180,58 +212,56 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
             ->assertJsonPath('data.excluded_categories.0', BossVisibilityCategory::Foodcost->value)
             ->assertJsonPath('data.excluded_category_locations.0.category', BossVisibilityCategory::ReportsAnalytics->value);
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($path, $boss, $admin): void {
-            $this->putJson($path, [
-                'version' => 2,
-                'excluded_location_ids' => [$foreignLocation->id],
-                'policy_schema_version' => 2,
-                'excluded_categories' => [],
-                'excluded_category_locations' => [],
-            ])->assertForbidden();
-            $this->putJson($path, [
-                'version' => 2,
-                'excluded_location_ids' => [],
-                'policy_schema_version' => 2,
-                'excluded_categories' => [],
-                'excluded_category_locations' => [[
-                    'category' => BossVisibilityCategory::ReportsAnalytics->value,
-                    'location_id' => $foreignLocation->id,
-                ]],
-            ])->assertForbidden();
+        $unknownLocationId = Str::uuid()->toString();
+        $this->putJson($path, [
+            'version' => 2,
+            'excluded_location_ids' => [$unknownLocationId],
+            'policy_schema_version' => 2,
+            'excluded_categories' => [],
+            'excluded_category_locations' => [],
+        ])->assertForbidden();
+        $this->putJson($path, [
+            'version' => 2,
+            'excluded_location_ids' => [],
+            'policy_schema_version' => 2,
+            'excluded_categories' => [],
+            'excluded_category_locations' => [[
+                'category' => BossVisibilityCategory::ReportsAnalytics->value,
+                'location_id' => $unknownLocationId,
+            ]],
+        ])->assertForbidden();
 
-            $foreignPolicy = $this->revisionRow($boss, $admin);
-            $foreignPolicy['organization_id'] = $foreignLocation->organization_id;
-            $foreignPolicy['version'] = 1;
-            $this->assertRuntimeDatabaseRejects('23503', fn () => app(SecurityMutation::class)->run(
-                $admin,
-                $boss,
-                null,
-                'boss.location_restrictions',
-                fn () => DB::table('boss_location_restriction_revisions')->insert($foreignPolicy),
-            ));
-        });
+        $unknownPolicy = $this->revisionRow($boss, $admin);
+        $unknownPolicy['organization_id'] = Str::uuid()->toString();
+        $unknownPolicy['version'] = 1;
+        $this->assertRuntimeDatabaseRejects('23503', fn () => app(SecurityMutation::class)->run(
+            $admin,
+            $boss,
+            null,
+            'boss.location_restrictions',
+            fn () => DB::table('boss_location_restriction_revisions')->insert($unknownPolicy),
+        ));
     }
 
     public function test_restrictions_survive_boss_role_removal_and_regrant(): void
     {
         $restaurant = $this->activeRestaurant();
         $second = $this->activeRestaurant('R2');
-        $boss = $this->user('boss-regrant@example.test');
-        $admin = $this->user('admin-regrant@example.test');
-        $bossRole = $this->role($boss, BusinessRole::Boss);
-        $this->role($admin, BusinessRole::Administrator);
+        $boss = $this->provisionedUser('boss-regrant@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('admin-regrant@example.test', BusinessRole::Administrator);
         $this->selectContext($admin, $restaurant);
+        app(MembershipService::class)->assign($boss, $restaurant);
         $path = "/api/v1/administration/users/{$boss->id}/boss-location-restrictions";
         $this->putJson($path, [
             'version' => 0,
             'excluded_location_ids' => [$restaurant->id],
         ])->assertOk();
 
-        app(RoleAdministration::class)->revoke($admin, $restaurant, $bossRole);
+        app(RoleAdministration::class)->replace($admin, $restaurant, $boss, BusinessRole::Employee, [$restaurant->id]);
         $this->getJson($path)->assertOk()->assertJsonPath('data.excluded_location_ids.0', $restaurant->id);
         $this->selectContext($boss, $restaurant);
         $this->getJson('/api/v1/security/boss/locations')->assertForbidden();
-        app(RoleAdministration::class)->grant($admin, $restaurant, $boss, BusinessRole::Boss, null);
+        app(RoleAdministration::class)->replace($admin, $restaurant, $boss, BusinessRole::Boss, []);
 
         $this->selectContext($boss, $restaurant);
         $locations = $this->getJson('/api/v1/security/boss/locations')->assertOk()
@@ -251,10 +281,8 @@ class BossLocationRestrictionsTest extends AuthorizationTestCase
     public function test_revision_trigger_rejects_unsigned_mismatched_and_malformed_writes_and_history_is_append_only(): void
     {
         $restaurant = $this->activeRestaurant();
-        $boss = $this->user('boss-trigger@example.test');
-        $admin = $this->user('admin-trigger@example.test');
-        $this->role($boss, BusinessRole::Boss);
-        $this->role($admin, BusinessRole::Administrator);
+        $boss = $this->provisionedUser('boss-trigger@example.test', BusinessRole::Boss);
+        $admin = $this->provisionedUser('admin-trigger@example.test', BusinessRole::Administrator);
         $this->selectContext($admin, $restaurant);
         $this->putJson("/api/v1/administration/users/{$boss->id}/boss-location-restrictions", [
             'version' => 0,

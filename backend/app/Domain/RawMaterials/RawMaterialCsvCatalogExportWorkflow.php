@@ -39,7 +39,7 @@ final class RawMaterialCsvCatalogExportWorkflow
         }
         $values = app(RawMaterialCatalogValues::class);
         $input['columns'] ??= array_values(array_filter(array_slice(self::SELECTABLE_COLUMNS, 0, 8),
-            fn (string $column): bool => ($column !== 'reference_net_price' || $values->canReadPrice($actor))
+            fn (string $column): bool => ($column !== 'reference_net_price' || $values->canReadPrice($actor, $context))
                 && ($column !== 'usable_unit_cost' || $values->canReadCost($actor, $context))));
         $this->authorizeColumns($actor, $context, $input['columns'], $input);
         $cacheKey = 'raw-material-selected-export:'.$actor->organization_id.':'.$actor->id.':'.$context->id.':'.hash('sha256', $key);
@@ -68,7 +68,7 @@ final class RawMaterialCsvCatalogExportWorkflow
     {
         $this->authorization->assertAllowed($actor, $context, RawMaterialPermission::View);
         $values = app(RawMaterialCatalogValues::class);
-        if ((in_array('reference_net_price', $columns, true) && ! $values->canReadPrice($actor))
+        if ((in_array('reference_net_price', $columns, true) && ! $values->canReadPrice($actor, $context))
             || (in_array('usable_unit_cost', $columns, true) && ! $values->canReadCost($actor, $context))) {
             throw new AuthorizationException(__('messages.unauthorized'));
         }

@@ -2,6 +2,8 @@
 
 namespace App\Domain\RawMaterials;
 
+use App\Domain\Authorization\BusinessAuthorization;
+use App\Domain\Authorization\BusinessRole;
 use App\Models\Location;
 use App\Models\User;
 use Illuminate\Database\Query\Builder;
@@ -62,12 +64,13 @@ final class RawMaterialLocationSharePolicy
             return false;
         }
 
-        $isPrimary = $this->isPrimaryContext($context);
+        $isBoss = app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Boss)
+            && app(RawMaterialAuthorization::class)->canRead($actor, $context, RawMaterialPermission::View);
+        $isPrimary = $isBoss || $this->isPrimaryContext($context);
         $query = DB::table('raw_materials as materials')
             ->where('materials.organization_id', $actor->organization_id)
             ->where('materials.id', $materialId)
             ->whereNull('materials.deleted_at')
-            ->where('materials.lifecycle_state', 'ACTIVE')
             ->whereNotNull('materials.approved_revision_id')
             ->whereExists(fn (Builder $query) => $query->selectRaw('1')
                 ->from('raw_material_revisions as current_revision')
@@ -80,6 +83,9 @@ final class RawMaterialLocationSharePolicy
                 ->whereColumn('current_revision.id', 'materials.approved_revision_id')
                 ->whereColumn('current_revision.raw_material_id', 'materials.id')
                 ->whereColumn('current_revision.organization_id', 'materials.organization_id'));
+        if (! $isBoss) {
+            $query->where('materials.lifecycle_state', 'ACTIVE');
+        }
         if (! $isPrimary) {
             $query
                 ->whereExists(fn (Builder $query) => $query->selectRaw('1')
@@ -116,7 +122,9 @@ final class RawMaterialLocationSharePolicy
         if (! $this->hasResolvedPrimary($actor->organization_id)) {
             return $query->whereRaw('false');
         }
-        if ($this->isPrimaryContext($context)) {
+        if ($this->isPrimaryContext($context)
+            || (app(BusinessAuthorization::class)->hasRole($actor, BusinessRole::Boss)
+                && app(RawMaterialAuthorization::class)->canRead($actor, $context, RawMaterialPermission::View))) {
             return $query;
         }
 

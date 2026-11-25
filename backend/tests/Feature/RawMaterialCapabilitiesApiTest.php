@@ -3,8 +3,12 @@
 namespace Tests\Feature;
 
 use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\MembershipService;
+use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
 use App\Domain\Modules\ModuleCatalog;
+use App\Domain\Modules\OrganizationCapabilityCatalog;
+use App\Domain\Modules\OrganizationCapabilityService;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Domain\RawMaterials\RawMaterialAuthorization;
 use App\Domain\RawMaterials\RawMaterialPermission;
@@ -19,6 +23,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\AuthorizationTestCase;
 use Tests\Support\ModuleCatalogFixtures;
+use Tests\Support\OrganizationCapabilityCatalogFixtures;
 
 class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 {
@@ -33,11 +38,9 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->location = $this->primaryCentralKitchen();
-        $this->administrator = $this->user('capabilities-administrator@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('capabilities-administrator@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
-        $this->steward = $this->user('capabilities-steward@example.test');
-        app(MembershipService::class)->assign($this->steward, $this->location);
+        $this->steward = $this->provisionedUser('capabilities-steward@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->bootstrapFixtureGrants();
     }
@@ -94,7 +97,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.permissions.edit', true)
             ->assertJsonPath('data.actions.edit', true);
 
-        $secondaryKitchen = $this->kitchen('CK2');
+        $secondaryKitchen = $this->activeRestaurant('R-OTHER');
         app(MembershipService::class)->assign($this->steward, $secondaryKitchen);
         $this->enableRawMaterials($secondaryKitchen);
         $this->selectContext($this->steward, $secondaryKitchen);
@@ -108,10 +111,17 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.actions.edit', false);
     }
 
-    public function test_boss_restrictions_do_not_suppress_an_independent_raw_grant(): void
+    public function test_boss_restrictions_override_an_independent_raw_grant(): void
     {
         $this->prepareReadyModule();
-        $this->role($this->steward, BusinessRole::Boss);
+        app(RoleAdministration::class)->replace($this->administrator, $this->location, $this->steward, BusinessRole::Boss, []);
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
+        app(OrganizationCapabilityService::class)->configure(
+            $this->administrator, $this->location, CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+            Str::uuid()->toString(), ['enabled' => true, 'expected_state_version' => 0, 'current_password' => self::PASSWORD],
+        );
+        $this->selectContext($this->steward, $this->location);
+        $this->getJson('/api/v1/raw-materials')->assertOk();
 
         $this->selectContext($this->administrator, $this->location);
         $this->putJson("/api/v1/administration/users/{$this->steward->id}/boss-location-restrictions", [
@@ -123,14 +133,13 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         ])->assertOk();
 
         $this->selectContext($this->steward, $this->location);
-        $this->getJson('/api/v1/raw-materials')->assertOk();
+        $this->getJson('/api/v1/raw-materials')->assertForbidden();
     }
 
     public function test_boss_restrictions_do_not_grant_access_to_raw_routes_without_an_independent_grant(): void
     {
         $this->prepareReadyModule();
-        $boss = $this->newRecipient('capabilities-boss-without-raw-grant@example.test');
-        $this->role($boss, BusinessRole::Boss);
+        $boss = $this->newRecipient('capabilities-boss-without-raw-grant@example.test', BusinessRole::Boss);
 
         $this->selectContext($this->administrator, $this->location);
         $this->putJson("/api/v1/administration/users/{$boss->id}/boss-location-restrictions", [
@@ -176,7 +185,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         $this->patchJson('/api/v1/raw-materials/categories/'.$category, ['name' => 'Nowa nazwa'])
             ->assertOk()->assertJsonPath('data.name', 'Nowa nazwa');
 
-        $secondary = $this->kitchen('CAT2');
+        $secondary = $this->activeRestaurant('CAT2');
         app(MembershipService::class)->assign($this->steward, $secondary);
         $this->enableRawMaterials($secondary);
         $this->selectContext($this->steward, $secondary);
@@ -231,7 +240,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
     public function test_pricing_preview_uses_authoritative_normalization_and_cost_rules(): void
     {
         $this->prepareReadyModule();
-        $this->role($this->steward, BusinessRole::Administrator);
+        app(RoleAdministration::class)->replace($this->administrator, $this->location, $this->steward, BusinessRole::Administrator, [], self::PASSWORD);
         $this->selectContext($this->steward, $this->location);
         $this->getJson('/api/v1/security/raw-materials/capabilities')
             ->assertOk()->assertJsonPath('data.actions.manage_reference_price', true)
@@ -300,9 +309,8 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
     public function test_pricing_preview_does_not_expose_financial_data_without_reference_price_view(): void
     {
         $this->prepareReadyModule();
-        $recipient = $this->newRecipient('pricing-preview-view-only@example.test');
-        $this->role($this->steward, BusinessRole::Administrator);
-        $this->role($recipient, BusinessRole::Administrator);
+        $recipient = $this->newRecipient('pricing-preview-view-only@example.test', BusinessRole::Administrator);
+        app(RoleAdministration::class)->replace($this->administrator, $this->location, $this->steward, BusinessRole::Administrator, [], self::PASSWORD);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward, $this->location, $recipient, RawMaterialPermission::View, 'Odczyt katalogu w teście',
         );
@@ -355,8 +363,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
     public function test_missing_effective_create_grant_is_reported_without_revealing_an_action(): void
     {
-        $operator = $this->user('capabilities-no-grant@example.test');
-        app(MembershipService::class)->assign($operator, $this->location);
+        $operator = $this->provisionedUser('capabilities-no-grant@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->selectContext($operator, $this->location);
 
         $this->actingAs($operator, 'web')->getJson('/api/v1/security/raw-materials/capabilities')
@@ -483,7 +490,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
     public function test_edit_action_requires_primary_context_while_permission_remains_effective(): void
     {
         $this->prepareReadyModule();
-        $secondaryKitchen = $this->kitchen('CK2');
+        $secondaryKitchen = $this->activeRestaurant('R-OTHER');
         app(MembershipService::class)->assign($this->steward, $secondaryKitchen);
         $this->enableRawMaterials($secondaryKitchen);
         $this->selectContext($this->steward, $secondaryKitchen);
@@ -497,9 +504,12 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
 
     public function test_inactive_membership_cannot_read_capabilities(): void
     {
-        $this->selectContext($this->steward, $this->location);
+        $restaurant = $this->activeRestaurant('R-INACTIVE-MEMBERSHIP');
+        $recipient = $this->provisionedUser('capabilities-inactive-membership@example.test', BusinessRole::Employee, $restaurant);
+        app(MembershipService::class)->assign($recipient, $this->location);
+        $this->selectContext($recipient, $this->location);
         DB::connection('pgsql_setup')->table('location_memberships')
-            ->where('user_id', $this->steward->id)
+            ->where('user_id', $recipient->id)
             ->where('location_id', $this->location->id)
             ->update([
                 'is_active' => false,
@@ -508,7 +518,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
                 'updated_at' => now(),
             ]);
 
-        $this->actingAs($this->steward, 'web')
+        $this->actingAs($recipient, 'web')
             ->getJson('/api/v1/security/raw-materials/capabilities')
             ->assertForbidden();
     }
@@ -555,8 +565,7 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
     {
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
         $this->enableRawMaterials($this->location);
-        $recipient = $this->user('capabilities-delegatee@example.test');
-        app(MembershipService::class)->assign($recipient, $this->location);
+        $recipient = $this->newRecipient('capabilities-delegatee@example.test');
         $permissions = app(OrganizationRawMaterialPermissionAdministration::class);
         $delegated = $permissions->grant(
             $this->steward,
@@ -616,20 +625,19 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
             ->assertJsonPath('data.actions.create', false);
     }
 
-    public function test_requested_foreign_location_cannot_override_the_session_context(): void
+    public function test_requested_other_location_cannot_override_the_session_context(): void
     {
         $this->prepareReadyModule();
         $this->selectContext($this->steward, $this->location);
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $this->actingAs($this->steward, 'web')
-                ->getJson('/api/v1/security/raw-materials/capabilities?location_id='.$foreignLocation->id)
-                ->assertOk()
-                ->assertJsonPath('data.location_id', $this->location->id)
-                ->assertJsonPath('data.permissions.create', true)
-                ->assertJsonPath('data.permissions.edit', true)
-                ->assertJsonPath('data.actions.edit', true);
-        });
+        $otherLocation = $this->activeRestaurant('R-CAPABILITIES-OTHER');
+        $this->actingAs($this->steward, 'web')
+            ->getJson('/api/v1/security/raw-materials/capabilities?location_id='.$otherLocation->id)
+            ->assertOk()
+            ->assertJsonPath('data.location_id', $this->location->id)
+            ->assertJsonPath('data.permissions.create', true)
+            ->assertJsonPath('data.permissions.edit', true)
+            ->assertJsonPath('data.actions.edit', true);
     }
 
     public function test_successful_get_does_not_allocate_sku_or_write_permissions_or_audit(): void
@@ -716,10 +724,12 @@ class RawMaterialCapabilitiesApiTest extends AuthorizationTestCase
         }
     }
 
-    private function newRecipient(string $email): User
+    private function newRecipient(string $email, BusinessRole $role = BusinessRole::CentralKitchenChef): User
     {
-        $recipient = $this->user($email);
-        app(MembershipService::class)->assign($recipient, $this->location);
+        $recipient = $this->provisionedUser($email, $role, $role->organizationWide() ? null : $this->location);
+        if ($role->organizationWide()) {
+            app(MembershipService::class)->assign($recipient, $this->location);
+        }
 
         return $recipient;
     }

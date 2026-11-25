@@ -165,6 +165,9 @@ class AccountLinks
 
                 return false;
             }
+            if (! $this->authorization->hasSingleEffectiveRole($target)) {
+                throw new BusinessRuleViolation(__('messages.business_role_must_remain'));
+            }
             $target->forceFill(['password' => Hash::make($password), 'email_verified_at' => $target->email_verified_at ?? now()])->save();
             $repository->delete($target);
             if ($kind === 'activation' && RoleAssignment::where('user_id', $target->id)->where('role', BusinessRole::Administrator)->whereNull('revoked_at')->exists()) {

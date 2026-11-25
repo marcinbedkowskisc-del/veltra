@@ -5,8 +5,10 @@ namespace App\Domain\Authorization;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\BusinessRuleViolation;
 use App\Domain\Installation\LocationType;
+use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
 use App\Models\Location;
 use App\Models\Organization;
+use App\Models\PermissionGrant;
 use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -55,29 +57,44 @@ class RoleAdministration
                 throw new AuthorizationException;
             }
             $this->authorize($actor, $context, $target, $role, $location, $password);
-            if (! $target->fresh()->is_active) {
+            if (! $target->fresh()->is_active && ! $this->authorization->hasRole($actor, BusinessRole::Administrator)) {
                 throw new BusinessRuleViolation(__('messages.active_target_account_required'));
             }
             $membership = $location ? app(MembershipService::class)->available($target)->where('location_id', $location->id)->first() : null;
             if ($location && ! $membership) {
                 throw new BusinessRuleViolation(__('messages.active_target_membership_required'));
             }
+            if (RoleAssignment::where('user_id', $target->id)->whereNull('revoked_at')
+                ->where('role', '<>', $role->value)->exists()) {
+                throw new BusinessRuleViolation(__('messages.business_role_replacement_required'));
+            }
             if (RoleAssignment::where('user_id', $target->id)->where('role', $role)->where('location_id', $location?->id)->whereNull('revoked_at')->exists()) {
                 throw new BusinessRuleViolation(__('messages.already_role_assigned'));
             }
 
-            return RoleAssignment::create([
+            $assignment = RoleAssignment::create([
                 'organization_id' => $actor->organization_id, 'user_id' => $target->id, 'role' => $role,
                 'location_id' => $location?->id, 'membership_id' => $membership?->id, 'granted_by' => $actor->id,
             ]);
+            if ($role === BusinessRole::Boss) {
+                app(OrganizationRawMaterialPermissionAdministration::class)
+                    ->revokeWritesForBossRoleReplacement($actor, $context, $target);
+            }
+
+            return $assignment;
         });
     }
 
     public function revoke(User $actor, Location $context, RoleAssignment $assignment, #[SensitiveParameter] ?string $password = null): void
     {
+        $this->revokeAssignment($actor, $context, $assignment, $password, false);
+    }
+
+    private function revokeAssignment(User $actor, Location $context, RoleAssignment $assignment, #[SensitiveParameter] ?string $password, bool $replacing): void
+    {
         $target = User::findOrFail($assignment->user_id);
         $location = $assignment->location_id ? Location::findOrFail($assignment->location_id) : null;
-        $this->mutations->run($actor, $target, $location, 'role.revoke.'.$assignment->role->value, function () use ($actor, $context, $target, $location, $assignment, $password): void {
+        $this->mutations->run($actor, $target, $location, 'role.revoke.'.$assignment->role->value, function () use ($actor, $context, $target, $location, $assignment, $password, $replacing): void {
             $this->authorize($actor, $context, $target, $assignment->role, $location, $password);
             $assignment = $assignment->fresh();
             if ($assignment->revoked_at !== null) {
@@ -86,7 +103,78 @@ class RoleAdministration
             if ($assignment->role === BusinessRole::Administrator) {
                 $this->requireOtherAdministrator($target);
             }
+            if (! $replacing && $target->is_active && $target->email_verified_at !== null
+                && ! RoleAssignment::effective()->where('user_id', $target->id)->where('id', '<>', $assignment->id)->exists()) {
+                throw new BusinessRuleViolation(__('messages.business_role_must_remain'));
+            }
             $assignment->update(['revoked_at' => DB::scalar('SELECT clock_timestamp()'), 'revoked_by' => $actor->id]);
+        });
+    }
+
+    /**
+     * @param  list<string>  $locationIds
+     * @return list<RoleAssignment>
+     */
+    public function replace(User $actor, Location $context, User $target, BusinessRole $role, array $locationIds, #[SensitiveParameter] ?string $password = null): array
+    {
+        return $this->mutations->run($actor, $target, null, 'role.replace', function () use ($actor, $context, $target, $role, $locationIds, $password): array {
+            if ($actor->is($target) || ! $this->authorization->eligible($actor, $context)
+                || $actor->organization_id !== $target->organization_id
+                || ! $this->authorization->canManageAccount($actor, $target)) {
+                throw new AuthorizationException;
+            }
+            $assignments = RoleAssignment::where('user_id', $target->id)->whereNull('revoked_at')->get();
+            $oldRoles = $assignments->map(fn (RoleAssignment $assignment): string => $assignment->role->value)->unique();
+            if ($oldRoles->count() !== 1 || $oldRoles->first() === $role->value
+                || count($locationIds) !== count(array_unique($locationIds))
+                || ($role->organizationWide() ? $locationIds !== [] : $locationIds === [])) {
+                throw new BusinessRuleViolation(__('messages.business_role_replacement_invalid'));
+            }
+            $locations = Location::where('organization_id', $target->organization_id)
+                ->whereIn('id', $locationIds)->get()->keyBy('id');
+            if ($locations->count() !== count($locationIds)) {
+                throw new BusinessRuleViolation(__('messages.business_role_replacement_invalid'));
+            }
+            foreach ($locations as $location) {
+                $expectedType = $role === BusinessRole::CentralKitchenChef ? LocationType::CentralKitchen : LocationType::Restaurant;
+                if ($location->type !== $expectedType
+                    || ! app(MembershipService::class)->available($target)->where('location_id', $location->id)->exists()) {
+                    throw new BusinessRuleViolation(__('messages.business_role_replacement_invalid'));
+                }
+                if (! $this->canAdminister($actor, $context, $target, $role, $location)) {
+                    throw new AuthorizationException;
+                }
+            }
+            if ($role->organizationWide() && ! $this->canAdminister($actor, $context, $target, $role, null)) {
+                throw new AuthorizationException;
+            }
+
+            foreach ($assignments as $assignment) {
+                $this->revokeAssignment($actor, $context, $assignment, $password, true);
+            }
+            $created = [];
+            if ($role->organizationWide()) {
+                $created[] = $this->grant($actor, $context, $target, $role, null, $password);
+            } else {
+                foreach ($locationIds as $locationId) {
+                    $created[] = $this->grant($actor, $context, $target, $role, $locations[$locationId], $password);
+                }
+            }
+
+            $grants = PermissionGrant::where('user_id', $target->id)->whereNull('revoked_at')->get();
+            foreach ($grants as $grant) {
+                if ($grant->permission->special()
+                    || ($role === BusinessRole::Employee && in_array($grant->location_id, $locationIds, true))) {
+                    continue;
+                }
+                app(AuthorizationMutationContext::class)->run(
+                    AuthorizationMutationScope::permissionRevoke($grant->permission),
+                    $actor->id,
+                    fn () => $grant->update(['revoked_at' => DB::scalar('SELECT clock_timestamp()'), 'revoked_by' => $actor->id]),
+                );
+            }
+
+            return $created;
         });
     }
 
@@ -100,6 +188,8 @@ class RoleAdministration
             }
             if (! $active) {
                 $this->requireOtherAdministrator($target);
+            } elseif ($target->email_verified_at !== null && ! $this->authorization->hasSingleEffectiveRole($target)) {
+                throw new BusinessRuleViolation(__('messages.business_role_must_remain'));
             }
             $target->update(['is_active' => $active]);
         });

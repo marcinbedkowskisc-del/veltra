@@ -62,11 +62,9 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
 
         $this->activeRestaurant();
         $this->location = $this->primaryCentralKitchen();
-        $this->administrator = $this->user('document-admin@example.test');
-        $this->role($this->administrator, BusinessRole::Administrator);
+        $this->administrator = $this->provisionedUser('document-admin@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->administrator, $this->location, $this->administrator->id);
-        $this->steward = $this->user('document-steward@example.test');
-        app(MembershipService::class)->assign($this->steward, $this->location);
+        $this->steward = $this->provisionedUser('document-steward@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
         LocationModuleState::on('pgsql_setup')->create([
@@ -367,7 +365,7 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
             ->where('document_version_id', $versionId)->update(['event_code' => 'SCAN_REQUIRED']));
     }
 
-    public function test_database_rejects_cross_organization_document_references(): void
+    public function test_database_rejects_document_references_with_unknown_organization_ids(): void
     {
         $result = $this->documents->create(
             $this->steward,
@@ -379,14 +377,13 @@ class RawMaterialDocumentStorageTest extends AuthorizationTestCase
         );
         $versionId = $result['version']['id'];
 
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation): void {
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection->table('raw_material_document_version_links')->insert([
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+            ->table('raw_material_document_version_links')->insert([
                 'document_version_id' => Str::uuid()->toString(),
-                'organization_id' => $foreignLocation->organization_id,
+                'organization_id' => Str::uuid()->toString(),
                 'raw_material_revision_id' => $this->revisionId,
                 'link_purpose' => 'RAW_MATERIAL_SUPPORTING_DOCUMENT',
             ]));
-        });
     }
 
     public function test_checksum_mismatch_and_missing_payload_are_reported_without_serving_content(): void

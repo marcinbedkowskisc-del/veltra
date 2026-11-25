@@ -4,12 +4,18 @@ namespace Tests\Feature;
 
 use App\Domain\Authorization\AuthorizationMutationContext;
 use App\Domain\Authorization\AuthorizationMutationScope;
+use App\Domain\Authorization\BossLocationRestrictions;
+use App\Domain\Authorization\BossVisibilityCategory;
 use App\Domain\Authorization\BusinessRole;
+use App\Domain\Authorization\RoleAdministration;
 use App\Domain\Identity\MembershipService;
 use App\Domain\Installation\LocationType;
+use App\Domain\Modules\CodeOrganizationCapabilityCatalog;
 use App\Domain\Modules\DefinedModuleCatalog;
 use App\Domain\Modules\ModuleCatalog;
 use App\Domain\Modules\ModuleDefinition;
+use App\Domain\Modules\OrganizationCapabilityCatalog;
+use App\Domain\Modules\OrganizationCapabilityService;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentException;
 use App\Domain\RawMaterials\Documents\RawMaterialDocumentService;
 use App\Domain\RawMaterials\OrganizationRawMaterialPermissionAdministration;
@@ -29,8 +35,6 @@ use App\Domain\Sku\SkuAllocationService;
 use App\Domain\Sku\SkuPrefix;
 use App\Models\Location;
 use App\Models\LocationModuleState;
-use App\Models\Organization;
-use App\Models\RoleAssignment;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Connection;
@@ -45,6 +49,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\Process\Process;
 use Tests\AuthorizationTestCase;
 use Tests\Concerns\RawCatalogStage3eB1Tests;
@@ -54,6 +59,7 @@ use Tests\Concerns\RawEditingStage3eB2Tests;
 use Tests\Concerns\RawFormWorkflowTests;
 use Tests\Concerns\RawWorkbenchTests;
 use Tests\Support\ModuleCatalogFixtures;
+use Tests\Support\OrganizationCapabilityCatalogFixtures;
 
 class RawMaterialsTest extends AuthorizationTestCase
 {
@@ -77,11 +83,9 @@ class RawMaterialsTest extends AuthorizationTestCase
         parent::setUp();
         $this->activeRestaurant();
         $this->location = $this->primaryCentralKitchen();
-        $this->bootstrapAdministrator = $this->user('raw-material-bootstrap@example.test');
-        $this->role($this->bootstrapAdministrator, BusinessRole::Administrator);
+        $this->bootstrapAdministrator = $this->provisionedUser('raw-material-bootstrap@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($this->bootstrapAdministrator, $this->location, $this->bootstrapAdministrator->id);
-        $this->steward = $this->user('raw-material-steward@example.test');
-        app(MembershipService::class)->assign($this->steward, $this->location);
+        $this->steward = $this->provisionedUser('raw-material-steward@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $this->updateFixture($this->steward->organization, ['authorization_initialized' => true]);
         $this->app->instance(ModuleCatalog::class, ModuleCatalogFixtures::readyWithRawMaterials());
         LocationModuleState::on('pgsql_setup')->create([
@@ -98,7 +102,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_stage2e7_integrated_catalog_pricing_and_as_of_exports(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         Storage::fake('raw_material_csv_exports');
         $category = $this->category();
@@ -372,57 +376,25 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->update(['sku' => 'INT-000006']));
     }
 
-    public function test_raw_sku_is_unique_in_the_installation_even_if_organization_constraint_is_bypassed(): void
+    public function test_raw_sku_allocator_uses_the_installation_sequence_and_global_unique_index(): void
     {
-        $setup = DB::connection('pgsql_setup');
-        $setup->statement('ALTER TABLE public.organizations DROP CONSTRAINT organizations_single_installation_unique');
+        $allocation = app(SkuAllocationService::class);
+        $first = DB::transaction(fn (): string => $allocation->allocateNext($this->steward, SkuPrefix::Raw, Str::uuid()->toString()));
+        $second = DB::transaction(fn (): string => $allocation->allocateNext($this->steward, SkuPrefix::Raw, Str::uuid()->toString()));
 
-        try {
-            $foreignOrganization = Organization::on('pgsql_setup')->create([
-                'name' => 'Druga organizacja SKU',
-                'code' => 'SKU-FOREIGN',
-            ]);
-            $foreignActor = User::on('pgsql_setup')->create([
-                'organization_id' => $foreignOrganization->id,
-                'first_name' => 'Test',
-                'last_name' => 'Tenant',
-                'email' => 'sku-foreign@example.test',
-                'password' => self::PASSWORD,
-                'is_active' => true,
-            ]);
-            $foreignActor->forceFill(['email_verified_at' => now()])->save();
-            $allocation = app(SkuAllocationService::class);
-
-            $this->assertSame('RAW-000001', DB::transaction(
-                fn (): string => $allocation->allocateNext(
-                    $this->steward,
-                    SkuPrefix::Raw,
-                    Str::uuid()->toString(),
-                ),
-            ));
-            try {
-                DB::transaction(fn (): string => $allocation->allocateNext($foreignActor, SkuPrefix::Raw, Str::uuid()->toString()));
-                $this->fail('Pełny RAW SKU powtórzył się w instalacji.');
-            } catch (QueryException $exception) {
-                $this->assertSame('23505', $exception->errorInfo[0]);
-            }
-            $this->assertSame(1, DB::table('organization_sku_assignments')
-                ->where('organization_id', $this->steward->organization_id)
-                ->where('sku', 'RAW-000001')->count());
-            $this->assertSame(0, DB::table('organization_sku_assignments')
-                ->where('organization_id', $foreignOrganization->id)
-                ->where('sku', 'RAW-000001')->count());
-        } finally {
-            $this->resetTestDatabase();
-            $setup->statement(
-                'ALTER TABLE public.organizations ADD CONSTRAINT organizations_single_installation_unique UNIQUE (installation)',
-            );
-        }
+        $this->assertSame('RAW-000001', $first);
+        $this->assertSame('RAW-000002', $second);
+        $index = DB::table('pg_indexes')->where('schemaname', 'public')
+            ->where('indexname', 'raw_sku_installation_unique')->value('indexdef');
+        $this->assertNotNull($index);
+        $this->assertStringContainsString('unique index raw_sku_installation_unique', strtolower($index));
+        $this->assertStringContainsString('(sku)', strtolower($index));
+        $this->assertStringContainsString('prefix', strtolower($index));
     }
 
     public function test_csv_import_records_metadata_baseline_and_only_genuine_history_changes(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $material = $this->activeCsvImportMaterial('Składnik do importu CSV');
         $imports = app(RawMaterialCsvImportPersistenceService::class);
         $initial = $this->csvImportRow($material, [
@@ -588,7 +560,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_same_date_conflict_rejects_the_whole_batch_without_writing_history(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $categoryId = $this->category()['id'];
         $firstMaterial = $this->activeCsvImportMaterial('Pierwszy składnik CSV', $categoryId);
         $secondMaterial = $this->activeCsvImportMaterial('Drugi składnik CSV', $categoryId);
@@ -648,7 +620,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_import_history_requires_signed_runtime_mutations_and_composite_tenant_references(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $organizationId = $this->steward->organization_id;
         $actorId = $this->steward->id;
         $this->assertRuntimeDatabaseRejects('42501', fn () => DB::table('raw_material_import_batches')->insert([
@@ -673,24 +645,22 @@ class RawMaterialsTest extends AuthorizationTestCase
             'csv-import-tenant-integrity-0001',
             [$this->csvImportRow($material)],
         );
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($batch): void {
-            $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
-                ->table('raw_material_import_rows')->insert([
-                    'id' => Str::uuid()->toString(),
-                    'organization_id' => $foreignLocation->organization_id,
-                    'batch_id' => $batch['batch_id'],
-                    'row_number' => 999,
-                    'ingredient_code' => 'SUR-999999',
-                    'input_ingredient_name' => 'Niedozwolony wiersz',
-                    'source_price_net' => '1',
-                    'normalized_net_pln_per_base_unit' => '1',
-                    'vat_rate' => '23',
-                    'input_unit' => 'kg',
-                    'effective_date' => '2026-01-01',
-                    'result_code' => 'INVALID_ROW',
-                    'error_code' => 'TEST_TENANT_MISMATCH',
-                ]));
-        });
+        $this->assertDatabaseRejects('23503', fn (Connection $connection) => $connection
+            ->table('raw_material_import_rows')->insert([
+                'id' => Str::uuid()->toString(),
+                'organization_id' => Str::uuid()->toString(),
+                'batch_id' => $batch['batch_id'],
+                'row_number' => 999,
+                'ingredient_code' => 'SUR-999999',
+                'input_ingredient_name' => 'Niedozwolony wiersz',
+                'source_price_net' => '1',
+                'normalized_net_pln_per_base_unit' => '1',
+                'vat_rate' => '23',
+                'input_unit' => 'kg',
+                'effective_date' => '2026-01-01',
+                'result_code' => 'INVALID_ROW',
+                'error_code' => 'TEST_TENANT_MISMATCH',
+            ]));
     }
 
     public function test_csv_parser_rejects_malformed_records_and_duplicate_identifiers(): void
@@ -862,6 +832,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_catalog_csv_import_reports_duplicates_missing_skus_and_invalid_categories(): void
     {
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
         $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
@@ -985,72 +956,31 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertSame(0, DB::table('raw_material_catalog_import_rows')->count());
     }
 
-    public function test_catalog_csv_import_is_tenant_scoped_and_cannot_duplicate_an_installation_sku(): void
+    public function test_catalog_csv_import_rejects_an_existing_installation_sku(): void
     {
         Storage::fake('raw_material_csv_imports');
         $category = $this->category();
         $sku = 'RAW-000050';
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($category, $sku): void {
-            $foreignOrganizationId = $foreignLocation->organization_id;
-            $foreignActorId = Str::uuid()->toString();
-            try {
-                $this->withSetupTransaction(function (Connection $setup) use ($foreignOrganizationId, $foreignActorId, $sku): void {
-                    $setup->table('users')->insert([
-                        'id' => $foreignActorId,
-                        'organization_id' => $foreignOrganizationId,
-                        'first_name' => 'Obcy',
-                        'last_name' => 'Użytkownik',
-                        'email' => 'catalog-foreign@example.test',
-                        'password' => self::PASSWORD,
-                        'is_active' => true,
-                        'email_verified_at' => now(),
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                    $setup->table('organization_sku_counters')->insert([
-                        'organization_id' => $foreignOrganizationId,
-                        'prefix' => 'RAW',
-                        'last_value' => 0,
-                    ]);
-                    $setup->table('organization_sku_assignments')->insert([
-                        'organization_id' => $foreignOrganizationId,
-                        'sku' => $sku,
-                        'prefix' => 'RAW',
-                        'sequence_number' => 50,
-                        'entity_type' => 'RAW',
-                        'entity_id' => Str::uuid()->toString(),
-                        'allocation_source' => 'IMPORTED',
-                        'assigned_by' => $foreignActorId,
-                        'created_at' => now(),
-                    ]);
-                    $setup->table('organization_sku_counters')->where('organization_id', $foreignOrganizationId)
-                        ->where('prefix', 'RAW')->update(['last_value' => 50]);
-                });
+        $this->rawMaterialService->createImported($this->steward, $this->location, $sku, [
+            'category_id' => $category['id'],
+            'name' => 'Istniejący materiał',
+            'description' => null,
+            'base_unit_code' => 'kg',
+            'nominal_quantity' => '1000',
+        ]);
+        $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
+        $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
+            ."{$sku};RAW;Duplikat;;kg;{$category['code']};1000;\n";
+        $preview = $workflow->upload(
+            $this->steward,
+            $this->location,
+            UploadedFile::fake()->createWithContent('duplicate-sku.csv', $csv),
+        );
 
-                $workflow = app(RawMaterialCatalogCsvImportWorkflow::class);
-                $csv = "sku;entity_type;name;description;base_unit_code;category_code;nominal_quantity;usable_quantity\n"
-                    ."{$sku};RAW;Lokalny materiał;;kg;{$category['code']};1000;\n";
-                $preview = $workflow->upload(
-                    $this->steward,
-                    $this->location,
-                    UploadedFile::fake()->createWithContent('tenant.csv', $csv),
-                );
-
-                $this->assertTrue($preview['can_commit']);
-                try {
-                    $workflow->commit($this->steward, $this->location, $preview['preview_id'], 'catalog-tenant-sku-key-01', true);
-                    $this->fail('Import powtórzył pełny SKU instalacji.');
-                } catch (QueryException $exception) {
-                    $this->assertSame('23505', $exception->errorInfo[0]);
-                }
-                $this->assertSame(0, DB::table('raw_materials')
-                    ->where('organization_id', $this->steward->organization_id)->where('code', $sku)->count());
-                $this->assertSame(1, DB::table('organization_sku_assignments')
-                    ->where('organization_id', $foreignOrganizationId)->where('sku', $sku)->count());
-            } finally {
-                $this->resetTestDatabase();
-            }
-        });
+        $this->assertFalse($preview['can_commit']);
+        $this->assertSame('SKU_CONFLICT', $preview['rows'][0]['error_code']);
+        $this->assertSame(1, DB::table('raw_materials')->where('organization_id', $this->steward->organization_id)
+            ->where('code', $sku)->count());
     }
 
     public function test_catalog_csv_import_commits_at_least_375_rows_using_the_disposable_redis_cache(): void
@@ -1163,7 +1093,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     public function test_catalog_csv_import_requires_create_permission_and_readiness_returns_503(): void
     {
         Storage::fake('raw_material_csv_imports');
-        $unauthorized = $this->user('catalog-import-unauthorized@example.test');
+        $unauthorized = $this->provisionedUser('catalog-import-unauthorized@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($unauthorized, $this->location);
         try {
             app(RawMaterialCatalogCsvImportWorkflow::class)->upload(
@@ -1191,7 +1121,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_http_preview_commit_is_private_normalized_idempotent_and_audited(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         $material = $this->activeCsvWorkflowMaterial('Mąka; drobna');
         $this->selectRawMaterialApiContext($this->steward);
@@ -1250,7 +1180,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_reports_invalid_ingredients_and_blocks_atomic_commit(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         $categoryId = $this->category()['id'];
         $draftId = $this->declaredMaterial($categoryId, 'Szkic CSV', materialCode: 'SUR-000099');
@@ -1280,7 +1210,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_checks_exact_name_units_and_half_even_conversion_with_periods(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         $categoryId = $this->category()['id'];
         $mass = $this->activeCsvWorkflowMaterial('Masa CSV', categoryId: $categoryId);
@@ -1350,7 +1280,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_csv_preview_detects_state_race_and_readiness_gate_blocks_http(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_imports');
         $material = $this->activeCsvWorkflowMaterial('Składnik wyścigu CSV');
         $this->selectRawMaterialApiContext($this->steward);
@@ -1391,7 +1321,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     public function test_csv_import_http_rejects_an_actor_without_reference_price_permission(): void
     {
         Storage::fake('raw_material_csv_imports');
-        $reader = $this->user('raw-material-csv-reader@example.test');
+        $reader = $this->provisionedUser('raw-material-csv-reader@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($reader, $this->location);
         $this->selectRawMaterialApiContext($reader);
         $csv = "ingredient_id;ingredient_name;price_net;vat_rate;unit;effective_date\n"
@@ -1547,8 +1477,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         Storage::fake('raw_material_csv_exports');
         $this->activeCsvWorkflowMaterial('Widoczny składnik');
-        $viewer = $this->user('raw-material-catalog-reader@example.test');
-        app(MembershipService::class)->assign($viewer, $this->location);
+        $viewer = $this->provisionedUser('raw-material-catalog-reader@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $grant = app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
             $this->location,
@@ -1782,7 +1711,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         Storage::fake('raw_material_csv_exports');
         $categoryId = $this->category()['id'];
         $this->activeCsvWorkflowMaterial('Bezpieczna pozycja', categoryId: $categoryId);
-        $viewer = $this->user('raw-material-extended-reader@example.test');
+        $viewer = $this->provisionedUser('raw-material-extended-reader@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($viewer, $this->location);
         $grant = app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -1814,7 +1743,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_reference_price_export_uses_independent_as_of_histories_and_exact_decimals(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         Storage::fake('raw_material_csv_exports');
         $categoryId = $this->category()['id'];
         $material = $this->activeCsvWorkflowMaterial(
@@ -2028,8 +1957,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         Storage::fake('raw_material_csv_exports');
         $this->activeCsvWorkflowMaterial('Eksport z cenami');
-        $viewer = $this->user('raw-material-price-export-reader@example.test');
-        app(MembershipService::class)->assign($viewer, $this->location);
+        $viewer = $this->provisionedUser('raw-material-price-export-reader@example.test', BusinessRole::CentralKitchenChef, $this->location);
         $catalogGrant = app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
             $this->location,
@@ -2113,149 +2041,21 @@ class RawMaterialsTest extends AuthorizationTestCase
         $this->assertCount(1, Storage::disk('raw_material_csv_exports')->allFiles(), 'Prywatny plik nie może mieć publicznego URL ani pobrania bez manifestu.');
     }
 
-    public function test_reference_price_export_isolates_two_organizations(): void
+    public function test_reference_price_export_contains_only_materials_from_the_installed_organization(): void
     {
         Storage::fake('raw_material_csv_exports');
         $categoryId = $this->category()['id'];
         $local = $this->activeCsvWorkflowMaterial('Materiał lokalny', categoryId: $categoryId);
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($local): void {
-            $foreignActorId = Str::uuid()->toString();
-            $foreignMaterialId = Str::uuid()->toString();
-            $foreignRevisionId = Str::uuid()->toString();
-            $foreignCategoryId = Str::uuid()->toString();
-            $foreignSku = 'SUR-000001';
-            $operationId = Str::uuid()->toString();
-            $contentHash = str_repeat('a', 64);
-            try {
-                $this->withSetupTransaction(function (Connection $setup) use (
-                    $foreignLocation,
-                    $foreignActorId,
-                    $foreignMaterialId,
-                    $foreignRevisionId,
-                    $foreignCategoryId,
-                    $foreignSku,
-                    $operationId,
-                    $contentHash,
-                ): void {
-                    $setup->table('users')->insert([
-                        'id' => $foreignActorId,
-                        'organization_id' => $foreignLocation->organization_id,
-                        'first_name' => 'Obcy',
-                        'last_name' => 'Użytkownik',
-                        'email' => 'reference-export-foreign@example.test',
-                        'password' => self::PASSWORD,
-                        'is_active' => true,
-                        'email_verified_at' => now(),
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                    $setup->table('organization_sku_counters')->insert([
-                        'organization_id' => $foreignLocation->organization_id,
-                        'prefix' => 'SUR',
-                        'last_value' => 0,
-                    ]);
-                    $setup->table('organization_sku_assignments')->insert([
-                        'organization_id' => $foreignLocation->organization_id,
-                        'sku' => $foreignSku,
-                        'prefix' => 'SUR',
-                        'sequence_number' => 1,
-                        'entity_type' => 'RAW',
-                        'entity_id' => $foreignMaterialId,
-                        'allocation_source' => 'LEGACY',
-                        'assigned_by' => $foreignActorId,
-                    ]);
-                    $setup->table('organization_sku_counters')
-                        ->where('organization_id', $foreignLocation->organization_id)
-                        ->where('prefix', 'SUR')
-                        ->update(['last_value' => 1]);
-                    $setup->table('raw_material_categories')->insert([
-                        'id' => $foreignCategoryId,
-                        'organization_id' => $foreignLocation->organization_id,
-                        'code' => 'FOREIGN',
-                        'name' => 'Obca kategoria',
-                        'depth' => 1,
-                        'created_by' => $foreignActorId,
-                    ]);
-                    $setup->table('raw_materials')->insert([
-                        'id' => $foreignMaterialId,
-                        'organization_id' => $foreignLocation->organization_id,
-                        'code' => $foreignSku,
-                        'lifecycle_state' => 'DRAFT',
-                        'working_revision_id' => $foreignRevisionId,
-                        'created_by' => $foreignActorId,
-                    ]);
-                    $setup->table('raw_material_revisions')->insert([
-                        'id' => $foreignRevisionId,
-                        'organization_id' => $foreignLocation->organization_id,
-                        'raw_material_id' => $foreignMaterialId,
-                        'revision_no' => 1,
-                        'category_id' => $foreignCategoryId,
-                        'name' => 'Nieudostępniony materiał',
-                        'base_unit_code' => 'kg',
-                        'base_unit_dimension' => 'MASS',
-                        'allergen_state' => 'DECLARED',
-                        'critical_change' => false,
-                        'created_by' => $foreignActorId,
-                        'content_hash' => $contentHash,
-                    ]);
-                    $setup->table('raw_material_revision_units')->insert([
-                        'id' => Str::uuid()->toString(),
-                        'organization_id' => $foreignLocation->organization_id,
-                        'revision_id' => $foreignRevisionId,
-                        'unit_code' => 'kg',
-                        'dimension' => 'MASS',
-                        'conversion_kind' => 'BASE',
-                        'to_base_factor' => '1.000000000000',
-                    ]);
-                    $setup->table('raw_materials')->where('id', $foreignMaterialId)->update([
-                        'lifecycle_state' => 'VERIFICATION',
-                        'pending_revision_id' => $foreignRevisionId,
-                        'working_revision_id' => null,
-                    ]);
-                    $setup->table('raw_material_revision_approval_events')->insert([
-                        'id' => Str::uuid()->toString(),
-                        'organization_id' => $foreignLocation->organization_id,
-                        'revision_id' => $foreignRevisionId,
-                        'operation_id' => Str::uuid()->toString(),
-                        'outcome' => 'APPROVED',
-                        'actor_user_id' => $foreignActorId,
-                        'reason' => 'Fixture izolacji tenantów',
-                        'content_hash' => $contentHash,
-                    ]);
-                    $setup->table('raw_materials')->where('id', $foreignMaterialId)->update([
-                        'lifecycle_state' => 'ACTIVE',
-                        'approved_revision_id' => $foreignRevisionId,
-                        'pending_revision_id' => null,
-                    ]);
-                    $setup->table('raw_material_reference_price_events')->insert([
-                        'id' => Str::uuid()->toString(),
-                        'organization_id' => $foreignLocation->organization_id,
-                        'raw_material_id' => $foreignMaterialId,
-                        'event_no' => 1,
-                        'event_type' => 'PRICE_SET',
-                        'effective_from' => '2026-01-01',
-                        'net_pln_per_base_unit' => '88.88888888888888',
-                        'reason_code' => 'TENANT_ISOLATION_FIXTURE',
-                        'recorded_by' => $foreignActorId,
-                        'operation_id' => $operationId,
-                    ]);
-                });
+        $this->selectRawMaterialApiContext($this->steward);
+        $export = $this->actingAs($this->steward, 'web')
+            ->postJson('/api/v1/raw-materials/reference-price-exports', ['as_of_date' => '2026-01-02'])
+            ->assertCreated()
+            ->json('data');
+        $csv = $this->actingAs($this->steward, 'web')->get($export['download_url'])->assertOk()->streamedContent();
 
-                $this->assertSame(2, DB::table('organizations')->count());
-                $this->selectRawMaterialApiContext($this->steward);
-                $export = $this->actingAs($this->steward, 'web')
-                    ->postJson('/api/v1/raw-materials/reference-price-exports', ['as_of_date' => '2026-01-02'])
-                    ->assertCreated()
-                    ->json('data');
-                $csv = $this->actingAs($this->steward, 'web')->get($export['download_url'])->assertOk()->streamedContent();
-                $this->assertStringContainsString($local['code'], $csv);
-                $this->assertStringNotContainsString($foreignSku, $csv);
-                $this->assertStringNotContainsString('Nieudostępniony materiał', $csv);
-                $this->assertStringNotContainsString('88.88888888888888', $csv);
-            } finally {
-                $this->resetTestDatabase();
-            }
-        });
+        $this->assertSame(1, DB::table('organizations')->count());
+        $this->assertStringContainsString($local['code'], $csv);
+        $this->assertStringNotContainsString('FOREIGN-ORG', $csv);
     }
 
     public function test_view_only_reader_cannot_discover_drafts_or_pending_revisions(): void
@@ -2279,7 +2079,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         ], expectedVersion: $this->rawVersion($activeId));
         $this->rawMaterialService->submit($this->steward, $this->location, $activeId, expectedVersion: $this->rawVersion($activeId));
 
-        $viewer = $this->user('raw-material-view-only@example.test');
+        $viewer = $this->provisionedUser('raw-material-view-only@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($viewer, $this->location);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -2803,8 +2603,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_location_roles_do_not_bypass_organization_grants(): void
     {
-        $manager = $this->user('raw-material-manager@example.test');
-        $this->role($manager, BusinessRole::Administrator);
+        $manager = $this->provisionedUser('raw-material-manager@example.test', BusinessRole::Administrator);
         app(MembershipService::class)->assign($manager, $this->location, $manager->id);
         $this->selectContext($manager);
         $this->getJson('/api/v1/raw-materials')->assertForbidden()
@@ -3099,7 +2898,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'supplier-correction-denied-create-0001',
         );
         $supplierId = $supplier['data']['id'];
-        $reader = $this->user('supplier-correction-reader@example.test');
+        $reader = $this->provisionedUser('supplier-correction-reader@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($reader, $this->location);
         $this->selectRawMaterialApiContext($reader);
         $auditCount = DB::table('raw_materials_commercial_audit_events')
@@ -3219,7 +3018,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             \Mockery::on(fn (array $context): bool => $context === ['sqlstate' => '23P01']),
         );
 
-        $catalogManager = $this->user('raw-material-supplier-manager@example.test');
+        $catalogManager = $this->provisionedUser('raw-material-supplier-manager@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($catalogManager, $this->location);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -3239,7 +3038,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         ], ['Idempotency-Key' => 'offer-without-cost-permission'])->assertForbidden();
         $this->assertSame(1, DB::table('supplier_offers')->where('supplier_product_id', $productId)->count());
 
-        $viewer = $this->user('raw-material-supplier-viewer@example.test');
+        $viewer = $this->provisionedUser('raw-material-supplier-viewer@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($viewer, $this->location);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -3314,7 +3113,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             ]),
         );
 
-        $viewer = $this->user('raw-material-name-only@example.test');
+        $viewer = $this->provisionedUser('raw-material-name-only@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($viewer, $this->location);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -3341,7 +3140,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_nbp_as_of_overrides_half_even_restatements_and_idempotency(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $category = $this->category();
         $materialId = $this->declaredMaterial($category['id'], 'Cena referencyjna');
         $this->rawMaterialService->submit($this->steward, $this->location, $materialId, expectedVersion: $this->rawVersion($materialId));
@@ -3535,7 +3334,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_reference_price_view_does_not_disclose_purchasing_source_without_cost_permission(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $fixture = $this->createCommercialOfferFixture('Cena z oferty', 'SOURCE_01', 'SOURCE-1', 'source-disclosure');
         $commercial = app(RawMaterialCommercialService::class);
         $commercial->setReferencePrice($this->steward, $this->location, $fixture['material_id'], [
@@ -3547,7 +3346,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             'reason_code' => 'SOURCE_OFFER',
         ], 'source-disclosure-reference-price');
 
-        $referenceViewer = $this->user('reference-price-only@example.test');
+        $referenceViewer = $this->provisionedUser('reference-price-only@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($referenceViewer, $this->location);
         app(OrganizationRawMaterialPermissionAdministration::class)->grant(
             $this->steward,
@@ -3618,7 +3417,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_archived_supplier_cannot_be_used_as_new_reference_price_source_in_api_or_postgresql(): void
     {
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $fixture = $this->createCommercialOfferFixture('Archiwizowany dostawca', 'ARCHIVED_01', 'ARCHIVED-1', 'archived');
         $commercial = app(RawMaterialCommercialService::class);
         $commercial->archiveSupplier(
@@ -3896,6 +3695,7 @@ class RawMaterialsTest extends AuthorizationTestCase
 
     public function test_explicit_location_share_gates_raw_material_access_and_preserves_revocation_history(): void
     {
+        $this->promoteStewardToAdministrator();
         $material = $this->activeCsvImportMaterial('Udostępniany surowiec');
         $restaurant = $this->activeRestaurant('RSHARE');
         $otherLocation = $this->activeRestaurant('RSHARE2');
@@ -3911,12 +3711,6 @@ class RawMaterialsTest extends AuthorizationTestCase
         ]);
         $policy = app(RawMaterialLocationSharePolicy::class);
         $administration = app(RawMaterialLocationShareAdministration::class);
-        RoleAssignment::on('pgsql_setup')->create([
-            'organization_id' => $this->steward->organization_id,
-            'user_id' => $this->steward->id,
-            'role' => BusinessRole::Administrator,
-        ]);
-
         $this->assertFalse($policy->canConsume($this->steward, $restaurant, $material['id']));
         $financialGrantCount = DB::table('organization_permission_grants')
             ->where('user_id', $this->steward->id)
@@ -4014,9 +3808,10 @@ class RawMaterialsTest extends AuthorizationTestCase
             ])->count());
 
         $this->assertFalse($policy->canConsume($this->steward, $otherLocation, $material['id']));
-        $this->withForeignOrganizationFixture(fn (Location $foreignLocation) => $this->assertFalse(
-            $policy->canConsume($this->steward, $foreignLocation, $material['id']),
-        ));
+        $unknownOrganizationContext = new Location;
+        $unknownOrganizationContext->id = Str::uuid()->toString();
+        $unknownOrganizationContext->organization_id = Str::uuid()->toString();
+        $this->assertFalse($policy->canConsume($this->steward, $unknownOrganizationContext, $material['id']));
 
         $draft = $this->rawMaterialService->create($this->steward, $this->location, [
             'category_id' => $this->rawMaterialService->createCategory($this->steward, $this->location, [
@@ -4059,7 +3854,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     {
         $material = $this->activeCsvImportMaterial('Surowiec do próby nieuprawnionego');
         $restaurant = $this->activeRestaurant('RSHARE3');
-        $notAdministrator = $this->user('raw-share-unauthorized@example.test');
+        $notAdministrator = $this->provisionedUser('raw-share-unauthorized@example.test', BusinessRole::Employee, Location::where('code', 'R1')->firstOrFail());
         app(MembershipService::class)->assign($notAdministrator, $this->location);
 
         try {
@@ -4248,7 +4043,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $restaurantOne = $this->activeRestaurant('RBULK1');
         $restaurantTwo = $this->activeRestaurant('RBULK2');
         $restaurantThree = $this->activeRestaurant('RBULK3');
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->selectRawMaterialApiContext($this->steward);
 
         $materialPerspective = $this->actingAs($this->steward, 'web')->postJson(
@@ -4299,7 +4094,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         );
         $inactiveLocation = $this->activeRestaurant('RBULK_INACTIVE');
         $this->updateFixture($inactiveLocation, ['is_active' => false]);
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->selectRawMaterialApiContext($this->steward);
 
         $response = $this->actingAs($this->steward, 'web')->postJson('/api/v1/raw-materials/bulk-shares/by-location', [
@@ -4325,7 +4120,7 @@ class RawMaterialsTest extends AuthorizationTestCase
             ->where('reason_code', 'TARGET_VALIDATION_FAILED')->count());
     }
 
-    public function test_bulk_share_denies_unauthorized_and_cross_organization_targets_without_disclosure(): void
+    public function test_bulk_share_denies_unauthorized_and_unknown_targets_without_disclosure(): void
     {
         $material = $this->activeCsvImportMaterial('Bulk share — granica autoryzacji');
         $target = $this->activeRestaurant('RBULK_AUTH');
@@ -4335,20 +4130,19 @@ class RawMaterialsTest extends AuthorizationTestCase
             ['location_ids' => [$target->id]],
         )->assertForbidden()->assertDontSee($target->id);
 
-        $this->role($this->steward, BusinessRole::Administrator);
-        $this->withForeignOrganizationFixture(function (Location $foreignLocation) use ($material): void {
-            $response = $this->actingAs($this->steward, 'web')->postJson(
-                '/api/v1/raw-materials/'.$material['id'].'/shares/bulk',
-                ['location_ids' => [$foreignLocation->id]],
-            )->assertForbidden()->assertDontSee($foreignLocation->id);
-            $this->assertSame(0, DB::table('raw_material_location_shares')
-                ->where('raw_material_id', $material['id'])->count());
-            $this->assertSame(1, DB::table('raw_material_audit_events')
-                ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
-                ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
-                ->where('reason_code', 'UNAUTHORIZED_TARGET')->count());
-            $this->assertNotSame('', $response->getContent());
-        });
+        $this->promoteStewardToAdministrator();
+        $unknownLocationId = Str::uuid()->toString();
+        $response = $this->actingAs($this->steward, 'web')->postJson(
+            '/api/v1/raw-materials/'.$material['id'].'/shares/bulk',
+            ['location_ids' => [$unknownLocationId]],
+        )->assertForbidden()->assertDontSee($unknownLocationId);
+        $this->assertSame(0, DB::table('raw_material_location_shares')
+            ->where('raw_material_id', $material['id'])->count());
+        $this->assertSame(1, DB::table('raw_material_audit_events')
+            ->where('subject_type', 'RAW_MATERIAL_SHARE_BULK')
+            ->where('event_code', 'LOCATION_SHARE_BULK_REJECTED')
+            ->where('reason_code', 'UNAUTHORIZED_TARGET')->count());
+        $this->assertNotSame('', $response->getContent());
     }
 
     public function test_bulk_share_audit_failure_rolls_back_every_target_and_audits_rejection(): void
@@ -4356,7 +4150,7 @@ class RawMaterialsTest extends AuthorizationTestCase
         $material = $this->activeCsvImportMaterial('Bulk share — rollback audytu');
         $targetOne = $this->activeRestaurant('RBULK_ROLLBACK1');
         $targetTwo = $this->activeRestaurant('RBULK_ROLLBACK2');
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
         $this->withSetupConnection(fn (Connection $connection) => $connection->unprepared(<<<'SQL'
             CREATE FUNCTION public.test_fail_bulk_raw_material_share_audit()
             RETURNS trigger LANGUAGE plpgsql AS $$
@@ -4483,7 +4277,7 @@ class RawMaterialsTest extends AuthorizationTestCase
     public function test_bulk_share_waits_for_revocation_archive_and_location_deactivation(): void
     {
         $administration = app(RawMaterialLocationShareAdministration::class);
-        $this->role($this->steward, BusinessRole::Administrator);
+        $this->promoteStewardToAdministrator();
 
         $categoryId = $this->category()['id'];
         $revokedMaterial = $this->activeCsvImportMaterial('Bulk share — po cofnięciu', $categoryId);
@@ -4807,6 +4601,125 @@ class RawMaterialsTest extends AuthorizationTestCase
             'code' => $code,
             'name' => $name,
         ];
+    }
+
+    #[DataProvider('bossRawFinancialConfigurations')]
+    public function test_boss_raw_api_filters_prices_costs_and_financial_exports(bool $foodcost, bool $prices): void
+    {
+        $this->promoteStewardToAdministrator();
+        $material = $this->activeCsvWorkflowMaterial('Surowiec finansowy BOSS');
+        app(RawMaterialCommercialService::class)->setReferencePrice($this->steward, $this->location, $material['id'], [
+            'event_type' => 'PRICE_SET', 'effective_from' => '2026-01-01',
+            'net_pln_per_base_unit' => '0.00500000000000', 'expected_event_no' => 0,
+            'reason_code' => 'INITIAL_REFERENCE',
+        ], 'boss-financial-reference-001');
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
+        app(OrganizationCapabilityService::class)->configure(
+            $this->bootstrapAdministrator, $this->location, CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+            Str::uuid()->toString(), ['enabled' => true, 'expected_state_version' => 0, 'current_password' => self::PASSWORD],
+        );
+        Storage::fake('raw_material_csv_exports');
+        $boss = $this->provisionedUser('raw-financial-boss@example.test', BusinessRole::Boss);
+        app(MembershipService::class)->assign($boss, $this->location);
+        $excluded = [];
+        if (! $foodcost) {
+            $excluded[] = BossVisibilityCategory::Foodcost->value;
+        }
+        if (! $prices) {
+            $excluded[] = BossVisibilityCategory::PurchaseFinancials->value;
+        }
+        app(BossLocationRestrictions::class)->replace($this->bootstrapAdministrator, $this->location, $boss->id, 0, [], $excluded, []);
+        $this->selectRawMaterialApiContext($boss);
+        foreach (['/api/v1/raw-materials', '/api/v1/raw-materials/'.$material['id']] as $path) {
+            $response = $this->getJson($path)->assertOk();
+            $item = $path === '/api/v1/raw-materials' ? $response->json('data.0') : $response->json('data');
+            $this->assertSame($prices, array_key_exists('reference_net_price', $item));
+            $this->assertSame($foodcost, array_key_exists('usable_unit_cost', $item));
+        }
+        $sort = $this->getJson('/api/v1/raw-materials?sort=reference_net_price');
+        $this->assertSame($prices ? 200 : 403, $sort->status());
+        $costSort = $this->getJson('/api/v1/raw-materials?sort=usable_unit_cost');
+        $this->assertSame($foodcost ? 200 : 403, $costSort->status());
+        $export = $this->postJson('/api/v1/raw-materials/reference-price-exports', ['as_of_date' => '2026-01-01']);
+        $this->assertSame($prices ? 201 : 403, $export->status());
+    }
+
+    public function test_boss_can_read_unshared_archived_raw_and_history_from_restaurant_without_writing(): void
+    {
+        $this->promoteStewardToAdministrator();
+        $material = $this->activeCsvWorkflowMaterial('Zarchiwizowany surowiec BOSS');
+        $this->rawMaterialService->archive($this->steward, $this->location, $material['id'], 'Archiwizacja testowa', $this->rawVersion($material['id']));
+        $restaurant = $this->activeRestaurant('BOSS-RAW');
+        LocationModuleState::on('pgsql_setup')->create([
+            'organization_id' => $this->steward->organization_id, 'location_id' => $restaurant->id,
+            'module_key' => 'RAW_MATERIALS', 'enabled' => true,
+            'created_by' => $this->bootstrapAdministrator->id, 'updated_by' => $this->bootstrapAdministrator->id,
+        ]);
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
+        app(OrganizationCapabilityService::class)->configure(
+            $this->bootstrapAdministrator, $this->location, CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+            Str::uuid()->toString(), ['enabled' => true, 'expected_state_version' => 0, 'current_password' => self::PASSWORD],
+        );
+        $boss = $this->provisionedUser('raw-archive-boss@example.test', BusinessRole::Boss);
+        app(MembershipService::class)->assign($boss, $restaurant);
+        $this->actingAs($boss, 'web')->putJson('/api/v1/auth/operating-location', ['location_id' => $restaurant->id])->assertOk();
+        $this->getJson('/api/v1/raw-materials?lifecycle_state=ARCHIVED')
+            ->assertOk()->assertJsonPath('data.0.id', $material['id']);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'])->assertOk()->assertJsonPath('data.id', $material['id']);
+        $this->getJson('/api/v1/raw-materials/'.$material['id'].'/history')->assertOk()
+            ->assertJsonFragment(['event_code' => 'ARCHIVED']);
+        $this->postJson('/api/v1/raw-materials/'.$material['id'].'/archive', ['reason' => 'Nieuprawniona zmiana'])
+            ->assertForbidden();
+    }
+
+    public function test_boss_reference_export_download_is_reauthorized_after_restriction(): void
+    {
+        $this->promoteStewardToAdministrator();
+        $this->activeCsvWorkflowMaterial('Eksport BOSS');
+        $this->app->instance(OrganizationCapabilityCatalog::class, OrganizationCapabilityCatalogFixtures::ready());
+        app(OrganizationCapabilityService::class)->configure(
+            $this->bootstrapAdministrator, $this->location, CodeOrganizationCapabilityCatalog::BOSS_RAW_CATALOG_READ,
+            Str::uuid()->toString(), ['enabled' => true, 'expected_state_version' => 0, 'current_password' => self::PASSWORD],
+        );
+        Storage::fake('raw_material_csv_exports');
+        $boss = $this->provisionedUser('raw-export-boss@example.test', BusinessRole::Boss);
+        app(MembershipService::class)->assign($boss, $this->location);
+        $this->selectRawMaterialApiContext($boss);
+        $export = $this->postJson('/api/v1/raw-materials/reference-price-exports', ['as_of_date' => '2026-01-01'])
+            ->assertCreated()->json('data');
+        $this->get($export['download_url'])->assertOk();
+
+        app(BossLocationRestrictions::class)->replace(
+            $this->bootstrapAdministrator, $this->location, $boss->id, 0, [],
+            [BossVisibilityCategory::PurchaseFinancials->value], [],
+        );
+        $this->get($export['download_url'])->assertForbidden();
+    }
+
+    public static function bossRawFinancialConfigurations(): array
+    {
+        return [
+            'both enabled' => [true, true],
+            'both disabled' => [false, false],
+            'only foodcost' => [true, false],
+            'only purchase prices' => [false, true],
+        ];
+    }
+
+    private function promoteStewardToAdministrator(): void
+    {
+        app(RoleAdministration::class)->replace(
+            $this->bootstrapAdministrator, $this->location, $this->steward, BusinessRole::Administrator, [], self::PASSWORD,
+        );
+    }
+
+    private function restaurantEmployeeInCentralKitchen(string $email): User
+    {
+        $restaurant = Location::where('code', 'R1')->firstOrFail();
+        $user = $this->provisionedUser($email, BusinessRole::Employee, $restaurant);
+        app(MembershipService::class)->assign($user, $this->location);
+
+        return $user;
     }
 
     private function selectRawMaterialApiContext(User $actor): void
